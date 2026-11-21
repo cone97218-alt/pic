@@ -22,6 +22,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButton
 import com.stvault.app.R
+import com.stvault.app.core.ImageDownloader
 import com.stvault.app.core.VaultRepository
 import com.stvault.app.databinding.ActivityThemePreviewBinding
 import kotlinx.coroutines.Dispatchers
@@ -109,17 +110,21 @@ class ThemePreviewActivity : AppCompatActivity() {
             ): WebResourceResponse? {
                 val url = request?.url?.toString() ?: return null
 
-                // 1. Custom local preview avatars
+                // 1. Custom local preview avatars (with exact detected MIME type)
                 if (url.startsWith("${ST_LOCAL_ORIGIN}__preview__/ai_avatar") && aiAvatarFile.exists()) {
                     return try {
-                        WebResourceResponse("image/*", null, 200, "OK", mapOf("Access-Control-Allow-Origin" to "*"), FileInputStream(aiAvatarFile))
+                        val bytes = aiAvatarFile.readBytes()
+                        val mime = ImageDownloader.detectImageMime(bytes) ?: "image/png"
+                        WebResourceResponse(mime, null, 200, "OK", mapOf("Access-Control-Allow-Origin" to "*"), ByteArrayInputStream(bytes))
                     } catch (_: Exception) {
                         null
                     }
                 }
                 if (url.startsWith("${ST_LOCAL_ORIGIN}__preview__/user_avatar") && userAvatarFile.exists()) {
                     return try {
-                        WebResourceResponse("image/*", null, 200, "OK", mapOf("Access-Control-Allow-Origin" to "*"), FileInputStream(userAvatarFile))
+                        val bytes = userAvatarFile.readBytes()
+                        val mime = ImageDownloader.detectImageMime(bytes) ?: "image/png"
+                        WebResourceResponse(mime, null, 200, "OK", mapOf("Access-Control-Allow-Origin" to "*"), ByteArrayInputStream(bytes))
                     } catch (_: Exception) {
                         null
                     }
@@ -430,11 +435,12 @@ $rootVars
 }
 #send_but { display: flex !important; }
 #sheldheader { display: none; }
-/* Horizontal Quick Reply bar matching SillyTavern QR extension */
+/* Horizontal centered Quick Reply bar */
 #qr--bar {
   display: flex;
   flex-direction: row;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   padding: 4px 6px;
   overflow-x: auto;
@@ -444,6 +450,7 @@ $rootVars
   display: flex;
   flex-direction: row;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   flex-wrap: nowrap;
 }
@@ -466,22 +473,22 @@ $safeCustomCss
   <div id="top-bar"></div>
   <div id="top-settings-holder">
     <div id="ai-config-button" class="drawer">
-      <div class="drawer-toggle"><div id="leftNavDrawerIcon" class="drawer-icon fa-solid fa-sliders fa-fw closedIcon"></div></div>
+      <div class="drawer-toggle drawer-header"><div id="leftNavDrawerIcon" class="drawer-icon fa-solid fa-sliders fa-fw closedIcon"></div></div>
     </div>
     <div id="sys-settings-button" class="drawer">
-      <div class="drawer-toggle"><div id="API-status-top" class="drawer-icon fa-solid fa-plug fa-fw closedIcon"></div></div>
+      <div class="drawer-toggle drawer-header"><div id="API-status-top" class="drawer-icon fa-solid fa-plug-circle-exclamation fa-fw closedIcon"></div></div>
     </div>
     <div id="advanced-formatting-button" class="drawer">
       <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-font fa-fw closedIcon"></div></div>
     </div>
     <div id="WI-SP-button" class="drawer">
-      <div class="drawer-toggle"><div id="WIDrawerIcon" class="drawer-icon fa-solid fa-book-atlas fa-fw closedIcon"></div></div>
+      <div class="drawer-toggle drawer-header"><div id="WIDrawerIcon" class="drawer-icon fa-solid fa-book-atlas fa-fw closedIcon"></div></div>
     </div>
     <div id="user-settings-button" class="drawer">
       <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-user-cog fa-fw closedIcon"></div></div>
     </div>
-    <div id="logo_block" class="drawer">
-      <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-panorama fa-fw closedIcon"></div></div>
+    <div id="backgrounds-button" class="drawer">
+      <div id="backgrounds-drawer-toggle" class="drawer-toggle drawer-header"><div class="drawer-icon fa-solid fa-panorama fa-fw closedIcon"></div></div>
     </div>
     <div id="extensions-settings-button" class="drawer">
       <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-cubes fa-fw closedIcon"></div></div>
@@ -489,8 +496,8 @@ $safeCustomCss
     <div id="persona-management-button" class="drawer">
       <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-face-smile fa-fw closedIcon"></div></div>
     </div>
-    <div id="rightNavDrawer" class="drawer">
-      <div class="drawer-toggle"><div id="rightNavDrawerIcon" class="drawer-icon fa-solid fa-address-card fa-fw closedIcon"></div></div>
+    <div id="rightNavHolder" class="drawer">
+      <div id="unimportantYes" class="drawer-toggle drawer-header"><div id="rightNavDrawerIcon" class="drawer-icon fa-solid fa-address-card fa-fw closedIcon"></div></div>
     </div>
   </div>
 
