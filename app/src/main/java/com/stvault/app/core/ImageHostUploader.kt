@@ -227,9 +227,15 @@ object ImageHostUploader {
     }
 
     private fun uploadPostimages(file: File, mime: String, cfg: HostConfig): String {
-        if (cfg.postimagesKey.isBlank()) {
-            throw IOException("请先在「图床设置」中填写 Postimages API Key (postimages.org/login/api)")
+        val returnedUrl = if (cfg.postimagesKey.isNotBlank()) {
+            uploadPostimagesWithApiKey(file, mime, cfg)
+        } else {
+            uploadPostimagesAnonymous(file, mime)
         }
+        return resolvePostimagesDirectLink(returnedUrl)
+    }
+
+    private fun uploadPostimagesWithApiKey(file: File, mime: String, cfg: HostConfig): String {
         val mediaType = (mime.ifBlank { "image/png" }).toMediaTypeOrNull()
         val builder = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
@@ -248,23 +254,101 @@ object ImageHostUploader {
             .post(builder.build())
             .build()
 
-        var returnedUrl = ""
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw IOException("Postimages HTTP ${resp.code}")
             val text = resp.body?.string()?.trim().orEmpty()
-            returnedUrl = extractFirstHttpUrlFromJson(text)
+            return extractFirstHttpUrlFromJson(text)
                 ?: Regex("""https?://[^\s"'<>]+""").find(text)?.value
                 ?: throw IOException("Postimages 返回异常")
         }
+    }
 
-        // If Postimages returned a gallery page link (postimg.cc/xxx) instead of direct image (i.postimg.cc/xxx), resolve og:image!
+    private fun uploadPostimagesAnonymous(file: File, mime: String): String {
+        // 1. Fetch homepage to obtain anonymous upload token & cookies
+        val homeReq = Request.Builder()
+            .url("https://postimages.org/")
+            .header("User-Agent", CHROME_UA)
+            .header("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
+            .get()
+            .build()
+
+        var token = ""
+        val cookieHeader = StringBuilder()
+        client.newCall(homeReq).execute().use { resp ->
+            if (!resp.isSuccessful) throw IOException("Postimages 页面访问失败 HTTP ${resp.code}")
+            for (c in resp.headers("Set-Cookie")) {
+                val pair = c.substringBefore(';').trim()
+                if (pair.isNotEmpty()) {
+                    if (cookieHeader.isNotEmpty()) cookieHeader.append("; ")
+                    cookieHeader.append(pair)
+                }
+            }
+            val html = resp.body?.string().orEmpty()
+            val patterns = listOf(
+                Regex("""["']token["']\s*[,:]\s*["']([a-fA-F0-9]{16,64})["']"""),
+                Regex("""name=["']token["'][^>]*value=["']([a-fA-F0-9]{16,64})["']"""),
+                Regex("""token\s*=\s*["']([a-fA-F0-9]{16,64})["']""")
+            )
+            for (p in patterns) {
+                val m = p.find(html)
+                if (m != null) {
+                    token = m.groupValues[1]
+                    break
+                }
+            }
+        }
+        if (token.isBlank()) {
+            throw IOException("未能获取 Postimages 匿名上传令牌，请检查网络或填写 API Key")
+        }
+
+        // 2. Upload anonymously to https://postimages.org/json/rr
+        val chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        val sessionId = (1..32).map { chars.random() }.joinToString("")
+        val mediaType = (mime.ifBlank { "image/png" }).toMediaTypeOrNull()
+
+        val body = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("token", token)
+            .addFormDataPart("upload_session", sessionId)
+            .addFormDataPart("numfiles", "1")
+            .addFormDataPart("gallery", "")
+            .addFormDataPart("optsize", "0")
+            .addFormDataPart("expire", "0")
+            .addFormDataPart("session_upload", System.currentTimeMillis().toString())
+            .addFormDataPart("file", file.name, file.asRequestBody(mediaType))
+            .build()
+
+        val uploadReqBuilder = Request.Builder()
+            .url("https://postimages.org/json/rr")
+            .header("User-Agent", CHROME_UA)
+            .header("Origin", "https://postimages.org")
+            .header("Referer", "https://postimages.org/")
+            .header("X-Requested-With", "XMLHttpRequest")
+            .header("Accept", "application/json")
+            .post(body)
+        if (cookieHeader.isNotEmpty()) {
+            uploadReqBuilder.header("Cookie", cookieHeader.toString())
+        }
+
+        client.newCall(uploadReqBuilder.build()).execute().use { resp ->
+            if (!resp.isSuccessful) throw IOException("Postimages 匿名上传失败 HTTP ${resp.code}")
+            val text = resp.body?.string()?.trim().orEmpty()
+            return extractFirstHttpUrlFromJson(text)
+                ?: Regex("""https?://[^\s"'<>]+""").find(text)?.value
+                ?: throw IOException("Postimages 匿名上传返回异常")
+        }
+    }
+
+    private fun resolvePostimagesDirectLink(returnedUrl: String): String {
         if (returnedUrl.contains("postimg.cc/") && !returnedUrl.contains("i.postimg.cc/")) {
             try {
                 val pageReq = Request.Builder().url(returnedUrl).header("User-Agent", CHROME_UA).get().build()
                 client.newCall(pageReq).execute().use { pResp ->
                     val html = pResp.body?.string().orEmpty()
-                    val direct = Regex("""property=["']og:image["']\s+content=["'](https://i\.postimg\.cc/[^"']+)["']""", RegexOption.IGNORE_CASE)
+                    val direct = Regex("""id=["']code_direct["'][^>]*value=["'](https://i\.postimg\.cc/[^"']+)["']""", RegexOption.IGNORE_CASE)
                         .find(html)?.groupValues?.getOrNull(1)
+                        ?: Regex("""property=["']og:image["']\s+content=["'](https://i\.postimg\.cc/[^"']+)["']""", RegexOption.IGNORE_CASE)
+                            .find(html)?.groupValues?.getOrNull(1)
                         ?: Regex("""https://i\.postimg\.cc/[^\s"'<>]+""").find(html)?.value
                     if (!direct.isNullOrBlank()) return direct
                 }

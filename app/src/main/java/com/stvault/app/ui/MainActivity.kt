@@ -994,7 +994,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val etCatboxHash = makeField("Catbox userhash（选填）", cfg.catboxUserHash)
-        val etPiKey = makeField("Postimages API Key (postimages.org/login/api)", cfg.postimagesKey)
+        val etPiKey = makeField("Postimages API Key（留空则免登录匿名上传）", cfg.postimagesKey)
         val etPiGallery = makeField("Postimages 相册 ID（选填）", cfg.postimagesGallery)
         val etImgbbKey = makeField("ImgBB API Key", cfg.imgbbApiKey)
         val etGhRepo = makeField("GitHub 仓库，例如 cone97218-alt/pic", cfg.githubRepo)
