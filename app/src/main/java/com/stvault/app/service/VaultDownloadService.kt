@@ -43,8 +43,8 @@ class VaultDownloadService : Service() {
             ACTION_START -> {
                 if (currentJob?.isActive == true) return START_STICKY
                 val mode = intent.getStringExtra(EXTRA_MODE) ?: "pending"
-                val concurrency = intent.getIntExtra(EXTRA_CONCURRENCY, 6).coerceIn(1, 10)
-                startForegroundWithNotification("准备开始批量缓存图床...", 0, 0)
+                val concurrency = intent.getIntExtra(EXTRA_CONCURRENCY, 16).coerceIn(2, 24)
+                startForegroundWithNotification("准备开始极速缓存图床...", 0, 0)
                 runDownloadQueue(mode, concurrency)
             }
         }
@@ -67,9 +67,12 @@ class VaultDownloadService : Service() {
         val okCount = AtomicInteger(0)
         val errCount = AtomicInteger(0)
         val sinceSave = AtomicInteger(0)
+        val lastUiEmit = java.util.concurrent.atomic.AtomicLong(0L)
+        val lastNotifEmit = java.util.concurrent.atomic.AtomicLong(0L)
+        val lastSaveTime = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
 
         repo.updateProgress(
-            DownloadProgress(running = true, total = total, done = 0, currentUrl = "正在连接图床...")
+            DownloadProgress(running = true, total = total, done = 0, currentUrl = "正在并发拉取 ($concurrency 线程)...")
         )
 
         currentJob = scope.launch {
@@ -82,28 +85,35 @@ class VaultDownloadService : Service() {
                             val url = queue[idx]
                             try {
                                 val res = ImageDownloader.download(url)
-                                repo.markDownloadSuccess(url, res.bytes, res.mime)
+                                repo.markDownloadSuccess(url, res.bytes, res.mime, throttleStats = true)
                                 okCount.incrementAndGet()
                             } catch (e: Exception) {
-                                repo.markDownloadError(url, e.message ?: "下载失败")
+                                repo.markDownloadError(url, e.message ?: "下载失败", throttleStats = true)
                                 errCount.incrementAndGet()
                             }
                             val done = doneCount.incrementAndGet()
-                            repo.updateProgress(
-                                DownloadProgress(
-                                    running = true,
-                                    total = total,
-                                    done = done,
-                                    okInRun = okCount.get(),
-                                    errInRun = errCount.get(),
-                                    currentUrl = url
+                            val now = System.currentTimeMillis()
+                            if (done == total || now - lastUiEmit.get() >= 350L) {
+                                lastUiEmit.set(now)
+                                repo.updateProgress(
+                                    DownloadProgress(
+                                        running = true,
+                                        total = total,
+                                        done = done,
+                                        okInRun = okCount.get(),
+                                        errInRun = errCount.get(),
+                                        currentUrl = url
+                                    )
                                 )
-                            )
-                            if (done % 5 == 0 || done == total) {
+                            }
+                            if (done == total || now - lastNotifEmit.get() >= 1000L) {
+                                lastNotifEmit.set(now)
                                 updateNotification("已缓存 $done / $total (成功 ${okCount.get()} · 失败 ${errCount.get()})", done, total)
                             }
-                            if (sinceSave.incrementAndGet() >= 15) {
+                            val pendingSaves = sinceSave.incrementAndGet()
+                            if (pendingSaves >= 100 || (pendingSaves >= 10 && now - lastSaveTime.get() >= 15000L)) {
                                 sinceSave.set(0)
+                                lastSaveTime.set(now)
                                 repo.saveIndex()
                             }
                         }

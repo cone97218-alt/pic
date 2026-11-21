@@ -26,6 +26,7 @@ import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.google.android.material.chip.Chip
 import com.stvault.app.BuildConfig
 import com.stvault.app.R
 import com.stvault.app.core.ReleaseInfo
@@ -56,6 +57,9 @@ class MainActivity : AppCompatActivity() {
     private var savedTreeUri: Uri? = null
     private var savedLocalDirPath: String? = null
     private var vaultSearchModeSources = true
+    private var activeSourceFilter = "all"
+    private var activeUrlFilter = "all"
+    private var downloadConcurrency = 16
 
     private var pendingReplaceUrl: String? = null
     private var pendingSaveImageRecord: UrlRecord? = null
@@ -258,6 +262,64 @@ class MainActivity : AppCompatActivity() {
         )
         binding.rvVault.adapter = sourcesAdapter
         updateSegmentedStyle()
+        rebuildFilterChips()
+    }
+
+    private fun rebuildFilterChips() {
+        val group = binding.chipGroupFilter
+        group.removeAllViews()
+        val options = if (vaultSearchModeSources) {
+            listOf(
+                "all" to "最新扫描",
+                "has_error" to "有失败",
+                "incomplete" to "未下完",
+                "completed" to "已全缓存",
+                "most_imgs" to "图最多"
+            )
+        } else {
+            listOf(
+                "all" to "全部",
+                "ok" to "已缓存",
+                "error" to "失败/已挂",
+                "pending" to "待缓存",
+                "largest" to "大图优先"
+            )
+        }
+        val current = if (vaultSearchModeSources) activeSourceFilter else activeUrlFilter
+        val surface2 = ContextCompat.getColor(this, R.color.surface_2)
+        val accent = ContextCompat.getColor(this, R.color.accent)
+        val border = ContextCompat.getColor(this, R.color.border)
+        val textPrimary = ContextCompat.getColor(this, R.color.text_primary)
+        val textMuted = ContextCompat.getColor(this, R.color.text_muted)
+
+        val bgState = ColorStateList(
+            arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+            intArrayOf(accent, surface2)
+        )
+        val textState = ColorStateList(
+            arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+            intArrayOf(android.graphics.Color.WHITE, textMuted)
+        )
+
+        for ((key, label) in options) {
+            val chip = Chip(this).apply {
+                text = label
+                isCheckable = true
+                isChecked = (key == current)
+                isCheckedIconVisible = false
+                chipBackgroundColor = bgState
+                setTextColor(textState)
+                chipStrokeWidth = 2f
+                chipStrokeColor = ColorStateList.valueOf(border)
+                chipCornerRadius = 24f
+                textSize = 12f
+                setOnClickListener {
+                    if (vaultSearchModeSources) activeSourceFilter = key else activeUrlFilter = key
+                    refreshVaultList()
+                }
+            }
+            group.addView(chip)
+        }
     }
 
     private fun applySavedNightMode() {
@@ -343,13 +405,27 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Tab 1: Start / Retry / Stop Foreground Cache
+        // Tab 1: Speed Toggle + Start / Retry / Stop Foreground Cache
+        binding.btnSpeedToggle.setOnClickListener {
+            downloadConcurrency = when (downloadConcurrency) {
+                8 -> 16
+                16 -> 24
+                else -> 8
+            }
+            val label = when (downloadConcurrency) {
+                8 -> "8 线程 · 稳健"
+                24 -> "24 线程 · 狂飙"
+                else -> "16 线程 · 极速"
+            }
+            binding.btnSpeedToggle.text = label
+            toast("已切换为 $label")
+        }
         binding.btnStartCache.setOnClickListener {
-            VaultDownloadService.start(this, mode = "pending", concurrency = 6)
-            toast("已启动后台缓存服务")
+            VaultDownloadService.start(this, mode = "pending", concurrency = downloadConcurrency)
+            toast("已启动 $downloadConcurrency 线程极速缓存")
         }
         binding.btnRetryFailed.setOnClickListener {
-            VaultDownloadService.start(this, mode = "failed", concurrency = 4)
+            VaultDownloadService.start(this, mode = "failed", concurrency = minOf(12, downloadConcurrency))
             toast("开始重试失败链接")
         }
         binding.btnStopCache.setOnClickListener {
@@ -371,12 +447,14 @@ class MainActivity : AppCompatActivity() {
             vaultSearchModeSources = true
             binding.rvVault.adapter = sourcesAdapter
             updateSegmentedStyle()
+            rebuildFilterChips()
             refreshVaultList()
         }
         binding.btnModeUrls.setOnClickListener {
             vaultSearchModeSources = false
             binding.rvVault.adapter = urlsAdapter
             updateSegmentedStyle()
+            rebuildFilterChips()
             refreshVaultList()
         }
         binding.btnDoSearch.setOnClickListener { refreshVaultList() }
@@ -786,11 +864,11 @@ class MainActivity : AppCompatActivity() {
         val q = binding.etSearch.text?.toString().orEmpty()
         lifecycleScope.launch {
             if (vaultSearchModeSources) {
-                val list = withContext(Dispatchers.IO) { repo.searchSources(q) }
+                val list = withContext(Dispatchers.IO) { repo.searchSources(q, activeSourceFilter) }
                 sourcesAdapter.submitList(list)
                 binding.tvVaultCount.text = "共 ${list.size} 个美化文件"
             } else {
-                val list = withContext(Dispatchers.IO) { repo.searchUrls(q, "all") }
+                val list = withContext(Dispatchers.IO) { repo.searchUrls(q, activeUrlFilter) }
                 urlsAdapter.submitList(list)
                 binding.tvVaultCount.text = "共 ${list.size} 张图床记录"
             }

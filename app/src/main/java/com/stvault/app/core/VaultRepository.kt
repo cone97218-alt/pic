@@ -65,7 +65,11 @@ class VaultRepository private constructor(private val appContext: Context) {
         return digest.take(10).joinToString("") { "%02x".format(it) }
     }
 
+    @Volatile
+    private var lastStatsRefreshAt = 0L
+
     private fun loadIndex() {
+        var purgedNonImages = false
         synchronized(lock) {
             if (!indexFile.exists()) {
                 refreshStatsLocked()
@@ -78,6 +82,10 @@ class VaultRepository private constructor(private val appContext: Context) {
                     val keys = urlsObj.keys()
                     while (keys.hasNext()) {
                         val u = keys.next()
+                        if (UrlExtractor.isNonImageUrl(u)) {
+                            purgedNonImages = true
+                            continue
+                        }
                         val o = urlsObj.optJSONObject(u) ?: continue
                         val srcs = mutableListOf<String>()
                         val sArr = o.optJSONArray("sources")
@@ -114,8 +122,12 @@ class VaultRepository private constructor(private val appContext: Context) {
                         val urlList = mutableListOf<String>()
                         val uArr = o.optJSONArray("urls")
                         if (uArr != null) {
-                            for (i in 0 until uArr.length()) urlList.add(uArr.optString(i))
+                            for (i in 0 until uArr.length()) {
+                                val u = uArr.optString(i)
+                                if (!UrlExtractor.isNonImageUrl(u)) urlList.add(u)
+                            }
                         }
+                        if (urlList.isEmpty()) continue
                         sourcesMap[id] = SourceRecord(
                             id = id,
                             name = o.optString("name", id),
@@ -130,6 +142,9 @@ class VaultRepository private constructor(private val appContext: Context) {
             } catch (_: Exception) {
             }
             refreshStatsLocked()
+        }
+        if (purgedNonImages) {
+            saveIndex()
         }
     }
 
@@ -418,7 +433,7 @@ class VaultRepository private constructor(private val appContext: Context) {
         }
     }
 
-    fun markDownloadSuccess(url: String, bytes: ByteArray, mime: String) {
+    fun markDownloadSuccess(url: String, bytes: ByteArray, mime: String, throttleStats: Boolean = false) {
         synchronized(lock) {
             if (!urlsMap.containsKey(url)) return
         }
@@ -439,16 +454,24 @@ class VaultRepository private constructor(private val appContext: Context) {
             rec.status = CacheStatus.OK
             rec.error = ""
             rec.updatedAt = System.currentTimeMillis()
-            refreshStatsLocked()
+            maybeRefreshStatsLocked(throttleStats)
         }
     }
 
-    fun markDownloadError(url: String, errorMsg: String) {
+    fun markDownloadError(url: String, errorMsg: String, throttleStats: Boolean = false) {
         synchronized(lock) {
             val rec = urlsMap[url] ?: return
             rec.status = CacheStatus.ERROR
             rec.error = errorMsg
             rec.updatedAt = System.currentTimeMillis()
+            maybeRefreshStatsLocked(throttleStats)
+        }
+    }
+
+    private fun maybeRefreshStatsLocked(throttle: Boolean) {
+        val now = System.currentTimeMillis()
+        if (!throttle || now - lastStatsRefreshAt >= 500L) {
+            lastStatsRefreshAt = now
             refreshStatsLocked()
         }
     }
@@ -464,17 +487,26 @@ class VaultRepository private constructor(private val appContext: Context) {
         return true
     }
 
-    fun searchSources(query: String): List<SourceRecord> {
+    fun searchSources(query: String, filter: String = "all"): List<SourceRecord> {
         val q = query.trim().lowercase()
         synchronized(lock) {
-            val list = if (q.isEmpty()) {
+            var list = if (q.isEmpty()) {
                 sourcesMap.values.toList()
             } else {
                 sourcesMap.values.filter { s ->
                     s.name.lowercase().contains(q) || s.urls.any { it.lowercase().contains(q) }
                 }
             }
-            return list.sortedByDescending { it.scannedAt }
+            list = when (filter) {
+                "has_error" -> list.filter { s -> s.urls.any { urlsMap[it]?.status == CacheStatus.ERROR } }
+                "incomplete" -> list.filter { s -> s.urls.any { urlsMap[it]?.status != CacheStatus.OK } }
+                "completed" -> list.filter { s -> s.urls.isNotEmpty() && s.urls.all { urlsMap[it]?.status == CacheStatus.OK } }
+                else -> list
+            }
+            return when (filter) {
+                "most_imgs" -> list.sortedByDescending { it.urls.size }
+                else -> list.sortedByDescending { it.scannedAt }
+            }
         }
     }
 
@@ -507,9 +539,9 @@ class VaultRepository private constructor(private val appContext: Context) {
     fun searchUrls(query: String, statusFilter: String): List<UrlRecord> {
         val q = query.trim().lowercase()
         synchronized(lock) {
-            return urlsMap.values.filter { rec ->
+            val filtered = urlsMap.values.filter { rec ->
                 val statusOk = when (statusFilter) {
-                    "ok" -> rec.status == CacheStatus.OK
+                    "ok", "largest" -> rec.status == CacheStatus.OK
                     "error" -> rec.status == CacheStatus.ERROR
                     "pending" -> rec.status == CacheStatus.PENDING
                     else -> true
@@ -519,6 +551,11 @@ class VaultRepository private constructor(private val appContext: Context) {
                 if (rec.url.lowercase().contains(q)) return@filter true
                 rec.sources.any { sid -> sourcesMap[sid]?.name?.lowercase()?.contains(q) == true }
             }.map { it.copy() }
+
+            return when (statusFilter) {
+                "largest" -> filtered.sortedByDescending { it.size }
+                else -> filtered.sortedByDescending { it.updatedAt }
+            }
         }
     }
 

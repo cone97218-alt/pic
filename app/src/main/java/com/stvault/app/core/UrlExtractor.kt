@@ -34,6 +34,32 @@ object UrlExtractor {
         """\.(png|jpe?g|gif|webp|avif|svg|bmp|ico|jfif)(\?|#|$)""",
         RegexOption.IGNORE_CASE
     )
+    private val NON_IMAGE_EXT_RE = Regex(
+        """\.(woff2?|ttf|otf|eot|css|mjs|js|map|mp3|wav|ogg|flac|m4a|mp4|webm|mov|avi|pdf|zip|rar|7z|json|xml|html?|txt)(\?|#|$)""",
+        RegexOption.IGNORE_CASE
+    )
+    private val NON_IMAGE_HOST_KEYWORDS = listOf(
+        "fonts.googleapis.com",
+        "fonts.gstatic.com",
+        "fonts.loli.net",
+        "fonts.font.im",
+        "font.sec.miui.com",
+        "use.fontawesome.com",
+        "at.alicdn.com/t/font",
+        "at.alicdn.com/t/c/font",
+        "chinese-fonts-cdn",
+        "fonts.bunny.net"
+    )
+
+    fun isNonImageUrl(url: String): Boolean {
+        val lower = url.lowercase()
+        if (NON_IMAGE_EXT_RE.containsMatchIn(lower)) return true
+        if (NON_IMAGE_HOST_KEYWORDS.any { lower.contains(it) }) return true
+        if (lower.contains("/fonts/") || lower.contains("/font/") || lower.contains("font-awesome")) {
+            if (!IMG_EXT_RE.containsMatchIn(lower)) return true
+        }
+        return false
+    }
 
     fun cleanUrl(raw: String?): String {
         if (raw.isNullOrBlank()) return ""
@@ -42,6 +68,7 @@ object UrlExtractor {
         if (!u.startsWith("http://", ignoreCase = true) && !u.startsWith("https://", ignoreCase = true)) {
             return ""
         }
+        if (isNonImageUrl(u)) return ""
         return try {
             val uri = URI(u)
             if (uri.host.isNullOrBlank()) "" else u

@@ -424,19 +424,41 @@
                         android:orientation="vertical"
                         android:padding="18dp">
 
-                        <TextView
-                            android:layout_width="wrap_content"
+                        <LinearLayout
+                            android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:text="后台批量缓存"
-                            android:textColor="@color/text_primary"
-                            android:textSize="15sp"
-                            android:textStyle="bold" />
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="后台极速缓存"
+                                android:textColor="@color/text_primary"
+                                android:textSize="15sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/btnSpeedToggle"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:background="@drawable/bg_pill_accent"
+                                android:clickable="true"
+                                android:focusable="true"
+                                android:paddingHorizontal="10dp"
+                                android:paddingVertical="4dp"
+                                android:text="16 线程 · 极速"
+                                android:textColor="@color/accent"
+                                android:textSize="11.5sp"
+                                android:textStyle="bold" />
+                        </LinearLayout>
 
                         <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="4dp"
-                            android:text="6 线程并发下载并支持断点续传，切回 TT 酒馆或锁屏不中断"
+                            android:text="高并发长连接复用 + 自动过滤字体外链，切回 TT 酒馆或锁屏不中断"
                             android:textColor="@color/text_muted"
                             android:textSize="12sp" />
 
@@ -619,6 +641,22 @@
                     android:textSize="13sp"
                     android:textStyle="bold" />
             </LinearLayout>
+
+            <!-- Horizontal Filter Chips -->
+            <HorizontalScrollView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:scrollbars="none">
+
+                <com.google.android.material.chip.ChipGroup
+                    android:id="@+id/chipGroupFilter"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    app:selectionRequired="true"
+                    app:singleLine="true"
+                    app:singleSelection="true" />
+            </HorizontalScrollView>
 
             <TextView
                 android:id="@+id/tvVaultCount"

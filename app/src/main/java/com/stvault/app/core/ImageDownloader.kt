@@ -1,5 +1,7 @@
 package com.stvault.app.core
 
+import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
@@ -13,8 +15,13 @@ object ImageDownloader {
     private const val MAX_BYTES = 35L * 1024L * 1024L
 
     private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
+        .dispatcher(Dispatcher().apply {
+            maxRequests = 64
+            maxRequestsPerHost = 20
+        })
+        .connectionPool(ConnectionPool(32, 5, TimeUnit.MINUTES))
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
         .build()
