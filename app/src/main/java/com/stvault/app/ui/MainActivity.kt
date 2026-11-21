@@ -700,8 +700,9 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
+                val dupTip = if (res.duplicateFiles > 0) "（自动去重跳过 ${res.duplicateFiles} 个重复美化）" else ""
                 binding.tvScanProgress.text =
-                    "扫描完成：共扫 ${res.scannedFiles} 个文件，命中 ${res.matchedFiles} 个美化，新增 ${res.newUrls} 个图床"
+                    "扫描完成：共扫 ${res.scannedFiles} 个文件，命中 ${res.matchedFiles} 个美化$dupTip，新增 ${res.newUrls} 个图床"
                 toast("扫描完成，新增 ${res.newUrls} 个图床")
             } catch (e: Exception) {
                 binding.tvScanProgress.text = "扫描失败：${e.message}"
@@ -753,8 +754,9 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
+                val dupTip = if (res.duplicateFiles > 0) "（自动去重跳过 ${res.duplicateFiles} 个重复美化）" else ""
                 binding.tvScanProgress.text =
-                    "扫描完成：共扫 ${res.scannedFiles} 个文件，命中 ${res.matchedFiles} 个美化，新增 ${res.newUrls} 个图床"
+                    "扫描完成：共扫 ${res.scannedFiles} 个文件，命中 ${res.matchedFiles} 个美化$dupTip，新增 ${res.newUrls} 个图床"
                 toast("扫描完成，新增 ${res.newUrls} 个图床")
             } catch (e: Exception) {
                 binding.tvScanProgress.text = "扫描失败：${e.message}"

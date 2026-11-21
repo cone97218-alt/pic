@@ -59,6 +59,12 @@ class VaultRepository private constructor(private val appContext: Context) {
         return bytes.take(8).joinToString("") { "%02x".format(it) }
     }
 
+    private fun sha256Short(bytes: ByteArray): String {
+        val md = MessageDigest.getInstance("SHA-256")
+        val digest = md.digest(bytes)
+        return digest.take(10).joinToString("") { "%02x".format(it) }
+    }
+
     private fun loadIndex() {
         synchronized(lock) {
             if (!indexFile.exists()) {
@@ -116,7 +122,8 @@ class VaultRepository private constructor(private val appContext: Context) {
                             docUri = o.optString("docUri", ""),
                             isJson = o.optBoolean("isJson", false),
                             urls = urlList,
-                            scannedAt = o.optLong("scannedAt", 0L)
+                            scannedAt = o.optLong("scannedAt", 0L),
+                            contentHash = o.optString("contentHash", "")
                         )
                     }
                 }
@@ -155,6 +162,7 @@ class VaultRepository private constructor(private val appContext: Context) {
                 o.put("isJson", s.isJson)
                 o.put("urls", JSONArray(s.urls))
                 o.put("scannedAt", s.scannedAt)
+                o.put("contentHash", s.contentHash)
                 srcObj.put(id, o)
             }
             root.put("sources", srcObj)
@@ -172,11 +180,14 @@ class VaultRepository private constructor(private val appContext: Context) {
         var err = 0
         var pending = 0
         var bytes = 0L
+        val countedFiles = HashSet<String>()
         for (r in urlsMap.values) {
             when (r.status) {
                 CacheStatus.OK -> {
                     ok++
-                    bytes += r.size
+                    if (r.file.isNotEmpty() && countedFiles.add(r.file)) {
+                        bytes += r.size
+                    }
                 }
                 CacheStatus.ERROR -> err++
                 CacheStatus.PENDING -> pending++
@@ -192,16 +203,35 @@ class VaultRepository private constructor(private val appContext: Context) {
         )
     }
 
-    private fun registerSourceLocked(name: String, docUri: String, urls: List<String>, isJson: Boolean): Int {
-        if (urls.isEmpty()) return 0
+    /**
+     * Returns Pair(addedUrls, skippedDuplicateSource)
+     */
+    private fun registerSourceLocked(
+        name: String,
+        docUri: String,
+        urls: List<String>,
+        isJson: Boolean,
+        contentHash: String
+    ): Pair<Int, Boolean> {
+        if (urls.isEmpty()) return 0 to false
         val sourceId = sha1Short(if (docUri.isNotBlank()) docUri else name)
+
+        // Skip duplicate beautification file with identical content hash (different file path/name)
+        if (contentHash.isNotEmpty()) {
+            val dup = sourcesMap.values.any { it.id != sourceId && it.contentHash == contentHash }
+            if (dup) {
+                return 0 to true
+            }
+        }
+
         sourcesMap[sourceId] = SourceRecord(
             id = sourceId,
             name = name,
             docUri = docUri,
             isJson = isJson,
             urls = urls,
-            scannedAt = System.currentTimeMillis()
+            scannedAt = System.currentTimeMillis(),
+            contentHash = contentHash
         )
         var addedUrls = 0
         for (u in urls) {
@@ -219,7 +249,7 @@ class VaultRepository private constructor(private val appContext: Context) {
                 }
             }
         }
-        return addedUrls
+        return addedUrls to false
     }
 
     /**
@@ -239,6 +269,7 @@ class VaultRepository private constructor(private val appContext: Context) {
         var scanned = 0
         var matched = 0
         var newUrls = 0
+        var duplicateFiles = 0
 
         fun walk(dir: DocumentFile, prefix: String) {
             val children = try {
@@ -276,10 +307,16 @@ class VaultRepository private constructor(private val appContext: Context) {
                     if (content.isBlank()) continue
                     val (urls, isJson) = UrlExtractor.extract(content)
                     if (urls.isNotEmpty()) {
-                        matched++
                         val displayName = if (prefix.isEmpty()) childName else "$prefix/$childName"
+                        val contentHash = sha256Short(content.trim().toByteArray(Charsets.UTF_8))
                         synchronized(lock) {
-                            newUrls += registerSourceLocked(displayName, child.uri.toString(), urls, isJson)
+                            val (added, isDup) = registerSourceLocked(displayName, child.uri.toString(), urls, isJson, contentHash)
+                            if (isDup) {
+                                duplicateFiles++
+                            } else {
+                                matched++
+                                newUrls += added
+                            }
                         }
                     }
                 } catch (_: Exception) {
@@ -290,7 +327,7 @@ class VaultRepository private constructor(private val appContext: Context) {
         walk(rootDoc, "")
         onProgress(scanned, matched)
         saveIndex()
-        return ScanResult(scanned, matched, newUrls)
+        return ScanResult(scanned, matched, newUrls, duplicateFiles)
     }
 
     /**
@@ -313,6 +350,7 @@ class VaultRepository private constructor(private val appContext: Context) {
         var scanned = 0
         var matched = 0
         var newUrls = 0
+        var duplicateFiles = 0
 
         fun walk(dir: File, prefix: String) {
             val children = dir.listFiles() ?: return
@@ -343,10 +381,16 @@ class VaultRepository private constructor(private val appContext: Context) {
                     if (content.isBlank()) continue
                     val (urls, isJson) = UrlExtractor.extract(content)
                     if (urls.isNotEmpty()) {
-                        matched++
                         val displayName = if (prefix.isEmpty()) childName else "$prefix/$childName"
+                        val contentHash = sha256Short(content.trim().toByteArray(Charsets.UTF_8))
                         synchronized(lock) {
-                            newUrls += registerSourceLocked(displayName, "file://${child.absolutePath}", urls, isJson)
+                            val (added, isDup) = registerSourceLocked(displayName, "file://${child.absolutePath}", urls, isJson, contentHash)
+                            if (isDup) {
+                                duplicateFiles++
+                            } else {
+                                matched++
+                                newUrls += added
+                            }
                         }
                     }
                 } catch (_: Exception) {
@@ -359,7 +403,7 @@ class VaultRepository private constructor(private val appContext: Context) {
         }
         onProgress(scanned, matched)
         saveIndex()
-        return ScanResult(scanned, matched, newUrls)
+        return ScanResult(scanned, matched, newUrls, duplicateFiles)
     }
 
     fun getUrlsToDownload(mode: String): List<String> {
@@ -375,20 +419,23 @@ class VaultRepository private constructor(private val appContext: Context) {
     }
 
     fun markDownloadSuccess(url: String, bytes: ByteArray, mime: String) {
-        val hash: String
         synchronized(lock) {
-            val rec = urlsMap[url] ?: return
-            hash = rec.hash
+            if (!urlsMap.containsKey(url)) return
         }
+        // Content-level SHA-256 deduplication: identical images across different URLs share one file on disk!
+        val contentHash = sha256Short(bytes)
         val ext = ImageDownloader.mimeToExt(mime, url)
-        val fileName = "$hash.$ext"
-        File(imagesDir, fileName).writeBytes(bytes)
+        val fileName = "img_$contentHash.$ext"
+        val targetFile = File(imagesDir, fileName)
+        if (!targetFile.exists()) {
+            targetFile.writeBytes(bytes)
+        }
 
         synchronized(lock) {
             val rec = urlsMap[url] ?: return
             rec.file = fileName
             rec.mime = mime
-            rec.size = bytes.size.toLong()
+            rec.size = targetFile.length()
             rec.status = CacheStatus.OK
             rec.error = ""
             rec.updatedAt = System.currentTimeMillis()

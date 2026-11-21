@@ -32,7 +32,8 @@ data class SourceRecord(
     val docUri: String,
     val isJson: Boolean,
     val urls: List<String>,
-    val scannedAt: Long = System.currentTimeMillis()
+    val scannedAt: Long = System.currentTimeMillis(),
+    val contentHash: String = ""
 )
 
 data class VaultStats(
@@ -56,7 +57,8 @@ data class DownloadProgress(
 data class ScanResult(
     val scannedFiles: Int,
     val matchedFiles: Int,
-    val newUrls: Int
+    val newUrls: Int,
+    val duplicateFiles: Int = 0
 )
 
 data class RepairResult(
