@@ -40,6 +40,9 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
@@ -163,6 +166,13 @@ class MainActivity : AppCompatActivity() {
             if (apk != null && apk.exists() && canInstallPackages()) {
                 launchApkInstaller(apk)
             }
+        }
+
+    // 8. Export Entire Vault as ZIP Archive
+    private val createVaultZipLauncher =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+            if (uri == null) return@registerForActivityResult
+            exportVaultArchiveToUri(uri)
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -304,6 +314,15 @@ class MainActivity : AppCompatActivity() {
         binding.btnStopCache.setOnClickListener {
             VaultDownloadService.stop(this)
             toast("正在暂停并保存断点...")
+        }
+        binding.btnExportZip.setOnClickListener {
+            val stats = repo.statsFlow.value
+            if (stats.okUrls <= 0) {
+                toast("还没有已缓存的图片，请先扫描并缓存")
+                return@setOnClickListener
+            }
+            val stamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
+            createVaultZipLauncher.launch("ThemeVault_图床存档_$stamp.zip")
         }
 
         // Tab 2: Vault Search
@@ -513,6 +532,69 @@ class MainActivity : AppCompatActivity() {
 
     private fun launchApkInstaller(apkFile: File) {
         startActivity(UpdateManager.buildInstallIntent(this, apkFile))
+    }
+
+    // ================== Export Entire Vault ZIP & Share ==================
+    private fun exportVaultArchiveToUri(uri: Uri) {
+        val container = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(60, 40, 60, 20)
+        }
+        val statusTv = TextView(this).apply {
+            text = "正在整理目录并打包压缩包..."
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
+        }
+        val pb = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progress = 0
+        }
+        container.addView(statusTv)
+        container.addView(pb)
+
+        val dlg = AlertDialog.Builder(this)
+            .setTitle("打包图床存档")
+            .setView(container)
+            .setCancelable(false)
+            .show()
+
+        lifecycleScope.launch {
+            try {
+                val res = withContext(Dispatchers.IO) {
+                    val os = contentResolver.openOutputStream(uri)
+                        ?: throw IllegalStateException("无法写入目标文件")
+                    os.use { out ->
+                        repo.exportVaultToZip(out) { done, total ->
+                            if (done % 10 == 0 || done == total) {
+                                runOnUiThread {
+                                    val pct = if (total > 0) ((done * 100) / total).coerceIn(0, 100) else 100
+                                    pb.progress = pct
+                                    statusTv.text = "正在打包：$done / $total 张 ($pct%)"
+                                }
+                            }
+                        }
+                    }
+                }
+                dlg.dismiss()
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("存档打包完成")
+                    .setMessage(
+                        "已将 ${res.imageCount} 张图片（涵盖 ${res.sourceCount} 个美化）以及完整对照索引 manifest.json 整理进 ZIP 压缩包。\n\n压缩包大小：${formatBytes(res.totalBytes)}"
+                    )
+                    .setPositiveButton("直接分享到其他软件") { _, _ ->
+                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                            type = "application/zip"
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        startActivity(Intent.createChooser(shareIntent, "发送图床压缩包到..."))
+                    }
+                    .setNegativeButton("完成", null)
+                    .show()
+            } catch (e: Exception) {
+                dlg.dismiss()
+                toast("打包失败：${e.message}")
+            }
+        }
     }
 
     // ================== Folder Scan & Vault UI ==================

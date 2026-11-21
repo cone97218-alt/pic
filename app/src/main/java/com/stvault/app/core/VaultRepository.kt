@@ -10,8 +10,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedOutputStream
 import java.io.File
+import java.io.OutputStream
 import java.security.MessageDigest
+import java.util.zip.Deflater
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 class VaultRepository private constructor(private val appContext: Context) {
 
@@ -485,6 +490,111 @@ class VaultRepository private constructor(private val appContext: Context) {
             matchedCount = urlMap.size,
             missingCount = missing,
             repairedText = repairedText
+        )
+    }
+
+    data class ExportZipResult(val imageCount: Int, val sourceCount: Int, val totalBytes: Long)
+
+    /**
+     * Streams all cached images + human-readable manifest.json + index.json into a ZIP archive.
+     * Uses fast level-0 deflate streaming so even thousands of images pack quickly with low RAM.
+     */
+    fun exportVaultToZip(
+        outputStream: OutputStream,
+        onProgress: (done: Int, total: Int) -> Unit = { _, _ -> }
+    ): ExportZipResult {
+        val okRecords: List<UrlRecord>
+        val allSources: List<SourceRecord>
+        val manifestJson: String
+
+        synchronized(lock) {
+            okRecords = urlsMap.values
+                .filter { it.status == CacheStatus.OK && it.file.isNotEmpty() && File(imagesDir, it.file).exists() }
+                .map { it.copy() }
+            allSources = sourcesMap.values.toList()
+
+            val manifestRoot = JSONObject()
+            manifestRoot.put("exportedAt", System.currentTimeMillis())
+            manifestRoot.put("totalSources", allSources.size)
+            manifestRoot.put("totalCachedImages", okRecords.size)
+
+            val srcArr = JSONArray()
+            for (s in allSources) {
+                val sObj = JSONObject()
+                sObj.put("name", s.name)
+                val imgArr = JSONArray()
+                for (u in s.urls) {
+                    val rec = urlsMap[u]
+                    if (rec != null && rec.status == CacheStatus.OK && rec.file.isNotEmpty()) {
+                        val iObj = JSONObject()
+                        iObj.put("file", "images/${rec.file}")
+                        iObj.put("url", u)
+                        iObj.put("size", rec.size)
+                        imgArr.put(iObj)
+                    }
+                }
+                sObj.put("cachedCount", imgArr.length())
+                sObj.put("totalUrls", s.urls.size)
+                sObj.put("images", imgArr)
+                srcArr.put(sObj)
+            }
+            manifestRoot.put("sources", srcArr)
+            manifestJson = manifestRoot.toString(2)
+        }
+
+        val total = okRecords.size
+        var writtenBytes = 0L
+        val buffer = ByteArray(32 * 1024)
+
+        ZipOutputStream(BufferedOutputStream(outputStream, 64 * 1024)).use { zos ->
+            zos.setLevel(Deflater.NO_COMPRESSION)
+
+            // 1. Human-readable manifest.json
+            val manifestBytes = manifestJson.toByteArray(Charsets.UTF_8)
+            zos.putNextEntry(ZipEntry("manifest.json"))
+            zos.write(manifestBytes)
+            zos.closeEntry()
+            writtenBytes += manifestBytes.size
+
+            // 2. Raw index.json for backup/restore
+            if (indexFile.exists()) {
+                zos.putNextEntry(ZipEntry("index.json"))
+                indexFile.inputStream().use { inp ->
+                    while (true) {
+                        val n = inp.read(buffer)
+                        if (n <= 0) break
+                        zos.write(buffer, 0, n)
+                        writtenBytes += n
+                    }
+                }
+                zos.closeEntry()
+            }
+
+            // 3. All cached images under images/
+            val seenFiles = HashSet<String>()
+            okRecords.forEachIndexed { idx, rec ->
+                onProgress(idx + 1, total)
+                if (!seenFiles.add(rec.file)) return@forEachIndexed
+                val imgFile = File(imagesDir, rec.file)
+                if (!imgFile.exists()) return@forEachIndexed
+
+                zos.putNextEntry(ZipEntry("images/${rec.file}"))
+                imgFile.inputStream().use { inp ->
+                    while (true) {
+                        val n = inp.read(buffer)
+                        if (n <= 0) break
+                        zos.write(buffer, 0, n)
+                        writtenBytes += n
+                    }
+                }
+                zos.closeEntry()
+            }
+        }
+
+        return ExportZipResult(
+            imageCount = total,
+            sourceCount = allSources.size,
+            totalBytes = writtenBytes
         )
     }
 
