@@ -36,11 +36,17 @@ class UrlsAdapter(
         b.tvUrl.text = rec.url
 
         val imgFile = repo.getImageFile(rec)
+        val isFont = rec.mime.startsWith("font/") || rec.mime == "application/vnd.ms-fontobject"
         if (imgFile != null) {
-            Glide.with(b.ivThumb)
-                .load(imgFile)
-                .centerCrop()
-                .into(b.ivThumb)
+            if (isFont) {
+                Glide.with(b.ivThumb).clear(b.ivThumb)
+                b.ivThumb.setImageResource(android.R.drawable.ic_menu_sort_alphabetically)
+            } else {
+                Glide.with(b.ivThumb)
+                    .load(imgFile)
+                    .centerCrop()
+                    .into(b.ivThumb)
+            }
             b.btnSavePhoto.visibility = View.VISIBLE
         } else {
             Glide.with(b.ivThumb).clear(b.ivThumb)
@@ -54,7 +60,8 @@ class UrlsAdapter(
         val ctx = b.root.context
         when (rec.status) {
             CacheStatus.OK -> {
-                b.tvUrlStatus.text = "已缓存 · ${formatBytes(rec.size)}"
+                val prefix = if (isFont) "字体 · 已缓存" else "已缓存"
+                b.tvUrlStatus.text = "$prefix · ${formatBytes(rec.size)}"
                 b.tvUrlStatus.setTextColor(ContextCompat.getColor(ctx, R.color.green))
             }
             CacheStatus.ERROR -> {

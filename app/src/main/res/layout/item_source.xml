@@ -44,11 +44,25 @@
         </LinearLayout>
 
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnPreviewSource"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="wrap_content"
+            android:layout_height="34dp"
+            android:layout_marginStart="8dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="12dp"
+            android:text="预览"
+            android:textSize="12sp"
+            app:cornerRadius="10dp" />
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/btnOpenSource"
             style="@style/Widget.Material3.Button.OutlinedButton"
             android:layout_width="wrap_content"
             android:layout_height="34dp"
-            android:layout_marginStart="10dp"
+            android:layout_marginStart="6dp"
             android:insetTop="0dp"
             android:insetBottom="0dp"
             android:minWidth="0dp"

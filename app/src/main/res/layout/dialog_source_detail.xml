@@ -22,12 +22,24 @@
         android:orientation="horizontal">
 
         <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnDialogRepairCatbox"
+            android:id="@+id/btnDialogPreview"
             android:layout_width="0dp"
-            android:layout_height="44dp"
+            android:layout_height="42dp"
             android:layout_marginEnd="6dp"
             android:layout_weight="1"
-            android:text="换新图床链"
+            android:text="预览"
+            android:textSize="12.5sp"
+            android:textStyle="bold"
+            app:backgroundTint="@color/accent"
+            app:cornerRadius="12dp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnDialogRepairCatbox"
+            android:layout_width="0dp"
+            android:layout_height="42dp"
+            android:layout_marginEnd="6dp"
+            android:layout_weight="1"
+            android:text="换链导出"
             android:textColor="@color/on_green"
             android:textSize="12.5sp"
             android:textStyle="bold"
@@ -38,10 +50,9 @@
             android:id="@+id/btnDialogRepairBase64"
             style="@style/Widget.Material3.Button.OutlinedButton"
             android:layout_width="0dp"
-            android:layout_height="44dp"
-            android:layout_marginStart="6dp"
+            android:layout_height="42dp"
             android:layout_weight="1"
-            android:text="压缩内嵌版"
+            android:text="压缩内嵌"
             android:textColor="@color/text_primary"
             android:textSize="12.5sp"
             app:cornerRadius="12dp"

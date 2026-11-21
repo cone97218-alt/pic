@@ -28,8 +28,10 @@ object ImageHostUploader {
     fun compressForBase64(file: File, mime: String, maxDim: Int = 1600, quality: Int = 80): Pair<ByteArray, String> {
         val origBytes = file.readBytes()
         val cleanMime = mime.lowercase().substringBefore(';').trim()
-        if (cleanMime == "image/gif" || cleanMime == "image/svg+xml" || cleanMime == "image/x-icon") {
-            return origBytes to cleanMime.ifBlank { "image/png" }
+        if (cleanMime == "image/gif" || cleanMime == "image/svg+xml" || cleanMime == "image/x-icon" ||
+            cleanMime.startsWith("font/") || cleanMime == "application/vnd.ms-fontobject"
+        ) {
+            return origBytes to cleanMime.ifBlank { "application/octet-stream" }
         }
         return try {
             val bitmap = BitmapFactory.decodeByteArray(origBytes, 0, origBytes.size)

@@ -565,6 +565,28 @@ class VaultRepository private constructor(private val appContext: Context) {
         return if (f.exists()) f else null
     }
 
+    fun getCachedAssetByUrl(url: String): Pair<File, String>? {
+        val rec = synchronized(lock) { urlsMap[url]?.copy() } ?: return null
+        val f = getImageFile(rec) ?: return null
+        return f to rec.mime.ifBlank { "application/octet-stream" }
+    }
+
+    fun readSourceRawText(sourceId: String): Pair<String, String> {
+        val source = getSourceById(sourceId) ?: throw IllegalArgumentException("找不到该美化记录")
+        if (source.docUri.isBlank()) throw IllegalStateException("该记录缺少原文件权限")
+        val rawText = if (source.docUri.startsWith("file://")) {
+            val f = File(source.docUri.removePrefix("file://"))
+            if (!f.exists()) throw IllegalStateException("原文件不存在")
+            f.readText(Charsets.UTF_8)
+        } else {
+            val uri = Uri.parse(source.docUri)
+            appContext.contentResolver.openInputStream(uri)?.use {
+                it.bufferedReader(Charsets.UTF_8).readText()
+            } ?: throw IllegalStateException("无法读取原文件")
+        }
+        return source.name.substringAfterLast('/') to rawText
+    }
+
     fun repairSourceById(
         sourceId: String,
         mode: String = "base64_webp",

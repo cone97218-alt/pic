@@ -18,6 +18,23 @@ object UrlExtractor {
         "img.alicdn.com", "img.imgdd.com", "freeimage.host", "iili.io"
     )
 
+    // Official/stable font CDNs that don't need local caching
+    private val OFFICIAL_FONT_HOSTS = listOf(
+        "fonts.googleapis.com",
+        "fonts.gstatic.com",
+        "fonts.loli.net",
+        "fonts.font.im",
+        "fonts.bunny.net",
+        "font.sec.miui.com",
+        "use.fontawesome.com",
+        "at.alicdn.com",
+        "cdn.bootcdn.net",
+        "cdnjs.cloudflare.com",
+        "unpkg.com",
+        "chinese-fonts-cdn",
+        "npm.elemecdn.com"
+    )
+
     private val CSS_URL_RE = Regex(
         """url\(\s*(['"]?)(https?:(?:\\\/\\\/|\/\/)[^)'"\s]+)\1\s*\)""",
         RegexOption.IGNORE_CASE
@@ -34,32 +51,34 @@ object UrlExtractor {
         """\.(png|jpe?g|gif|webp|avif|svg|bmp|ico|jfif)(\?|#|$)""",
         RegexOption.IGNORE_CASE
     )
-    private val NON_IMAGE_EXT_RE = Regex(
-        """\.(woff2?|ttf|otf|eot|css|mjs|js|map|mp3|wav|ogg|flac|m4a|mp4|webm|mov|avi|pdf|zip|rar|7z|json|xml|html?|txt)(\?|#|$)""",
+    private val FONT_EXT_RE = Regex(
+        """\.(woff2?|ttf|otf|eot)(\?|#|$)""",
         RegexOption.IGNORE_CASE
     )
-    private val NON_IMAGE_HOST_KEYWORDS = listOf(
-        "fonts.googleapis.com",
-        "fonts.gstatic.com",
-        "fonts.loli.net",
-        "fonts.font.im",
-        "font.sec.miui.com",
-        "use.fontawesome.com",
-        "at.alicdn.com/t/font",
-        "at.alicdn.com/t/c/font",
-        "chinese-fonts-cdn",
-        "fonts.bunny.net"
+    private val EXCLUDED_EXT_RE = Regex(
+        """\.(css|mjs|js|map|mp3|wav|ogg|flac|m4a|mp4|webm|mov|avi|pdf|zip|rar|7z|json|xml|html?|txt)(\?|#|$)""",
+        RegexOption.IGNORE_CASE
     )
 
-    fun isNonImageUrl(url: String): Boolean {
+    fun isFontUrl(url: String): Boolean = FONT_EXT_RE.containsMatchIn(url.lowercase())
+
+    fun isExcludedUrl(url: String): Boolean {
         val lower = url.lowercase()
-        if (NON_IMAGE_EXT_RE.containsMatchIn(lower)) return true
-        if (NON_IMAGE_HOST_KEYWORDS.any { lower.contains(it) }) return true
-        if (lower.contains("/fonts/") || lower.contains("/font/") || lower.contains("font-awesome")) {
+        if (EXCLUDED_EXT_RE.containsMatchIn(lower)) return true
+        // Skip official stable font CDNs
+        if (OFFICIAL_FONT_HOSTS.any { lower.contains(it) }) {
+            // Only skip if it's not explicitly an image file
             if (!IMG_EXT_RE.containsMatchIn(lower)) return true
+        }
+        // Skip jsDelivr font packages (e.g., @fontsource, chinese-fonts)
+        if ((lower.contains("jsdelivr.net") || lower.contains("font-awesome")) && isFontUrl(lower)) {
+            return true
         }
         return false
     }
+
+    // Backwards-compatible alias for VaultRepository cleanup
+    fun isNonImageUrl(url: String): Boolean = isExcludedUrl(url)
 
     fun cleanUrl(raw: String?): String {
         if (raw.isNullOrBlank()) return ""
@@ -68,7 +87,7 @@ object UrlExtractor {
         if (!u.startsWith("http://", ignoreCase = true) && !u.startsWith("https://", ignoreCase = true)) {
             return ""
         }
-        if (isNonImageUrl(u)) return ""
+        if (isExcludedUrl(u)) return ""
         return try {
             val uri = URI(u)
             if (uri.host.isNullOrBlank()) "" else u
@@ -91,7 +110,7 @@ object UrlExtractor {
             val u = cleanUrl(m.value)
             if (u.isEmpty()) continue
             val lower = u.lowercase()
-            if (IMG_EXT_RE.containsMatchIn(lower) || KNOWN_HOSTS.any { lower.contains(it) }) {
+            if (IMG_EXT_RE.containsMatchIn(lower) || FONT_EXT_RE.containsMatchIn(lower) || KNOWN_HOSTS.any { lower.contains(it) }) {
                 out.add(u)
             }
         }
@@ -102,14 +121,10 @@ object UrlExtractor {
             is String -> cb(node)
             is JSONObject -> {
                 val keys = node.keys()
-                while (keys.hasNext()) {
-                    walkJson(node.opt(keys.next()), cb)
-                }
+                while (keys.hasNext()) walkJson(node.opt(keys.next()), cb)
             }
             is JSONArray -> {
-                for (i in 0 until node.length()) {
-                    walkJson(node.opt(i), cb)
-                }
+                for (i in 0 until node.length()) walkJson(node.opt(i), cb)
             }
         }
     }
@@ -128,18 +143,13 @@ object UrlExtractor {
             }
             is JSONArray -> {
                 val out = JSONArray()
-                for (i in 0 until node.length()) {
-                    out.put(replaceInJson(node.opt(i), replacer))
-                }
+                for (i in 0 until node.length()) out.put(replaceInJson(node.opt(i), replacer))
                 out
             }
             else -> node
         }
     }
 
-    /**
-     * Returns Pair(urls, isJson)
-     */
     fun extract(content: String): Pair<List<String>, Boolean> {
         val set = LinkedHashSet<String>()
         val trimmed = content.trim()
@@ -162,9 +172,6 @@ object UrlExtractor {
         return set.toList() to false
     }
 
-    /**
-     * Extracts SillyTavern character card JSON from PNG tEXt chunk ("chara" / "ccv3")
-     */
     fun extractCharaFromPng(bytes: ByteArray): String? {
         if (bytes.size < 16) return null
         if (bytes[0] != 0x89.toByte() || bytes[1] != 0x50.toByte() ||

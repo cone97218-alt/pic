@@ -55,7 +55,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:text="酒馆图床离线保险箱"
+                android:text="图床与美化管理"
                 android:textColor="@color/text_muted"
                 android:textSize="12.5sp" />
         </LinearLayout>
@@ -171,7 +171,7 @@
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:text="已安全缓存"
+                                android:text="已缓存资源"
                                 android:textColor="@color/text_muted"
                                 android:textSize="13sp" />
 
@@ -329,7 +329,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="美化文件夹"
+                            android:text="美化目录"
                             android:textColor="@color/text_primary"
                             android:textSize="15sp"
                             android:textStyle="bold" />
@@ -339,7 +339,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="6dp"
-                            android:text="点击下方按钮授权你的美化目录"
+                            android:text="未选择目录"
                             android:textColor="@color/text_muted"
                             android:textSize="12.5sp" />
 
@@ -347,10 +347,10 @@
                             android:id="@+id/cbIncludePng"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="6dp"
+                            android:layout_marginTop="4dp"
                             android:buttonTint="@color/accent"
                             android:checked="true"
-                            android:text="同时扫描角色卡 .png 内嵌美化"
+                            android:text="包含角色卡 PNG"
                             android:textColor="@color/text_muted"
                             android:textSize="12.5sp" />
 
@@ -391,7 +391,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="44dp"
                             android:layout_marginTop="8dp"
-                            android:text="一键直达 TT 酒馆美化目录 (themes)"
+                            android:text="TT 酒馆目录"
                             android:textColor="@color/accent"
                             android:textSize="13sp"
                             app:cornerRadius="12dp"
@@ -434,7 +434,7 @@
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:text="后台极速缓存"
+                                android:text="批量缓存"
                                 android:textColor="@color/text_primary"
                                 android:textSize="15sp"
                                 android:textStyle="bold" />
@@ -448,19 +448,11 @@
                                 android:focusable="true"
                                 android:paddingHorizontal="10dp"
                                 android:paddingVertical="4dp"
-                                android:text="16 线程 · 极速"
+                                android:text="16 线程"
                                 android:textColor="@color/accent"
                                 android:textSize="11.5sp"
                                 android:textStyle="bold" />
                         </LinearLayout>
-
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="4dp"
-                            android:text="高并发长连接复用 + 自动过滤字体外链，切回 TT 酒馆或锁屏不中断"
-                            android:textColor="@color/text_muted"
-                            android:textSize="12sp" />
 
                         <LinearLayout
                             android:layout_width="match_parent"
@@ -499,7 +491,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="44dp"
                             android:layout_marginTop="8dp"
-                            android:text="暂停并保存断点"
+                            android:text="暂停缓存"
                             android:textColor="#FFFFFF"
                             android:textSize="13sp"
                             android:visibility="gone"
@@ -512,7 +504,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="44dp"
                             android:layout_marginTop="10dp"
-                            android:text="打包全部已缓存图床为 ZIP 存档"
+                            android:text="导出 ZIP 存档"
                             android:textColor="@color/text_primary"
                             android:textSize="13sp"
                             app:cornerRadius="12dp"
@@ -704,18 +696,10 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="失效美化一键复活"
+                        android:text="美化复活"
                         android:textColor="@color/text_primary"
                         android:textSize="16sp"
                         android:textStyle="bold" />
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="4dp"
-                        android:text="导入挂图的美化文件或粘贴代码，自动从保险箱匹配原图并替换"
-                        android:textColor="@color/text_muted"
-                        android:textSize="12.5sp" />
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnPickRepairFile"
@@ -723,7 +707,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="46dp"
                         android:layout_marginTop="14dp"
-                        android:text="选择美化文件 (.json / .css)"
+                        android:text="选择美化文件"
                         android:textColor="@color/text_primary"
                         app:cornerRadius="12dp"
                         app:strokeColor="@color/border" />
@@ -735,7 +719,7 @@
                         android:layout_marginTop="10dp"
                         android:background="@drawable/bg_input"
                         android:gravity="top|start"
-                        android:hint="或者直接粘贴失效的美化 JSON / CSS..."
+                        android:hint="或粘贴美化 JSON / CSS"
                         android:padding="12dp"
                         android:textColor="@color/text_primary"
                         android:textColorHint="@color/text_muted"
@@ -745,7 +729,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="14dp"
-                        android:text="修复策略"
+                        android:text="导出方式"
                         android:textColor="@color/text_primary"
                         android:textSize="13.5sp"
                         android:textStyle="bold" />
@@ -762,7 +746,7 @@
                             android:layout_height="wrap_content"
                             android:buttonTint="@color/accent"
                             android:checked="true"
-                            android:text="转存 Catbox 换新链（推荐：文件极小，不卡 TT 酒馆）"
+                            android:text="转存 Catbox 换链"
                             android:textColor="@color/text_primary"
                             android:textSize="13sp" />
 
@@ -771,7 +755,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:buttonTint="@color/accent"
-                            android:text="WebP 压缩内嵌 Base64（彻底离线永不失效，适合小图）"
+                            android:text="WebP 压缩内嵌 Base64"
                             android:textColor="@color/text_primary"
                             android:textSize="13sp" />
 
@@ -780,7 +764,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:buttonTint="@color/accent"
-                            android:text="替换为本地路径前缀（/user/images/vault/）"
+                            android:text="替换为本地路径"
                             android:textColor="@color/text_primary"
                             android:textSize="13sp" />
                     </RadioGroup>
@@ -790,7 +774,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="48dp"
                         android:layout_marginTop="14dp"
-                        android:text="匹配保险箱并导出复活版"
+                        android:text="导出复活文件"
                         android:textColor="@color/on_green"
                         android:textSize="14sp"
                         android:textStyle="bold"

@@ -248,7 +248,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupRecyclerViews() {
         binding.rvVault.layoutManager = LinearLayoutManager(this)
-        sourcesAdapter = SourcesAdapter(repo) { source -> showSourceDetailDialog(source) }
+        sourcesAdapter = SourcesAdapter(
+            repo = repo,
+            onClick = { source -> showSourceDetailDialog(source) },
+            onPreviewClick = { source -> ThemePreviewActivity.open(this, source.id) }
+        )
         urlsAdapter = UrlsAdapter(
             repo = repo,
             onReplaceClick = { rec ->
@@ -412,17 +416,13 @@ class MainActivity : AppCompatActivity() {
                 16 -> 24
                 else -> 8
             }
-            val label = when (downloadConcurrency) {
-                8 -> "8 线程 · 稳健"
-                24 -> "24 线程 · 狂飙"
-                else -> "16 线程 · 极速"
-            }
+            val label = "$downloadConcurrency 线程"
             binding.btnSpeedToggle.text = label
             toast("已切换为 $label")
         }
         binding.btnStartCache.setOnClickListener {
             VaultDownloadService.start(this, mode = "pending", concurrency = downloadConcurrency)
-            toast("已启动 $downloadConcurrency 线程极速缓存")
+            toast("开始后台缓存")
         }
         binding.btnRetryFailed.setOnClickListener {
             VaultDownloadService.start(this, mode = "failed", concurrency = minOf(12, downloadConcurrency))
@@ -908,6 +908,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        dBinding.btnDialogPreview.setOnClickListener {
+            activeSourceDialog?.dismiss()
+            ThemePreviewActivity.open(this, source.id)
+        }
         dBinding.btnDialogRepairCatbox.setOnClickListener { runModalRepair("catbox") }
         dBinding.btnDialogRepairBase64.setOnClickListener { runModalRepair("base64_webp") }
 
