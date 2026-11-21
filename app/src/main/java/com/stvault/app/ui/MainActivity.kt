@@ -84,7 +84,7 @@ class MainActivity : AppCompatActivity() {
             runFolderScan(uri)
         }
 
-    // 9. SAF Direct Intent (for jumping straight into Android/data/com.tauritavern.client/...)
+    // 9. SAF Direct Intent (for jumping straight into Android/data/com.tauritavern.client)
     private val openTTTreeIntentLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             val uri = result.data?.data ?: return@registerForActivityResult
@@ -100,6 +100,21 @@ class MainActivity : AppCompatActivity() {
             prefs.edit().putString("tree_uri", uri.toString()).remove("local_dir_path").apply()
             updateFolderLabel()
             runFolderScan(uri)
+        }
+
+    // 10. Return from All Files Access settings -> auto re-try TT folder scan
+    private val allFilesPermLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            val ttThemesDir = File("/storage/emulated/0/Android/data/com.tauritavern.client/data/default-user/themes")
+            if (ttThemesDir.exists() && ttThemesDir.canRead() && ttThemesDir.listFiles() != null) {
+                savedLocalDirPath = ttThemesDir.absolutePath
+                savedTreeUri = null
+                prefs.edit().putString("local_dir_path", ttThemesDir.absolutePath).remove("tree_uri").apply()
+                updateFolderLabel()
+                runLocalDirScan(ttThemesDir)
+            } else {
+                toast("已获取权限，但你的安卓系统限制了直接读取 Android/data，请改点「跳转授权 TT 目录」")
+            }
         }
 
     // 2. Pick Broken Theme File for Repair
@@ -636,19 +651,19 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // 2. Otherwise jump SAF picker straight into the TT SillyTavern themes subfolder via EXTRA_INITIAL_URI
+        // 2. Otherwise jump SAF picker straight into Android/data/com.tauritavern.client via EXTRA_INITIAL_URI
         AlertDialog.Builder(this)
             .setTitle("访问 TT 酒馆美化目录")
             .setMessage(
-                "安卓 11+ 系统默认隐藏了 Android/data 目录，提供两种直达方式：\n\n" +
-                    "1. 直接跳转授权（推荐）：系统文件选择器会直接定位到 TT 酒馆的 themes 目录，点击底部「使用此文件夹」即可。\n" +
-                    "2. 授予「所有文件访问权限」：适用于部分安卓 11/12 机型直接读取。"
+                "安卓 11+ 系统不允许普通应用直接用路径读取 Android/data（即使开了所有文件权限也会被系统拦截）。\n\n" +
+                    "• 推荐点下方「跳转授权 TT 目录」：会尝试直接定位到 com.tauritavern.client 文件夹，点底部「使用此文件夹」即可自动扫描里面的 themes。\n" +
+                    "• 如果你的手机是安卓 14/15 且系统彻底屏蔽了 Android/data，请先用 MT管理器 / 系统文件管理把 themes 复制到 Download 文件夹，再点「选择目录」即可秒扫。"
             )
-            .setPositiveButton("直接跳转 TT 目录授权") { _, _ ->
+            .setPositiveButton("跳转授权 TT 目录") { _, _ ->
                 try {
                     val targetUri = DocumentsContract.buildDocumentUri(
                         "com.android.externalstorage.documents",
-                        "primary:Android/data/com.tauritavern.client/data/default-user/themes"
+                        "primary:Android/data/com.tauritavern.client"
                     )
                     val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -671,12 +686,12 @@ class MainActivity : AppCompatActivity() {
                             Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
                             Uri.parse("package:$packageName")
                         )
-                        startActivity(intent)
+                        allFilesPermLauncher.launch(intent)
                     } catch (_: Exception) {
-                        startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                        allFilesPermLauncher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
                     }
                 } else {
-                    toast("当前系统已具备权限，如果仍被拦截（安卓13/14+限制），请点「直接跳转」或用 MT管理器复制到 Download 后选择")
+                    toast("当前系统已具备所有文件权限，但安卓 11+ 内核限制直接读取 Android/data，请点「跳转授权 TT 目录」")
                 }
             }
             .setNegativeButton("取消", null)
