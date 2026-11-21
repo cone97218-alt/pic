@@ -11,14 +11,27 @@ android {
         applicationId = "com.stvault.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "1.0.4"
+        versionCode = 6
+        versionName = "1.0.5"
 
         buildConfigField("String", "GITHUB_REPO", "\"cone97218-alt/pic\"")
     }
 
+    signingConfigs {
+        create("vault") {
+            storeFile = file("vault-signing.jks")
+            storePassword = "stvault2026"
+            keyAlias = "stvault"
+            keyPassword = "stvault2026"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("vault")
+        }
         release {
+            signingConfig = signingConfigs.getByName("vault")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
