@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/nav_cache"
+        android:icon="@drawable/ic_nav_vault"
+        android:title="保险箱" />
+    <item
+        android:id="@+id/nav_vault"
+        android:icon="@drawable/ic_nav_search"
+        android:title="查图" />
+    <item
+        android:id="@+id/nav_repair"
+        android:icon="@drawable/ic_nav_repair"
+        android:title="复活" />
+</menu>
