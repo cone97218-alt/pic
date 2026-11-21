@@ -284,7 +284,8 @@ class MainActivity : AppCompatActivity() {
             listOf(
                 "all" to "全部",
                 "ok" to "已缓存",
-                "error" to "失败/已挂",
+                "fonts" to "字体",
+                "error" to "失败",
                 "pending" to "待缓存",
                 "largest" to "大图优先"
             )

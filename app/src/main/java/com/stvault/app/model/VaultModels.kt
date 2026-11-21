@@ -33,7 +33,8 @@ data class SourceRecord(
     val isJson: Boolean,
     val urls: List<String>,
     val scannedAt: Long = System.currentTimeMillis(),
-    val contentHash: String = ""
+    val contentHash: String = "",
+    val category: String = "ui"
 )
 
 data class VaultStats(

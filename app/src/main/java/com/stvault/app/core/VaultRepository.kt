@@ -26,8 +26,12 @@ class VaultRepository private constructor(private val appContext: Context) {
 
     private val lock = Any()
     private val vaultDir: File = File(appContext.getExternalFilesDir(null) ?: appContext.filesDir, "vault")
-    val imagesDir: File = File(vaultDir, "images")
-    private val sourcesDir: File = File(vaultDir, "sources")
+    private val legacyImagesDir: File = File(vaultDir, "images")
+    private val legacySourcesDir: File = File(vaultDir, "sources")
+
+    val imagesDir: File = File(vaultDir, "assets/images")
+    val fontsDir: File = File(vaultDir, "assets/fonts")
+    private val themesRootDir: File = File(vaultDir, "themes")
     private val indexFile: File = File(vaultDir, "index.json")
 
     private val urlsMap = LinkedHashMap<String, UrlRecord>()
@@ -44,9 +48,45 @@ class VaultRepository private constructor(private val appContext: Context) {
     init {
         repoScope.launch {
             imagesDir.mkdirs()
-            sourcesDir.mkdirs()
+            fontsDir.mkdirs()
+            File(themesRootDir, "ui").mkdirs()
+            File(themesRootDir, "regex").mkdirs()
+            File(themesRootDir, "cards").mkdirs()
+            File(themesRootDir, "other").mkdirs()
             loadIndex()
         }
+    }
+
+    private fun isFontAsset(mime: String, fileName: String = "", url: String = ""): Boolean {
+        val m = mime.lowercase()
+        if (m.startsWith("font/") || m == "application/vnd.ms-fontobject") return true
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        if (ext in setOf("woff", "woff2", "ttf", "otf", "eot")) return true
+        return UrlExtractor.isFontUrl(url)
+    }
+
+    private fun resolveAssetFile(fileName: String, mime: String, url: String = ""): File {
+        val dir = if (isFontAsset(mime, fileName, url)) fontsDir else imagesDir
+        return File(dir, fileName)
+    }
+
+    private fun classifySourceCategory(name: String, rawContent: String): String {
+        val lowerName = name.lowercase()
+        if (lowerName.endsWith(".png")) return "cards"
+        if (lowerName.endsWith(".css")) return "ui"
+        val trimmed = rawContent.trim()
+        if (trimmed.startsWith("{")) {
+            if (trimmed.contains("\"findRegex\"") && trimmed.contains("\"replaceString\"")) return "regex"
+            if (trimmed.contains("\"custom_css\"") || trimmed.contains("\"main_text_color\"") || trimmed.contains("\"blur_tint_color\"")) return "ui"
+        }
+        return "other"
+    }
+
+    private fun resolveSourceFile(sourceId: String, category: String): File {
+        val safeCat = if (category in setOf("ui", "regex", "cards", "other")) category else "other"
+        val dir = File(themesRootDir, safeCat)
+        dir.mkdirs()
+        return File(dir, "$sourceId.txt")
     }
 
     fun getVaultPathDisplay(): String = vaultDir.absolutePath
@@ -97,16 +137,30 @@ class VaultRepository private constructor(private val appContext: Context) {
                         var status = CacheStatus.from(o.optString("status"))
                         var fileName = o.optString("file", "")
                         var size = o.optLong("size", 0L)
-                        if (status == CacheStatus.OK && (fileName.isEmpty() || !File(imagesDir, fileName).exists())) {
-                            status = CacheStatus.PENDING
-                            fileName = ""
-                            size = 0L
+                        val mime = o.optString("mime", "")
+                        if (status == CacheStatus.OK && fileName.isNotEmpty()) {
+                            val newFile = resolveAssetFile(fileName, mime, u)
+                            if (!newFile.exists()) {
+                                val oldFile = File(legacyImagesDir, fileName)
+                                if (oldFile.exists()) {
+                                    newFile.parentFile?.mkdirs()
+                                    if (!oldFile.renameTo(newFile)) {
+                                        oldFile.copyTo(newFile, overwrite = true)
+                                        oldFile.delete()
+                                    }
+                                    purgedNonImages = true
+                                } else {
+                                    status = CacheStatus.PENDING
+                                    fileName = ""
+                                    size = 0L
+                                }
+                            }
                         }
                         urlsMap[u] = UrlRecord(
                             url = u,
                             hash = o.optString("hash", sha1Short(u)),
                             file = fileName,
-                            mime = o.optString("mime", ""),
+                            mime = mime,
                             size = size,
                             status = status,
                             error = o.optString("error", ""),
@@ -130,6 +184,18 @@ class VaultRepository private constructor(private val appContext: Context) {
                             }
                         }
                         if (urlList.isEmpty()) continue
+                        val cat = o.optString("category", "ui").ifBlank { "ui" }
+                        // Migrate legacy vault/sources/<id>.txt -> vault/themes/<cat>/<id>.txt
+                        val oldSrc = File(legacySourcesDir, "$id.txt")
+                        if (oldSrc.exists()) {
+                            val newSrc = resolveSourceFile(id, cat)
+                            if (!newSrc.exists()) {
+                                if (!oldSrc.renameTo(newSrc)) {
+                                    oldSrc.copyTo(newSrc, overwrite = true)
+                                    oldSrc.delete()
+                                }
+                            }
+                        }
                         sourcesMap[id] = SourceRecord(
                             id = id,
                             name = o.optString("name", id),
@@ -137,7 +203,8 @@ class VaultRepository private constructor(private val appContext: Context) {
                             isJson = o.optBoolean("isJson", false),
                             urls = urlList,
                             scannedAt = o.optLong("scannedAt", 0L),
-                            contentHash = o.optString("contentHash", "")
+                            contentHash = o.optString("contentHash", ""),
+                            category = cat
                         )
                     }
                 }
@@ -180,6 +247,7 @@ class VaultRepository private constructor(private val appContext: Context) {
                 o.put("urls", JSONArray(s.urls))
                 o.put("scannedAt", s.scannedAt)
                 o.put("contentHash", s.contentHash)
+                o.put("category", s.category)
                 srcObj.put(id, o)
             }
             root.put("sources", srcObj)
@@ -242,11 +310,12 @@ class VaultRepository private constructor(private val appContext: Context) {
             }
         }
 
-        // Cache a local copy of the theme text for offline preview & SAF-error-free repair
+        val category = classifySourceCategory(name, rawContent)
+
+        // Cache a local copy of the theme text into categorized themes/<category>/ folder
         if (rawContent.isNotEmpty() && rawContent.length <= 2 * 1024 * 1024) {
             try {
-                sourcesDir.mkdirs()
-                File(sourcesDir, "$sourceId.txt").writeText(rawContent, Charsets.UTF_8)
+                resolveSourceFile(sourceId, category).writeText(rawContent, Charsets.UTF_8)
             } catch (_: Exception) {
             }
         }
@@ -258,7 +327,8 @@ class VaultRepository private constructor(private val appContext: Context) {
             isJson = isJson,
             urls = urls,
             scannedAt = System.currentTimeMillis(),
-            contentHash = contentHash
+            contentHash = contentHash,
+            category = category
         )
         var addedUrls = 0
         for (u in urls) {
@@ -449,11 +519,13 @@ class VaultRepository private constructor(private val appContext: Context) {
         synchronized(lock) {
             if (!urlsMap.containsKey(url)) return
         }
-        // Content-level SHA-256 deduplication: identical images across different URLs share one file on disk!
+        // Content-level SHA-256 deduplication: store fonts under assets/fonts/, images under assets/images/
         val contentHash = sha256Short(bytes)
         val ext = ImageDownloader.mimeToExt(mime, url)
-        val fileName = "img_$contentHash.$ext"
-        val targetFile = File(imagesDir, fileName)
+        val isFont = isFontAsset(mime, "f.$ext", url)
+        val fileName = "${if (isFont) "font" else "img"}_$contentHash.$ext"
+        val targetFile = resolveAssetFile(fileName, mime, url)
+        targetFile.parentFile?.mkdirs()
         if (!targetFile.exists()) {
             targetFile.writeBytes(bytes)
         }
@@ -554,6 +626,7 @@ class VaultRepository private constructor(private val appContext: Context) {
             val filtered = urlsMap.values.filter { rec ->
                 val statusOk = when (statusFilter) {
                     "ok", "largest" -> rec.status == CacheStatus.OK
+                    "fonts" -> isFontAsset(rec.mime, rec.file, rec.url)
                     "error" -> rec.status == CacheStatus.ERROR
                     "pending" -> rec.status == CacheStatus.PENDING
                     else -> true
@@ -573,8 +646,10 @@ class VaultRepository private constructor(private val appContext: Context) {
 
     fun getImageFile(rec: UrlRecord): File? {
         if (rec.status != CacheStatus.OK || rec.file.isEmpty()) return null
-        val f = File(imagesDir, rec.file)
-        return if (f.exists()) f else null
+        val f = resolveAssetFile(rec.file, rec.mime, rec.url)
+        if (f.exists()) return f
+        val legacy = File(legacyImagesDir, rec.file)
+        return if (legacy.exists()) legacy else null
     }
 
     fun getCachedAssetByUrl(url: String): Pair<File, String>? {
@@ -587,10 +662,14 @@ class VaultRepository private constructor(private val appContext: Context) {
         val source = getSourceById(sourceId) ?: throw IllegalArgumentException("找不到该美化记录")
         val baseName = source.name.substringAfterLast('/')
 
-        // 1. Prefer local cached copy (immune to Android SAF URI permission errors)
-        val cachedFile = File(sourcesDir, "$sourceId.txt")
+        // 1. Prefer local cached copy (categorized under themes/<category>/)
+        val cachedFile = resolveSourceFile(sourceId, source.category)
         if (cachedFile.exists() && cachedFile.length() > 0L) {
             return baseName to cachedFile.readText(Charsets.UTF_8)
+        }
+        val legacyCached = File(legacySourcesDir, "$sourceId.txt")
+        if (legacyCached.exists() && legacyCached.length() > 0L) {
+            return baseName to legacyCached.readText(Charsets.UTF_8)
         }
 
         // 2. Fallback to original file/SAF URI
@@ -613,7 +692,7 @@ class VaultRepository private constructor(private val appContext: Context) {
         // Save local copy for next time
         try {
             if (rawText.length <= 2 * 1024 * 1024) {
-                sourcesDir.mkdirs()
+                cachedFile.parentFile?.mkdirs()
                 cachedFile.writeText(rawText, Charsets.UTF_8)
             }
         } catch (_: Exception) {
@@ -720,25 +799,27 @@ class VaultRepository private constructor(private val appContext: Context) {
 
         synchronized(lock) {
             okRecords = urlsMap.values
-                .filter { it.status == CacheStatus.OK && it.file.isNotEmpty() && File(imagesDir, it.file).exists() }
+                .filter { it.status == CacheStatus.OK && it.file.isNotEmpty() && getImageFile(it) != null }
                 .map { it.copy() }
             allSources = sourcesMap.values.toList()
 
             val manifestRoot = JSONObject()
             manifestRoot.put("exportedAt", System.currentTimeMillis())
             manifestRoot.put("totalSources", allSources.size)
-            manifestRoot.put("totalCachedImages", okRecords.size)
+            manifestRoot.put("totalCachedAssets", okRecords.size)
 
             val srcArr = JSONArray()
             for (s in allSources) {
                 val sObj = JSONObject()
                 sObj.put("name", s.name)
+                sObj.put("category", s.category)
                 val imgArr = JSONArray()
                 for (u in s.urls) {
                     val rec = urlsMap[u]
                     if (rec != null && rec.status == CacheStatus.OK && rec.file.isNotEmpty()) {
+                        val sub = if (isFontAsset(rec.mime, rec.file, u)) "assets/fonts" else "assets/images"
                         val iObj = JSONObject()
-                        iObj.put("file", "images/${rec.file}")
+                        iObj.put("file", "$sub/${rec.file}")
                         iObj.put("url", u)
                         iObj.put("size", rec.size)
                         imgArr.put(iObj)
@@ -746,7 +827,7 @@ class VaultRepository private constructor(private val appContext: Context) {
                 }
                 sObj.put("cachedCount", imgArr.length())
                 sObj.put("totalUrls", s.urls.size)
-                sObj.put("images", imgArr)
+                sObj.put("assets", imgArr)
                 srcArr.put(sObj)
             }
             manifestRoot.put("sources", srcArr)
@@ -781,16 +862,17 @@ class VaultRepository private constructor(private val appContext: Context) {
                 zos.closeEntry()
             }
 
-            // 3. All cached images under images/
+            // 3. All cached assets under assets/images/ and assets/fonts/
             val seenFiles = HashSet<String>()
             okRecords.forEachIndexed { idx, rec ->
                 onProgress(idx + 1, total)
-                if (!seenFiles.add(rec.file)) return@forEachIndexed
-                val imgFile = File(imagesDir, rec.file)
-                if (!imgFile.exists()) return@forEachIndexed
+                val sub = if (isFontAsset(rec.mime, rec.file, rec.url)) "assets/fonts" else "assets/images"
+                val entryName = "$sub/${rec.file}"
+                if (!seenFiles.add(entryName)) return@forEachIndexed
+                val assetFile = getImageFile(rec) ?: return@forEachIndexed
 
-                zos.putNextEntry(ZipEntry("images/${rec.file}"))
-                imgFile.inputStream().use { inp ->
+                zos.putNextEntry(ZipEntry(entryName))
+                assetFile.inputStream().use { inp ->
                     while (true) {
                         val n = inp.read(buffer)
                         if (n <= 0) break
