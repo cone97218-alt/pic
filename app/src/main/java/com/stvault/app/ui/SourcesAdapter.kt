@@ -28,11 +28,16 @@ class SourcesAdapter(
     override fun onBindViewHolder(holder: VH, position: Int) {
         val s = items[position]
         val (ok, err, pending) = repo.getSourceCounts(s)
-        holder.binding.tvSourceName.text = s.name
+        val cleanName = s.name.substringAfterLast('/')
+        holder.binding.tvSourceName.text = cleanName
+        val parentFolder = s.folderName.ifBlank {
+            if (s.name.contains('/')) s.name.substringBeforeLast('/').substringAfterLast('/') else ""
+        }
         val meta = buildString {
-            append("已缓存 $ok / ${s.urls.size}")
+            append("已缓存 $ok/${s.urls.size}")
             if (err > 0) append(" · 失败 $err")
             if (pending > 0) append(" · 待缓存 $pending")
+            if (parentFolder.isNotEmpty()) append(" · $parentFolder")
         }
         holder.binding.tvSourceMeta.text = meta
         holder.binding.root.setOnClickListener { onClick(s) }

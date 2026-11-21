@@ -26,12 +26,27 @@
             android:textStyle="bold" />
 
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnPreviewSettings"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="10dp"
+            android:text="设置"
+            android:textColor="@color/text_muted"
+            android:textSize="13.5sp" />
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/btnClosePreview"
             style="@style/Widget.Material3.Button.TextButton"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
             android:insetTop="0dp"
             android:insetBottom="0dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="10dp"
             android:text="关闭"
             android:textColor="@color/accent"
             android:textSize="13.5sp" />
@@ -42,10 +57,22 @@
         android:layout_height="1dp"
         android:background="@color/border" />
 
-    <WebView
-        android:id="@+id/webPreview"
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1"
+        android:background="@color/bg">
+
+        <WebView
+            android:id="@+id/webPreview"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <ProgressBar
+            android:id="@+id/pbPreviewLoading"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:layout_gravity="center" />
+    </FrameLayout>
 
 </LinearLayout>

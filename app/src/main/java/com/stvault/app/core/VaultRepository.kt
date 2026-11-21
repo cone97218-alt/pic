@@ -213,7 +213,8 @@ class VaultRepository private constructor(private val appContext: Context) {
                             urls = urlList,
                             scannedAt = o.optLong("scannedAt", 0L),
                             contentHash = o.optString("contentHash", ""),
-                            category = cat
+                            category = cat,
+                            folderName = o.optString("folderName", "")
                         )
                     }
                 }
@@ -257,6 +258,7 @@ class VaultRepository private constructor(private val appContext: Context) {
                 o.put("scannedAt", s.scannedAt)
                 o.put("contentHash", s.contentHash)
                 o.put("category", s.category)
+                o.put("folderName", s.folderName)
                 srcObj.put(id, o)
             }
             root.put("sources", srcObj)
@@ -325,19 +327,19 @@ class VaultRepository private constructor(private val appContext: Context) {
         urls: List<String>,
         isJson: Boolean,
         contentHash: String,
-        rawContent: String = ""
+        rawContent: String = "",
+        folderName: String = ""
     ): Pair<Int, Boolean> {
         if (urls.isEmpty()) return 0 to false
         val sourceId = sha1Short(if (docUri.isNotBlank()) docUri else name)
         val category = classifySourceCategory(name, rawContent)
 
-        // Check if an existing record already represents this exact file (by contentHash OR same filename)
+        // Check if an existing record already represents this exact file (by contentHash)
         val existingDup = if (contentHash.isNotEmpty()) {
             sourcesMap.values.firstOrNull { it.id != sourceId && it.contentHash == contentHash }
         } else null
 
         if (existingDup != null) {
-            // Backfill local cached preview text & fresh docUri on the existing record!
             if (rawContent.isNotEmpty() && rawContent.length <= 2 * 1024 * 1024) {
                 try {
                     val f = resolveSourceFile(existingDup.id, existingDup.category)
@@ -347,15 +349,16 @@ class VaultRepository private constructor(private val appContext: Context) {
                 } catch (_: Exception) {
                 }
             }
-            sourcesMap[existingDup.id] = existingDup.copy(docUri = docUri)
+            sourcesMap[existingDup.id] = existingDup.copy(
+                docUri = docUri,
+                folderName = folderName.ifBlank { existingDup.folderName }
+            )
             return 0 to true
         }
 
-        // Also backfill any legacy record with the same name that was missing contentHash/local cache
         val legacySameName = sourcesMap.values.firstOrNull { it.id != sourceId && it.name == name && it.contentHash.isEmpty() }
         val targetId = legacySameName?.id ?: sourceId
 
-        // Cache a local copy of the theme text into categorized themes/<category>/ folder
         if (rawContent.isNotEmpty() && rawContent.length <= 2 * 1024 * 1024) {
             try {
                 resolveSourceFile(targetId, category).writeText(rawContent, Charsets.UTF_8)
@@ -371,7 +374,8 @@ class VaultRepository private constructor(private val appContext: Context) {
             urls = urls,
             scannedAt = System.currentTimeMillis(),
             contentHash = contentHash,
-            category = category
+            category = category,
+            folderName = folderName
         )
         var addedUrls = 0
         for (u in urls) {
@@ -448,9 +452,10 @@ class VaultRepository private constructor(private val appContext: Context) {
                     val (urls, isJson) = UrlExtractor.extract(content)
                     if (urls.isNotEmpty()) {
                         val displayName = if (prefix.isEmpty()) childName else "$prefix/$childName"
+                        val parentFolder = if (prefix.isNotEmpty()) prefix.substringAfterLast('/') else (rootDoc.name ?: "")
                         val contentHash = sha256Short(content.trim().toByteArray(Charsets.UTF_8))
                         synchronized(lock) {
-                            val (added, isDup) = registerSourceLocked(displayName, child.uri.toString(), urls, isJson, contentHash, content)
+                            val (added, isDup) = registerSourceLocked(displayName, child.uri.toString(), urls, isJson, contentHash, content, parentFolder)
                             if (isDup) {
                                 duplicateFiles++
                             } else {
@@ -522,9 +527,10 @@ class VaultRepository private constructor(private val appContext: Context) {
                     val (urls, isJson) = UrlExtractor.extract(content)
                     if (urls.isNotEmpty()) {
                         val displayName = if (prefix.isEmpty()) childName else "$prefix/$childName"
+                        val parentFolder = if (prefix.isNotEmpty()) prefix.substringAfterLast('/') else rootDir.name
                         val contentHash = sha256Short(content.trim().toByteArray(Charsets.UTF_8))
                         synchronized(lock) {
-                            val (added, isDup) = registerSourceLocked(displayName, "file://${child.absolutePath}", urls, isJson, contentHash, content)
+                            val (added, isDup) = registerSourceLocked(displayName, "file://${child.absolutePath}", urls, isJson, contentHash, content, parentFolder)
                             if (isDup) {
                                 duplicateFiles++
                             } else {

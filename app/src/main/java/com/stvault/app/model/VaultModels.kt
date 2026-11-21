@@ -36,7 +36,8 @@ data class SourceRecord(
     val urls: List<String>,
     val scannedAt: Long = System.currentTimeMillis(),
     val contentHash: String = "",
-    val category: String = "ui"
+    val category: String = "ui",
+    val folderName: String = ""
 )
 
 data class VaultStats(
