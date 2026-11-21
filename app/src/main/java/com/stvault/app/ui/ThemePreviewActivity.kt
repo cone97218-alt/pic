@@ -326,13 +326,28 @@ class ThemePreviewActivity : AppCompatActivity() {
                 }
                 if (json.optBoolean("waifuMode", false)) bodyClasses.add("waifuMode")
                 if (json.optBoolean("noShadows", false)) bodyClasses.add("noShadows")
+                if (json.optBoolean("fast_ui_mode", false)) bodyClasses.add("no-blur")
                 if (json.optBoolean("reduced_motion", false)) bodyClasses.add("reduced-motion")
+                if (json.optBoolean("hideChatAvatars_enabled", false)) bodyClasses.add("hideChatAvatars")
+                if (json.optBoolean("expand_message_actions", false)) bodyClasses.add("expandMessageActions")
+                if (json.has("timer_enabled") && !json.optBoolean("timer_enabled", true)) bodyClasses.add("no-timer")
+                if (json.has("timestamps_enabled") && !json.optBoolean("timestamps_enabled", true)) bodyClasses.add("no-timestamps")
+                if (json.has("message_token_count_enabled") && !json.optBoolean("message_token_count_enabled", true)) bodyClasses.add("no-tokenCount")
+                if (json.has("mesIDDisplay_enabled") && !json.optBoolean("mesIDDisplay_enabled", true)) bodyClasses.add("no-mesIDDisplay")
 
                 fun putColor(jsonKey: String, cssVar: String) {
                     val v = json.optString(jsonKey, "").trim()
                     if (v.isNotEmpty()) rootVars.append("  $cssVar: $v;\n")
                 }
                 putColor("main_text_color", "--SmartThemeBodyColor")
+                val mainColor = json.optString("main_text_color", "").trim()
+                val rgbaMatch = Regex("""rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)""").find(mainColor)
+                if (rgbaMatch != null) {
+                    rootVars.append("  --SmartThemeCheckboxBgColorR: ${rgbaMatch.groupValues[1]};\n")
+                    rootVars.append("  --SmartThemeCheckboxBgColorG: ${rgbaMatch.groupValues[2]};\n")
+                    rootVars.append("  --SmartThemeCheckboxBgColorB: ${rgbaMatch.groupValues[3]};\n")
+                    rootVars.append("  --SmartThemeCheckboxBgColorA: ${rgbaMatch.groupValues[4].ifBlank { "1" }};\n")
+                }
                 putColor("italics_text_color", "--SmartThemeEmColor")
                 putColor("underline_text_color", "--SmartThemeUnderlineColor")
                 putColor("quote_text_color", "--SmartThemeQuoteColor")
@@ -344,19 +359,22 @@ class ThemePreviewActivity : AppCompatActivity() {
                 putColor("border_color", "--SmartThemeBorderColor")
                 putColor("fastui_bg_color", "--SmartThemeFastUIBGColor")
 
+                // Exact unitless CSS variables matching SillyTavern power-user.js!
                 if (json.has("blur_strength")) {
                     val blur = json.optDouble("blur_strength", 10.0)
-                    rootVars.append("  --SmartThemeBlurStrength: ${blur}px;\n")
-                    rootVars.append("  --blurStrength: ${blur}px;\n")
-                    if (blur <= 0.0) bodyClasses.add("no-blur")
+                    rootVars.append("  --blurStrength: $blur;\n")
                 }
                 if (json.has("shadow_width")) {
                     val sw = json.optDouble("shadow_width", 2.0)
-                    rootVars.append("  --SmartThemeShadowWidth: ${sw}px;\n")
+                    rootVars.append("  --shadowWidth: $sw;\n")
                 }
                 if (json.has("font_scale")) {
                     val fs = json.optDouble("font_scale", 1.0)
-                    rootVars.append("  --mainFontSize: ${15.0 * fs}px;\n")
+                    rootVars.append("  --fontScale: $fs;\n")
+                }
+                if (json.has("chat_width")) {
+                    val cw = json.optDouble("chat_width", 50.0)
+                    if (cw > 0) rootVars.append("  --sheldWidth: ${cw}vw;\n")
                 }
             } catch (_: Exception) {
                 customCss = rawText
@@ -419,9 +437,9 @@ class ThemePreviewActivity : AppCompatActivity() {
 <link rel="stylesheet" href="css/fontawesome.min.css">
 <link rel="stylesheet" href="css/solid.min.css">
 <link rel="stylesheet" href="css/brands.min.css">
+<link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="css/st-tailwind.css">
 <link rel="stylesheet" href="css/backgrounds.css">
-<link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="css/toggle-dependent.css">
 <link rel="stylesheet" href="css/mobile-styles.css">
 $asyncLinks
