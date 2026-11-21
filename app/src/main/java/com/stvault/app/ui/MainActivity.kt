@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -18,6 +19,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.lifecycleScope
@@ -164,11 +166,13 @@ class MainActivity : AppCompatActivity() {
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        applySavedNightMode()
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
         binding.tvVersionBadge.text = "v${BuildConfig.VERSION_NAME}"
+        updateThemeIcon()
 
         repo = VaultRepository.getInstance(this)
         savedTreeUri = prefs.getString("tree_uri", null)?.let { Uri.parse(it) }
@@ -209,10 +213,38 @@ class MainActivity : AppCompatActivity() {
         updateSegmentedStyle()
     }
 
+    private fun applySavedNightMode() {
+        val saved = prefs.getInt("night_mode", AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
+        if (AppCompatDelegate.getDefaultNightMode() != saved) {
+            AppCompatDelegate.setDefaultNightMode(saved)
+        }
+    }
+
+    private fun isCurrentlyDark(): Boolean {
+        val uiMode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+        return uiMode == Configuration.UI_MODE_NIGHT_YES
+    }
+
+    private fun updateThemeIcon() {
+        binding.ivThemeIcon.setImageResource(
+            if (isCurrentlyDark()) R.drawable.ic_sun else R.drawable.ic_moon
+        )
+    }
+
+    private fun toggleTheme() {
+        val next = if (isCurrentlyDark()) {
+            AppCompatDelegate.MODE_NIGHT_NO
+        } else {
+            AppCompatDelegate.MODE_NIGHT_YES
+        }
+        prefs.edit().putInt("night_mode", next).apply()
+        AppCompatDelegate.setDefaultNightMode(next)
+    }
+
     private fun updateSegmentedStyle() {
         val accent = ContextCompat.getColor(this, R.color.accent)
         val transparent = android.graphics.Color.TRANSPARENT
-        val white = ContextCompat.getColor(this, R.color.text_primary)
+        val white = android.graphics.Color.WHITE
         val muted = ContextCompat.getColor(this, R.color.text_muted)
 
         if (vaultSearchModeSources) {
@@ -229,6 +261,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupListeners() {
+        // Day/Night Toggle Button
+        binding.btnToggleTheme.setOnClickListener {
+            toggleTheme()
+        }
+
         // OTA Update Check Button
         binding.btnCheckUpdate.setOnClickListener {
             checkUpdateManually()

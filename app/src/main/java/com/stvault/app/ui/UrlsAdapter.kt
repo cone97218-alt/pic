@@ -1,11 +1,12 @@
 package com.stvault.app.ui
 
-import android.graphics.Color
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
+import com.stvault.app.R
 import com.stvault.app.core.VaultRepository
 import com.stvault.app.databinding.ItemUrlBinding
 import com.stvault.app.model.CacheStatus
@@ -50,18 +51,19 @@ class UrlsAdapter(
             b.btnSavePhoto.visibility = View.GONE
         }
 
+        val ctx = b.root.context
         when (rec.status) {
             CacheStatus.OK -> {
                 b.tvUrlStatus.text = "已缓存 · ${formatBytes(rec.size)}"
-                b.tvUrlStatus.setTextColor(Color.parseColor("#34D399"))
+                b.tvUrlStatus.setTextColor(ContextCompat.getColor(ctx, R.color.green))
             }
             CacheStatus.ERROR -> {
                 b.tvUrlStatus.text = "拉取失败 · ${rec.error}"
-                b.tvUrlStatus.setTextColor(Color.parseColor("#FB7185"))
+                b.tvUrlStatus.setTextColor(ContextCompat.getColor(ctx, R.color.red))
             }
             CacheStatus.PENDING -> {
                 b.tvUrlStatus.text = "等待缓存"
-                b.tvUrlStatus.setTextColor(Color.parseColor("#8B95AC"))
+                b.tvUrlStatus.setTextColor(ContextCompat.getColor(ctx, R.color.text_muted))
             }
         }
 

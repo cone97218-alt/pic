@@ -28,7 +28,7 @@
             android:layout_marginEnd="6dp"
             android:layout_weight="1"
             android:text="换新图床链"
-            android:textColor="#041D14"
+            android:textColor="@color/on_green"
             android:textSize="12.5sp"
             android:textStyle="bold"
             app:backgroundTint="@color/green"

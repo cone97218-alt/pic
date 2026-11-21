@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#090B10</color>
+    <color name="surface">#12151E</color>
+    <color name="surface_2">#181C28</color>
+    <color name="border">#222738</color>
+    <color name="text_primary">#F1F5F9</color>
+    <color name="text_muted">#8B95AC</color>
+    <color name="accent">#7C6CF6</color>
+    <color name="accent_soft">#1F7C6CF6</color>
+    <color name="green">#34D399</color>
+    <color name="on_green">#041D14</color>
+    <color name="red">#FB7185</color>
+    <color name="amber">#FBBF24</color>
+    <color name="pill_accent_bg">#1A7C6CF6</color>
+    <color name="pill_accent_stroke">#407C6CF6</color>
+    <color name="pill_green_bg">#1A34D399</color>
+</resources>
