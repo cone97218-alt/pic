@@ -708,6 +708,11 @@ class VaultRepository private constructor(private val appContext: Context) {
         return f to rec.mime.ifBlank { "application/octet-stream" }
     }
 
+    fun isKnownDeadUrl(url: String): Boolean {
+        val status = synchronized(lock) { urlsMap[url]?.status }
+        return status == CacheStatus.ERROR || status == CacheStatus.IGNORED
+    }
+
     fun readSourceRawText(sourceId: String): Pair<String, String> {
         val source = getSourceById(sourceId) ?: throw IllegalArgumentException("找不到该美化记录")
         val baseName = source.name.substringAfterLast('/')

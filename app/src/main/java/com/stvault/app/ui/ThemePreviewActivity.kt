@@ -28,8 +28,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileInputStream
+import java.util.concurrent.ConcurrentHashMap
 
 class ThemePreviewActivity : AppCompatActivity() {
 
@@ -87,6 +89,7 @@ class ThemePreviewActivity : AppCompatActivity() {
             allowFileAccess = false
             loadsImagesAutomatically = true
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            cacheMode = WebSettings.LOAD_CACHE_ELSE_NETWORK
             useWideViewPort = true
             loadWithOverviewMode = true
         }
@@ -122,17 +125,21 @@ class ThemePreviewActivity : AppCompatActivity() {
                     }
                 }
 
-                // 2. Local bundled SillyTavern frontend assets (style.css, mobile-styles.css, fontawesome, webfonts)
+                // 2. Local bundled SillyTavern frontend assets (served from RAM cache for instant render!)
                 if (url.startsWith(ST_LOCAL_ORIGIN)) {
                     val relPath = url.removePrefix(ST_LOCAL_ORIGIN).substringBefore('?').trimStart('/')
                     if (relPath.isNotEmpty() && !relPath.startsWith("__preview__/")) {
                         return try {
-                            val inp = assets.open("st/$relPath")
+                            val bytes = assetRamCache.getOrPut(relPath) {
+                                assets.open("st/$relPath").use { it.readBytes() }
+                            }
                             val mime = guessLocalAssetMime(relPath)
-                            // CRITICAL: Binary fonts (.woff2 / .ttf) MUST use null encoding, never "UTF-8"!
                             val encoding = if (mime.startsWith("text/") || mime == "application/javascript") "UTF-8" else null
-                            val headers = mapOf("Access-Control-Allow-Origin" to "*")
-                            WebResourceResponse(mime, encoding, 200, "OK", headers, inp)
+                            val headers = mapOf(
+                                "Access-Control-Allow-Origin" to "*",
+                                "Cache-Control" to "public, max-age=31536000"
+                            )
+                            WebResourceResponse(mime, encoding, 200, "OK", headers, ByteArrayInputStream(bytes))
                         } catch (_: Exception) {
                             null
                         }
@@ -140,20 +147,29 @@ class ThemePreviewActivity : AppCompatActivity() {
                 }
 
                 // 3. Local Vault cached images & fonts
-                val cached = repo.getCachedAssetByUrl(url) ?: return null
-                return try {
-                    val headers = mapOf("Access-Control-Allow-Origin" to "*")
-                    WebResourceResponse(
-                        cached.second,
-                        null,
-                        200,
-                        "OK",
-                        headers,
-                        FileInputStream(cached.first)
-                    )
-                } catch (_: Exception) {
-                    null
+                val cached = repo.getCachedAssetByUrl(url)
+                if (cached != null) {
+                    return try {
+                        val headers = mapOf("Access-Control-Allow-Origin" to "*")
+                        WebResourceResponse(
+                            cached.second,
+                            null,
+                            200,
+                            "OK",
+                            headers,
+                            FileInputStream(cached.first)
+                        )
+                    } catch (_: Exception) {
+                        null
+                    }
                 }
+
+                // 4. Short-circuit known dead/ignored links in 0ms so WebView never hangs waiting for timeout!
+                if (repo.isKnownDeadUrl(url)) {
+                    return WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+                }
+
+                return null
             }
         }
 
@@ -344,7 +360,20 @@ class ThemePreviewActivity : AppCompatActivity() {
             customCss = rawText
         }
 
-        val safeCustomCss = customCss.replace("</style>", "<\\/style>", ignoreCase = true)
+        // Move render-blocking @import url(...) out of <style> into non-blocking async <link> tags!
+        val asyncLinks = StringBuilder()
+        val importRe = Regex("""@import\s+(?:url\(\s*)?['"]?(https?://[^)'"\s;]+)['"]?\s*\)?\s*;?""", RegexOption.IGNORE_CASE)
+        val nonBlockingCss = importRe.replace(customCss) { m ->
+            val importUrl = m.groupValues[1]
+            if (!repo.isKnownDeadUrl(importUrl)) {
+                asyncLinks.append(
+                    """<link rel="stylesheet" href="${escHtml(importUrl)}" media="print" onload="this.media='all'">""" + "\n"
+                )
+            }
+            ""
+        }
+
+        val safeCustomCss = nonBlockingCss.replace("</style>", "<\\/style>", ignoreCase = true)
         val bodyClassAttr = bodyClasses.joinToString(" ")
 
         val stamp = System.currentTimeMillis()
@@ -388,6 +417,7 @@ class ThemePreviewActivity : AppCompatActivity() {
 <link rel="stylesheet" href="css/backgrounds.css">
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="css/mobile-styles.css">
+$asyncLinks
 <style id="st-theme-vars">
 :root {
 $rootVars
@@ -597,6 +627,7 @@ $safeCustomCss
     companion object {
         private const val ST_LOCAL_ORIGIN = "https://sillytavern.local/"
         private const val EXTRA_SOURCE_ID = "source_id"
+        private val assetRamCache = ConcurrentHashMap<String, ByteArray>()
         private const val DEFAULT_AI_NAME = "Seraphina"
         private const val DEFAULT_USER_NAME = "You"
         private const val DEFAULT_AI_TEXT = "欢迎回到酒馆。这是一段基于真实酒馆前端样式渲染的主题预览。"
