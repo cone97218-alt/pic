@@ -118,6 +118,12 @@ class VaultRepository private constructor(private val appContext: Context) {
                 return
             }
             try {
+                // Single-syscall directory listings instead of 10,000+ slow FUSE File.exists() calls!
+                val existingImages = imagesDir.list()?.toHashSet() ?: HashSet()
+                val existingFonts = fontsDir.list()?.toHashSet() ?: HashSet()
+                val legacyImages = if (legacyImagesDir.exists()) legacyImagesDir.list()?.toHashSet() ?: emptySet() else emptySet()
+                val legacySources = if (legacySourcesDir.exists()) legacySourcesDir.list()?.toHashSet() ?: emptySet() else emptySet()
+
                 val root = JSONObject(indexFile.readText(Charsets.UTF_8))
                 val urlsObj = root.optJSONObject("urls")
                 if (urlsObj != null) {
@@ -139,15 +145,18 @@ class VaultRepository private constructor(private val appContext: Context) {
                         var size = o.optLong("size", 0L)
                         val mime = o.optString("mime", "")
                         if (status == CacheStatus.OK && fileName.isNotEmpty()) {
-                            val newFile = resolveAssetFile(fileName, mime, u)
-                            if (!newFile.exists()) {
-                                val oldFile = File(legacyImagesDir, fileName)
-                                if (oldFile.exists()) {
+                            val isFont = isFontAsset(mime, fileName, u)
+                            val existsInNew = if (isFont) fileName in existingFonts else fileName in existingImages
+                            if (!existsInNew) {
+                                if (fileName in legacyImages) {
+                                    val oldFile = File(legacyImagesDir, fileName)
+                                    val newFile = resolveAssetFile(fileName, mime, u)
                                     newFile.parentFile?.mkdirs()
                                     if (!oldFile.renameTo(newFile)) {
                                         oldFile.copyTo(newFile, overwrite = true)
                                         oldFile.delete()
                                     }
+                                    if (isFont) existingFonts.add(fileName) else existingImages.add(fileName)
                                     purgedNonImages = true
                                 } else {
                                     status = CacheStatus.PENDING
@@ -185,9 +194,9 @@ class VaultRepository private constructor(private val appContext: Context) {
                         }
                         if (urlList.isEmpty()) continue
                         val cat = o.optString("category", "ui").ifBlank { "ui" }
-                        // Migrate legacy vault/sources/<id>.txt -> vault/themes/<cat>/<id>.txt
-                        val oldSrc = File(legacySourcesDir, "$id.txt")
-                        if (oldSrc.exists()) {
+                        val legacySrcName = "$id.txt"
+                        if (legacySrcName in legacySources) {
+                            val oldSrc = File(legacySourcesDir, legacySrcName)
                             val newSrc = resolveSourceFile(id, cat)
                             if (!newSrc.exists()) {
                                 if (!oldSrc.renameTo(newSrc)) {
