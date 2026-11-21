@@ -27,6 +27,7 @@ class VaultRepository private constructor(private val appContext: Context) {
     private val lock = Any()
     private val vaultDir: File = File(appContext.getExternalFilesDir(null) ?: appContext.filesDir, "vault")
     val imagesDir: File = File(vaultDir, "images")
+    private val sourcesDir: File = File(vaultDir, "sources")
     private val indexFile: File = File(vaultDir, "index.json")
 
     private val urlsMap = LinkedHashMap<String, UrlRecord>()
@@ -43,6 +44,7 @@ class VaultRepository private constructor(private val appContext: Context) {
     init {
         repoScope.launch {
             imagesDir.mkdirs()
+            sourcesDir.mkdirs()
             loadIndex()
         }
     }
@@ -226,7 +228,8 @@ class VaultRepository private constructor(private val appContext: Context) {
         docUri: String,
         urls: List<String>,
         isJson: Boolean,
-        contentHash: String
+        contentHash: String,
+        rawContent: String = ""
     ): Pair<Int, Boolean> {
         if (urls.isEmpty()) return 0 to false
         val sourceId = sha1Short(if (docUri.isNotBlank()) docUri else name)
@@ -236,6 +239,15 @@ class VaultRepository private constructor(private val appContext: Context) {
             val dup = sourcesMap.values.any { it.id != sourceId && it.contentHash == contentHash }
             if (dup) {
                 return 0 to true
+            }
+        }
+
+        // Cache a local copy of the theme text for offline preview & SAF-error-free repair
+        if (rawContent.isNotEmpty() && rawContent.length <= 2 * 1024 * 1024) {
+            try {
+                sourcesDir.mkdirs()
+                File(sourcesDir, "$sourceId.txt").writeText(rawContent, Charsets.UTF_8)
+            } catch (_: Exception) {
             }
         }
 
@@ -325,7 +337,7 @@ class VaultRepository private constructor(private val appContext: Context) {
                         val displayName = if (prefix.isEmpty()) childName else "$prefix/$childName"
                         val contentHash = sha256Short(content.trim().toByteArray(Charsets.UTF_8))
                         synchronized(lock) {
-                            val (added, isDup) = registerSourceLocked(displayName, child.uri.toString(), urls, isJson, contentHash)
+                            val (added, isDup) = registerSourceLocked(displayName, child.uri.toString(), urls, isJson, contentHash, content)
                             if (isDup) {
                                 duplicateFiles++
                             } else {
@@ -399,7 +411,7 @@ class VaultRepository private constructor(private val appContext: Context) {
                         val displayName = if (prefix.isEmpty()) childName else "$prefix/$childName"
                         val contentHash = sha256Short(content.trim().toByteArray(Charsets.UTF_8))
                         synchronized(lock) {
-                            val (added, isDup) = registerSourceLocked(displayName, "file://${child.absolutePath}", urls, isJson, contentHash)
+                            val (added, isDup) = registerSourceLocked(displayName, "file://${child.absolutePath}", urls, isJson, contentHash, content)
                             if (isDup) {
                                 duplicateFiles++
                             } else {
@@ -573,18 +585,40 @@ class VaultRepository private constructor(private val appContext: Context) {
 
     fun readSourceRawText(sourceId: String): Pair<String, String> {
         val source = getSourceById(sourceId) ?: throw IllegalArgumentException("找不到该美化记录")
-        if (source.docUri.isBlank()) throw IllegalStateException("该记录缺少原文件权限")
-        val rawText = if (source.docUri.startsWith("file://")) {
-            val f = File(source.docUri.removePrefix("file://"))
-            if (!f.exists()) throw IllegalStateException("原文件不存在")
-            f.readText(Charsets.UTF_8)
-        } else {
-            val uri = Uri.parse(source.docUri)
-            appContext.contentResolver.openInputStream(uri)?.use {
-                it.bufferedReader(Charsets.UTF_8).readText()
-            } ?: throw IllegalStateException("无法读取原文件")
+        val baseName = source.name.substringAfterLast('/')
+
+        // 1. Prefer local cached copy (immune to Android SAF URI permission errors)
+        val cachedFile = File(sourcesDir, "$sourceId.txt")
+        if (cachedFile.exists() && cachedFile.length() > 0L) {
+            return baseName to cachedFile.readText(Charsets.UTF_8)
         }
-        return source.name.substringAfterLast('/') to rawText
+
+        // 2. Fallback to original file/SAF URI
+        if (source.docUri.isBlank()) throw IllegalStateException("请先回首页点一次「重新扫描」以生成预览缓存")
+        val rawText = try {
+            if (source.docUri.startsWith("file://")) {
+                val f = File(source.docUri.removePrefix("file://"))
+                if (!f.exists()) throw IllegalStateException("原文件不存在")
+                f.readText(Charsets.UTF_8)
+            } else {
+                val uri = Uri.parse(source.docUri)
+                appContext.contentResolver.openInputStream(uri)?.use {
+                    it.bufferedReader(Charsets.UTF_8).readText()
+                } ?: throw IllegalStateException("无法读取原文件")
+            }
+        } catch (_: Exception) {
+            throw IllegalStateException("原文件授权已过期，请回首页点一次「重新扫描」即可离线预览")
+        }
+
+        // Save local copy for next time
+        try {
+            if (rawText.length <= 2 * 1024 * 1024) {
+                sourcesDir.mkdirs()
+                cachedFile.writeText(rawText, Charsets.UTF_8)
+            }
+        } catch (_: Exception) {
+        }
+        return baseName to rawText
     }
 
     fun repairSourceById(
@@ -593,19 +627,7 @@ class VaultRepository private constructor(private val appContext: Context) {
         pathPrefix: String = "/user/images/vault/",
         onProgress: (done: Int, total: Int) -> Unit = { _, _ -> }
     ): RepairResult {
-        val source = getSourceById(sourceId) ?: throw IllegalArgumentException("找不到该美化记录")
-        if (source.docUri.isBlank()) throw IllegalStateException("该记录缺少原文件权限，请去「复活」页手动选择文件")
-        val rawText = if (source.docUri.startsWith("file://")) {
-            val f = File(source.docUri.removePrefix("file://"))
-            if (!f.exists()) throw IllegalStateException("原文件不存在或无读取权限")
-            f.readText(Charsets.UTF_8)
-        } else {
-            val uri = Uri.parse(source.docUri)
-            appContext.contentResolver.openInputStream(uri)?.use {
-                it.bufferedReader(Charsets.UTF_8).readText()
-            } ?: throw IllegalStateException("无法读取原文件，可能文件已被移动或删除")
-        }
-        val baseName = source.name.substringAfterLast('/')
+        val (baseName, rawText) = readSourceRawText(sourceId)
         return repairRawText(rawText, baseName, mode, pathPrefix, onProgress)
     }
 
