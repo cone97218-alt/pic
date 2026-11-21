@@ -1,14 +1,18 @@
 package com.stvault.app.core
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
+import android.util.Base64
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -16,12 +20,68 @@ import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
+data class HostConfig(
+    val provider: String = "auto", // auto | catbox | sda1 | imgbb | github | custom
+    val catboxUserHash: String = "",
+    val imgbbApiKey: String = "",
+    val githubRepo: String = "",
+    val githubBranch: String = "main",
+    val githubDir: String = "images",
+    val githubToken: String = "",
+    val customEndpoint: String = "",
+    val customField: String = "file",
+    val customAuthHeader: String = ""
+) {
+    fun displayName(): String = when (provider) {
+        "catbox" -> "Catbox"
+        "sda1" -> "流浪图床 (sda1)"
+        "imgbb" -> "ImgBB"
+        "github" -> "GitHub (${githubRepo.ifBlank { "未配置" }})"
+        "custom" -> "自定义图床"
+        else -> "自动 (Catbox / 备用)"
+    }
+
+    companion object {
+        private const val PREF_NAME = "st_host_prefs"
+
+        fun load(context: Context): HostConfig {
+            val p = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            return HostConfig(
+                provider = p.getString("provider", "auto") ?: "auto",
+                catboxUserHash = p.getString("catbox_hash", "") ?: "",
+                imgbbApiKey = p.getString("imgbb_key", "") ?: "",
+                githubRepo = p.getString("gh_repo", "") ?: "",
+                githubBranch = p.getString("gh_branch", "main") ?: "main",
+                githubDir = p.getString("gh_dir", "images") ?: "images",
+                githubToken = p.getString("gh_token", "") ?: "",
+                customEndpoint = p.getString("custom_url", "") ?: "",
+                customField = p.getString("custom_field", "file") ?: "file",
+                customAuthHeader = p.getString("custom_auth", "") ?: ""
+            )
+        }
+
+        fun save(context: Context, cfg: HostConfig) {
+            context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit()
+                .putString("provider", cfg.provider)
+                .putString("catbox_hash", cfg.catboxUserHash.trim())
+                .putString("imgbb_key", cfg.imgbbApiKey.trim())
+                .putString("gh_repo", cfg.githubRepo.trim())
+                .putString("gh_branch", cfg.githubBranch.trim().ifBlank { "main" })
+                .putString("gh_dir", cfg.githubDir.trim().ifBlank { "images" })
+                .putString("gh_token", cfg.githubToken.trim())
+                .putString("custom_url", cfg.customEndpoint.trim())
+                .putString("custom_field", cfg.customField.trim().ifBlank { "file" })
+                .putString("custom_auth", cfg.customAuthHeader.trim())
+                .apply()
+        }
+    }
+}
+
 object ImageHostUploader {
 
     private const val CHROME_UA =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
 
-    // Use HTTP/1.1 to avoid Catbox HTTP/2 Connection Reset issues on mobile networks
     private val client = OkHttpClient.Builder()
         .protocols(listOf(Protocol.HTTP_1_1))
         .retryOnConnectionFailure(true)
@@ -30,10 +90,6 @@ object ImageHostUploader {
         .readTimeout(45, TimeUnit.SECONDS)
         .build()
 
-    /**
-     * Compresses static raster images (PNG/JPG/BMP/WebP) to compact WebP for lightweight Base64.
-     * Automatically skips GIF (to preserve animation), SVG/ICO, and font files.
-     */
     fun compressForBase64(file: File, mime: String, maxDim: Int = 1600, quality: Int = 80): Pair<ByteArray, String> {
         val origBytes = file.readBytes()
         val cleanMime = mime.lowercase().substringBefore(';').trim()
@@ -80,23 +136,25 @@ object ImageHostUploader {
         }
     }
 
-    /**
-     * Uploads a cached image/font to Catbox.moe (with HTTP/1.1 + retry),
-     * and automatically falls back to p.sda1.dev for images if Catbox is unreachable.
-     */
-    fun uploadToCatbox(file: File, mime: String): String {
-        var lastError: Exception? = null
-
-        // 1. Try Catbox (2 attempts with HTTP/1.1 + realistic Chrome UA)
-        for (attempt in 1..2) {
-            try {
-                return uploadCatboxOnce(file, mime)
-            } catch (e: Exception) {
-                lastError = e
-            }
+    fun upload(context: Context, file: File, mime: String): String {
+        val cfg = HostConfig.load(context)
+        return when (cfg.provider) {
+            "catbox" -> uploadCatboxWithRetry(file, mime, cfg.catboxUserHash)
+            "sda1" -> uploadSda1(file, mime)
+            "imgbb" -> uploadImgBB(file, cfg.imgbbApiKey)
+            "github" -> uploadGitHub(file, cfg)
+            "custom" -> uploadCustom(file, mime, cfg)
+            else -> uploadAuto(file, mime, cfg.catboxUserHash)
         }
+    }
 
-        // 2. Fallback to p.sda1.dev (China-friendly free image host) for standard images
+    private fun uploadAuto(file: File, mime: String, userHash: String): String {
+        var lastError: Exception? = null
+        try {
+            return uploadCatboxWithRetry(file, mime, userHash)
+        } catch (e: Exception) {
+            lastError = e
+        }
         val isImage = mime.lowercase().startsWith("image/") && !mime.lowercase().contains("svg")
         if (isImage) {
             try {
@@ -104,33 +162,42 @@ object ImageHostUploader {
             } catch (_: Exception) {
             }
         }
-
-        val reason = lastError?.message ?: "网络连接失败"
-        throw IOException("图床连接失败 ($reason)，请检查网络/代理或改用「WebP 压缩内嵌」")
+        val reason = lastError?.message ?: "连接失败"
+        throw IOException("图床上传失败 ($reason)，可在「图床设置」中切换其他图床或改用压缩内嵌")
     }
 
-    private fun uploadCatboxOnce(file: File, mime: String): String {
-        val mediaType = (mime.ifBlank { "application/octet-stream" }).toMediaTypeOrNull()
-        val body = MultipartBody.Builder()
-            .setType(MultipartBody.FORM)
-            .addFormDataPart("reqtype", "fileupload")
-            .addFormDataPart("fileToUpload", file.name, file.asRequestBody(mediaType))
-            .build()
+    private fun uploadCatboxWithRetry(file: File, mime: String, userHash: String): String {
+        var lastErr: Exception? = null
+        for (attempt in 1..2) {
+            try {
+                val mediaType = (mime.ifBlank { "application/octet-stream" }).toMediaTypeOrNull()
+                val builder = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("reqtype", "fileupload")
+                if (userHash.isNotBlank()) {
+                    builder.addFormDataPart("userhash", userHash)
+                }
+                builder.addFormDataPart("fileToUpload", file.name, file.asRequestBody(mediaType))
 
-        val req = Request.Builder()
-            .url("https://catbox.moe/user/api.php")
-            .header("User-Agent", CHROME_UA)
-            .header("Origin", "https://catbox.moe")
-            .header("Referer", "https://catbox.moe/")
-            .post(body)
-            .build()
+                val req = Request.Builder()
+                    .url("https://catbox.moe/user/api.php")
+                    .header("User-Agent", CHROME_UA)
+                    .header("Origin", "https://catbox.moe")
+                    .header("Referer", "https://catbox.moe/")
+                    .post(builder.build())
+                    .build()
 
-        client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) throw IOException("Catbox HTTP ${resp.code}")
-            val url = resp.body?.string()?.trim().orEmpty()
-            if (!url.startsWith("http")) throw IOException("Catbox 返回异常: $url")
-            return url
+                client.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) throw IOException("Catbox HTTP ${resp.code}")
+                    val url = resp.body?.string()?.trim().orEmpty()
+                    if (!url.startsWith("http")) throw IOException("Catbox 返回异常: $url")
+                    return url
+                }
+            } catch (e: Exception) {
+                lastErr = e
+            }
         }
+        throw lastErr ?: IOException("Catbox 连接失败")
     }
 
     private fun uploadSda1(file: File, mime: String): String {
@@ -143,11 +210,137 @@ object ImageHostUploader {
             .build()
 
         client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) throw IOException("备用图床 HTTP ${resp.code}")
-            val json = JSONObject(resp.body?.string() ?: throw IOException("备用图床空响应"))
+            if (!resp.isSuccessful) throw IOException("流浪图床 HTTP ${resp.code}")
+            val json = JSONObject(resp.body?.string() ?: throw IOException("流浪图床空响应"))
             val url = json.optJSONObject("data")?.optString("url", "").orEmpty()
-            if (!url.startsWith("http")) throw IOException("备用图床返回异常")
+            if (!url.startsWith("http")) throw IOException("流浪图床返回异常")
             return url
+        }
+    }
+
+    private fun uploadImgBB(file: File, apiKey: String): String {
+        if (apiKey.isBlank()) throw IOException("请先在「图床设置」中填写 ImgBB API Key")
+        val b64 = Base64.encodeToString(file.readBytes(), Base64.NO_WRAP)
+        val body = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("key", apiKey)
+            .addFormDataPart("image", b64)
+            .build()
+        val req = Request.Builder()
+            .url("https://api.imgbb.com/1/upload")
+            .header("User-Agent", CHROME_UA)
+            .post(body)
+            .build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw IOException("ImgBB HTTP ${resp.code}")
+            val json = JSONObject(resp.body?.string() ?: throw IOException("ImgBB 空响应"))
+            val url = json.optJSONObject("data")?.optString("url", "").orEmpty()
+            if (!url.startsWith("http")) throw IOException("ImgBB 返回异常")
+            return url
+        }
+    }
+
+    private fun uploadGitHub(file: File, cfg: HostConfig): String {
+        if (cfg.githubRepo.isBlank() || cfg.githubToken.isBlank()) {
+            throw IOException("请先在「图床设置」中填写 GitHub 仓库与 Token")
+        }
+        val cleanDir = cfg.githubDir.trim('/')
+        val remotePath = if (cleanDir.isEmpty()) file.name else "$cleanDir/${file.name}"
+        val apiUrl = "https://api.github.com/repos/${cfg.githubRepo}/contents/$remotePath"
+
+        // Check if file already exists (re-use CDN link directly if already uploaded!)
+        val checkReq = Request.Builder()
+            .url("$apiUrl?ref=${cfg.githubBranch}")
+            .header("Authorization", "Bearer ${cfg.githubToken}")
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", CHROME_UA)
+            .get()
+            .build()
+
+        client.newCall(checkReq).execute().use { resp ->
+            if (resp.isSuccessful) {
+                return "https://cdn.jsdelivr.net/gh/${cfg.githubRepo}@${cfg.githubBranch}/$remotePath"
+            }
+        }
+
+        val payload = JSONObject().apply {
+            put("message", "upload ${file.name}")
+            put("branch", cfg.githubBranch)
+            put("content", Base64.encodeToString(file.readBytes(), Base64.NO_WRAP))
+        }.toString()
+
+        val putReq = Request.Builder()
+            .url(apiUrl)
+            .header("Authorization", "Bearer ${cfg.githubToken}")
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", CHROME_UA)
+            .put(payload.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull()))
+            .build()
+
+        client.newCall(putReq).execute().use { resp ->
+            if (!resp.isSuccessful) throw IOException("GitHub 上传失败 HTTP ${resp.code}")
+            return "https://cdn.jsdelivr.net/gh/${cfg.githubRepo}@${cfg.githubBranch}/$remotePath"
+        }
+    }
+
+    private fun uploadCustom(file: File, mime: String, cfg: HostConfig): String {
+        if (cfg.customEndpoint.isBlank()) {
+            throw IOException("请先在「图床设置」中填写自定义图床接口地址")
+        }
+        val mediaType = (mime.ifBlank { "application/octet-stream" }).toMediaTypeOrNull()
+        val body = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart(cfg.customField.ifBlank { "file" }, file.name, file.asRequestBody(mediaType))
+            .build()
+        val reqBuilder = Request.Builder()
+            .url(cfg.customEndpoint)
+            .header("User-Agent", CHROME_UA)
+            .header("Accept", "application/json")
+            .post(body)
+        if (cfg.customAuthHeader.isNotBlank()) {
+            reqBuilder.header("Authorization", cfg.customAuthHeader)
+        }
+
+        client.newCall(reqBuilder.build()).execute().use { resp ->
+            if (!resp.isSuccessful) throw IOException("自定义图床 HTTP ${resp.code}")
+            val text = resp.body?.string()?.trim().orEmpty()
+            if (text.startsWith("http://") || text.startsWith("https://")) return text
+            val found = extractFirstHttpUrlFromJson(text)
+            if (found != null) return found
+            throw IOException("未在接口返回中识别到图片链接")
+        }
+    }
+
+    private fun extractFirstHttpUrlFromJson(raw: String): String? {
+        fun walk(node: Any?): String? {
+            when (node) {
+                is String -> if (node.startsWith("http://") || node.startsWith("https://")) return node
+                is JSONObject -> {
+                    // Prefer common URL keys first (Lsky Pro, SM.MS, Chevereto, PicGo, etc.)
+                    val preferred = listOf("url", "link", "src", "image_url", "direct_url")
+                    for (k in preferred) {
+                        val v = node.opt(k)
+                        if (v is String && (v.startsWith("http://") || v.startsWith("https://"))) return v
+                    }
+                    val keys = node.keys()
+                    while (keys.hasNext()) {
+                        val found = walk(node.opt(keys.next()))
+                        if (found != null) return found
+                    }
+                }
+                is JSONArray -> {
+                    for (i in 0 until node.length()) {
+                        val found = walk(node.opt(i))
+                        if (found != null) return found
+                    }
+                }
+            }
+            return null
+        }
+        return try {
+            walk(JSONObject(raw))
+        } catch (_: Exception) {
+            null
         }
     }
 }

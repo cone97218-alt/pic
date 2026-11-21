@@ -29,6 +29,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import com.google.android.material.chip.Chip
 import com.stvault.app.BuildConfig
 import com.stvault.app.R
+import com.stvault.app.core.HostConfig
 import com.stvault.app.core.ReleaseInfo
 import com.stvault.app.core.UpdateManager
 import com.stvault.app.core.VaultRepository
@@ -223,6 +224,7 @@ class MainActivity : AppCompatActivity() {
 
         binding.tvVersionBadge.text = "v${BuildConfig.VERSION_NAME}"
         updateThemeIcon()
+        updateHostLabel()
 
         repo = VaultRepository.getInstance(this)
         savedTreeUri = prefs.getString("tree_uri", null)?.let { Uri.parse(it) }
@@ -485,7 +487,8 @@ class MainActivity : AppCompatActivity() {
             } else false
         }
 
-        // Tab 3: One-Click Repair
+        // Tab 3: One-Click Repair & Image Host Settings
+        binding.btnHostSettings.setOnClickListener { showHostSettingsDialog() }
         binding.btnPickRepairFile.setOnClickListener { pickRepairFileLauncher.launch(arrayOf("*/*")) }
         binding.btnRunRepair.setOnClickListener {
             val raw = binding.etRepairInput.text?.toString()?.trim().orEmpty()
@@ -919,6 +922,117 @@ class MainActivity : AppCompatActivity() {
         activeSourceDialog = AlertDialog.Builder(this)
             .setView(dBinding.root)
             .setNegativeButton("关闭", null)
+            .show()
+    }
+
+    private fun updateHostLabel() {
+        val cfg = HostConfig.load(this)
+        binding.btnHostSettings.text = "图床：${cfg.displayName()}"
+    }
+
+    private fun showHostSettingsDialog() {
+        val cfg = HostConfig.load(this)
+        val providers = listOf(
+            "auto" to "自动 (Catbox 优先，失败转流浪图床)",
+            "sda1" to "流浪图床 (p.sda1.dev · 免配置)",
+            "catbox" to "Catbox (catbox.moe)",
+            "imgbb" to "ImgBB (需 API Key)",
+            "github" to "GitHub 仓库 (jsDelivr CDN)",
+            "custom" to "自定义图床 API (Lsky / SM.MS 等)"
+        )
+
+        val scroll = android.widget.ScrollView(this)
+        val root = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(48, 32, 48, 16)
+        }
+        scroll.addView(root)
+
+        val radioGroup = android.widget.RadioGroup(this)
+        val radioIds = HashMap<Int, String>()
+        for ((key, label) in providers) {
+            val rb = android.widget.RadioButton(this).apply {
+                id = View.generateViewId()
+                text = label
+                textSize = 13.5f
+                isChecked = (key == cfg.provider)
+            }
+            radioIds[rb.id] = key
+            radioGroup.addView(rb)
+        }
+        root.addView(radioGroup)
+
+        val fieldsContainer = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(0, 16, 0, 0)
+        }
+        root.addView(fieldsContainer)
+
+        fun makeField(hintText: String, value: String): android.widget.EditText {
+            return android.widget.EditText(this).apply {
+                hint = hintText
+                setText(value)
+                isSingleLine = true
+                textSize = 13f
+            }
+        }
+
+        val etCatboxHash = makeField("Catbox userhash（选填，留空匿名上传）", cfg.catboxUserHash)
+        val etImgbbKey = makeField("ImgBB API Key", cfg.imgbbApiKey)
+        val etGhRepo = makeField("GitHub 仓库，例如 cone97218-alt/pic", cfg.githubRepo)
+        val etGhBranch = makeField("分支名（默认 main）", cfg.githubBranch)
+        val etGhDir = makeField("存放目录（默认 images）", cfg.githubDir)
+        val etGhToken = makeField("GitHub Token (ghp_...)", cfg.githubToken)
+        val etCustomUrl = makeField("上传接口 URL，例如 https://xxx/api/v1/upload", cfg.customEndpoint)
+        val etCustomField = makeField("文件表单字段名（默认 file）", cfg.customField)
+        val etCustomAuth = makeField("Authorization 请求头（选填，如 Bearer xxx）", cfg.customAuthHeader)
+
+        fun refreshFields(selected: String) {
+            fieldsContainer.removeAllViews()
+            when (selected) {
+                "catbox", "auto" -> fieldsContainer.addView(etCatboxHash)
+                "imgbb" -> fieldsContainer.addView(etImgbbKey)
+                "github" -> {
+                    fieldsContainer.addView(etGhRepo)
+                    fieldsContainer.addView(etGhBranch)
+                    fieldsContainer.addView(etGhDir)
+                    fieldsContainer.addView(etGhToken)
+                }
+                "custom" -> {
+                    fieldsContainer.addView(etCustomUrl)
+                    fieldsContainer.addView(etCustomField)
+                    fieldsContainer.addView(etCustomAuth)
+                }
+            }
+        }
+
+        refreshFields(cfg.provider)
+        radioGroup.setOnCheckedChangeListener { _, checkedId ->
+            refreshFields(radioIds[checkedId] ?: "auto")
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("选择上传图床")
+            .setView(scroll)
+            .setPositiveButton("保存") { _, _ ->
+                val picked = radioIds[radioGroup.checkedRadioButtonId] ?: "auto"
+                val newCfg = HostConfig(
+                    provider = picked,
+                    catboxUserHash = etCatboxHash.text.toString(),
+                    imgbbApiKey = etImgbbKey.text.toString(),
+                    githubRepo = etGhRepo.text.toString(),
+                    githubBranch = etGhBranch.text.toString(),
+                    githubDir = etGhDir.text.toString(),
+                    githubToken = etGhToken.text.toString(),
+                    customEndpoint = etCustomUrl.text.toString(),
+                    customField = etCustomField.text.toString(),
+                    customAuthHeader = etCustomAuth.text.toString()
+                )
+                HostConfig.save(this, newCfg)
+                updateHostLabel()
+                toast("已切换图床：${newCfg.displayName()}")
+            }
+            .setNegativeButton("取消", null)
             .show()
     }
 

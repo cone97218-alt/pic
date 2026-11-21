@@ -785,7 +785,7 @@ class VaultRepository private constructor(private val appContext: Context) {
                 val mime = rec.mime.ifBlank { "image/png" }
                 when (mode) {
                     "catbox" -> {
-                        val uploadedUrl = ImageHostUploader.uploadToCatbox(imgFile, mime)
+                        val uploadedUrl = ImageHostUploader.upload(appContext, imgFile, mime)
                         urlMap[u] = uploadedUrl
                     }
                     "path" -> {
