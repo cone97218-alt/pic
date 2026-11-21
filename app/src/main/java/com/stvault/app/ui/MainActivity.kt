@@ -729,24 +729,20 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // 2. Otherwise jump SAF picker straight into Android/data/com.tauritavern.client via EXTRA_INITIAL_URI
+        // 2. Guide user to pick via MT Manager inside Android's SAF sidebar (works on Android 13/14/15!)
         AlertDialog.Builder(this)
-            .setTitle("访问 TT 酒馆美化目录")
+            .setTitle("访问 TT 酒馆目录")
             .setMessage(
-                "安卓 11+ 系统不允许普通应用直接用路径读取 Android/data（即使开了所有文件权限也会被系统拦截）。\n\n" +
-                    "• 推荐点下方「跳转授权 TT 目录」：会尝试直接定位到 com.tauritavern.client 文件夹，点底部「使用此文件夹」即可自动扫描里面的 themes。\n" +
-                    "• 如果你的手机是安卓 14/15 且系统彻底屏蔽了 Android/data，请先用 MT管理器 / 系统文件管理把 themes 复制到 Download 文件夹，再点「选择目录」即可秒扫。"
+                "由于安卓 13/14+ 系统限制，普通应用无法直接打开 Android/data，但你可以直接借助手机里的 MT 管理器授权：\n\n" +
+                    "1. 点下方「打开文件选择器」\n" +
+                    "2. 点左上角菜单 ≡ → 选择「MT管理器」\n" +
+                    "3. 进入 Android/data/com.tauritavern.client/data/default-user/themes\n" +
+                    "4. 点底部「使用此文件夹」即可直接扫描"
             )
-            .setPositiveButton("跳转授权 TT 目录") { _, _ ->
+            .setPositiveButton("打开文件选择器") { _, _ ->
                 try {
-                    val targetUri = DocumentsContract.buildDocumentUri(
-                        "com.android.externalstorage.documents",
-                        "primary:Android/data/com.tauritavern.client"
-                    )
                     val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            putExtra(DocumentsContract.EXTRA_INITIAL_URI, targetUri)
-                        }
+                        putExtra("android.provider.extra.SHOW_ADVANCED", true)
                         addFlags(
                             Intent.FLAG_GRANT_READ_URI_PERMISSION or
                                 Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
@@ -755,21 +751,6 @@ class MainActivity : AppCompatActivity() {
                     openTTTreeIntentLauncher.launch(intent)
                 } catch (_: Exception) {
                     pickFolderLauncher.launch(null)
-                }
-            }
-            .setNeutralButton("授予所有文件权限") { _, _ ->
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
-                    try {
-                        val intent = Intent(
-                            Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                            Uri.parse("package:$packageName")
-                        )
-                        allFilesPermLauncher.launch(intent)
-                    } catch (_: Exception) {
-                        allFilesPermLauncher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
-                    }
-                } else {
-                    toast("当前系统已具备所有文件权限，但安卓 11+ 内核限制直接读取 Android/data，请点「跳转授权 TT 目录」")
                 }
             }
             .setNegativeButton("取消", null)
