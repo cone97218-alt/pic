@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg"
+    android:background="@color/bg">
+
+<LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
     android:orientation="vertical">
 
     <!-- Minimalist Top Header -->
@@ -856,3 +860,39 @@
         app:menu="@menu/bottom_nav_menu" />
 
 </LinearLayout>
+
+    <!-- Dynamic Island Floating Status Pill -->
+    <LinearLayout
+        android:id="@+id/dynamicIsland"
+        android:layout_width="wrap_content"
+        android:layout_height="40dp"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="12dp"
+        android:background="@drawable/bg_dynamic_island"
+        android:elevation="12dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="16dp"
+        android:visibility="gone">
+
+        <ProgressBar
+            android:id="@+id/pbIsland"
+            android:layout_width="16dp"
+            android:layout_height="16dp"
+            android:indeterminateTint="#7C6CF6" />
+
+        <TextView
+            android:id="@+id/tvIslandText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:ellipsize="end"
+            android:maxWidth="240dp"
+            android:singleLine="true"
+            android:text="正在处理..."
+            android:textColor="#F1F5F9"
+            android:textSize="12.5sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+</FrameLayout>

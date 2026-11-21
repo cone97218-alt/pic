@@ -503,23 +503,29 @@ class MainActivity : AppCompatActivity() {
             }
             binding.btnRunRepair.isEnabled = false
             binding.tvRepairStatus.visibility = View.VISIBLE
-            binding.tvRepairStatus.text = if (mode == "catbox") "正在转存原图并生成新链接..." else "正在处理美化文件..."
+            val labelPrefix = if (mode == "catbox") "上传换链" else if (mode == "path") "替换路径" else "压缩内嵌"
+            binding.tvRepairStatus.text = "正在$labelPrefix..."
+            showIsland("正在$labelPrefix...")
 
             lifecycleScope.launch {
                 try {
                     val res = withContext(Dispatchers.IO) {
                         repo.repairRawText(raw, repairInputFileName, mode) { done, total ->
                             runOnUiThread {
-                                binding.tvRepairStatus.text = "正在处理图片：$done / $total ..."
+                                val msg = "$labelPrefix $done / $total"
+                                binding.tvRepairStatus.text = msg
+                                updateIsland(msg)
                             }
                         }
                     }
                     binding.tvRepairStatus.text =
                         "处理完成：共 ${res.totalUrls} 个图床，成功替换 ${res.matchedCount} 张" +
                             if (res.missingCount > 0) "（${res.missingCount} 张未缓存）" else ""
+                    finishIsland("已完成 ${res.matchedCount}/${res.totalUrls}")
                     triggerSaveRepairedFile(res)
                 } catch (e: Exception) {
                     binding.tvRepairStatus.text = "修复失败：${e.message}"
+                    finishIsland("换链失败")
                 } finally {
                     binding.btnRunRepair.isEnabled = true
                 }
@@ -899,14 +905,23 @@ class MainActivity : AppCompatActivity() {
         detailAdapter.submitList(repo.getUrlRecordsForSource(source))
 
         fun runModalRepair(mode: String) {
-            toast(if (mode == "catbox") "正在上传到 Catbox 换新链..." else "正在 WebP 压缩并打包...")
+            val labelPrefix = if (mode == "catbox") "上传换链" else "压缩内嵌"
+            activeSourceDialog?.dismiss()
+            showIsland("正在$labelPrefix...")
             lifecycleScope.launch {
                 try {
-                    val res = withContext(Dispatchers.IO) { repo.repairSourceById(source.id, mode) }
-                    activeSourceDialog?.dismiss()
-                    toast("已替换 ${res.matchedCount}/${res.totalUrls} 张原图，请选择保存位置")
+                    val res = withContext(Dispatchers.IO) {
+                        repo.repairSourceById(source.id, mode) { done, total ->
+                            runOnUiThread {
+                                updateIsland("$labelPrefix $done / $total")
+                            }
+                        }
+                    }
+                    finishIsland("已完成 ${res.matchedCount}/${res.totalUrls}")
+                    toast("已替换 ${res.matchedCount}/${res.totalUrls} 张，请选择保存位置")
                     triggerSaveRepairedFile(res)
                 } catch (e: Exception) {
+                    finishIsland("处理失败")
                     toast("修复失败：${e.message}")
                 }
             }
@@ -1057,6 +1072,42 @@ class MainActivity : AppCompatActivity() {
         if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0)
         if (bytes < 1024L * 1024L * 1024L) return String.format("%.2f MB", bytes / (1024.0 * 1024.0))
         return String.format("%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
+    }
+
+    private fun showIsland(text: String) {
+        val pill = binding.dynamicIsland
+        binding.pbIsland.visibility = View.VISIBLE
+        binding.tvIslandText.text = text
+        pill.animate().cancel()
+        if (pill.visibility != View.VISIBLE) {
+            pill.alpha = 0f
+            pill.translationY = -48f
+            pill.visibility = View.VISIBLE
+            pill.animate().alpha(1f).translationY(0f).setDuration(220).start()
+        }
+    }
+
+    private fun updateIsland(text: String) {
+        if (binding.dynamicIsland.visibility != View.VISIBLE) {
+            showIsland(text)
+        } else {
+            binding.tvIslandText.text = text
+        }
+    }
+
+    private fun finishIsland(text: String) {
+        val pill = binding.dynamicIsland
+        binding.pbIsland.visibility = View.GONE
+        binding.tvIslandText.text = text
+        pill.animate().cancel()
+        pill.postDelayed({
+            pill.animate()
+                .alpha(0f)
+                .translationY(-48f)
+                .setDuration(220)
+                .withEndAction { pill.visibility = View.GONE }
+                .start()
+        }, 1600L)
     }
 
     private fun toast(msg: String) {
