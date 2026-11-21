@@ -273,6 +273,7 @@ class VaultRepository private constructor(private val appContext: Context) {
         var ok = 0
         var err = 0
         var pending = 0
+        var ignored = 0
         var bytes = 0L
         val countedFiles = HashSet<String>()
         for (r in urlsMap.values) {
@@ -284,6 +285,7 @@ class VaultRepository private constructor(private val appContext: Context) {
                     }
                 }
                 CacheStatus.ERROR -> err++
+                CacheStatus.IGNORED -> ignored++
                 CacheStatus.PENDING -> pending++
             }
         }
@@ -293,8 +295,25 @@ class VaultRepository private constructor(private val appContext: Context) {
             okUrls = ok,
             errorUrls = err,
             pendingUrls = pending,
+            ignoredUrls = ignored,
             totalBytes = bytes
         )
+    }
+
+    fun ignoreAllFailedUrls(): Int {
+        var count = 0
+        synchronized(lock) {
+            for (rec in urlsMap.values) {
+                if (rec.status == CacheStatus.ERROR) {
+                    rec.status = CacheStatus.IGNORED
+                    rec.updatedAt = System.currentTimeMillis()
+                    count++
+                }
+            }
+            if (count > 0) refreshStatsLocked()
+        }
+        if (count > 0) saveIndex()
+        return count
     }
 
     /**
@@ -310,27 +329,42 @@ class VaultRepository private constructor(private val appContext: Context) {
     ): Pair<Int, Boolean> {
         if (urls.isEmpty()) return 0 to false
         val sourceId = sha1Short(if (docUri.isNotBlank()) docUri else name)
+        val category = classifySourceCategory(name, rawContent)
 
-        // Skip duplicate beautification file with identical content hash (different file path/name)
-        if (contentHash.isNotEmpty()) {
-            val dup = sourcesMap.values.any { it.id != sourceId && it.contentHash == contentHash }
-            if (dup) {
-                return 0 to true
+        // Check if an existing record already represents this exact file (by contentHash OR same filename)
+        val existingDup = if (contentHash.isNotEmpty()) {
+            sourcesMap.values.firstOrNull { it.id != sourceId && it.contentHash == contentHash }
+        } else null
+
+        if (existingDup != null) {
+            // Backfill local cached preview text & fresh docUri on the existing record!
+            if (rawContent.isNotEmpty() && rawContent.length <= 2 * 1024 * 1024) {
+                try {
+                    val f = resolveSourceFile(existingDup.id, existingDup.category)
+                    if (!f.exists() || f.length() == 0L) {
+                        f.writeText(rawContent, Charsets.UTF_8)
+                    }
+                } catch (_: Exception) {
+                }
             }
+            sourcesMap[existingDup.id] = existingDup.copy(docUri = docUri)
+            return 0 to true
         }
 
-        val category = classifySourceCategory(name, rawContent)
+        // Also backfill any legacy record with the same name that was missing contentHash/local cache
+        val legacySameName = sourcesMap.values.firstOrNull { it.id != sourceId && it.name == name && it.contentHash.isEmpty() }
+        val targetId = legacySameName?.id ?: sourceId
 
         // Cache a local copy of the theme text into categorized themes/<category>/ folder
         if (rawContent.isNotEmpty() && rawContent.length <= 2 * 1024 * 1024) {
             try {
-                resolveSourceFile(sourceId, category).writeText(rawContent, Charsets.UTF_8)
+                resolveSourceFile(targetId, category).writeText(rawContent, Charsets.UTF_8)
             } catch (_: Exception) {
             }
         }
 
-        sourcesMap[sourceId] = SourceRecord(
-            id = sourceId,
+        sourcesMap[targetId] = SourceRecord(
+            id = targetId,
             name = name,
             docUri = docUri,
             isJson = isJson,
@@ -346,12 +380,12 @@ class VaultRepository private constructor(private val appContext: Context) {
                 urlsMap[u] = UrlRecord(
                     url = u,
                     hash = sha1Short(u),
-                    sources = mutableListOf(sourceId)
+                    sources = mutableListOf(targetId)
                 )
                 addedUrls++
             } else {
-                if (!existing.sources.contains(sourceId)) {
-                    existing.sources.add(sourceId)
+                if (!existing.sources.contains(targetId)) {
+                    existing.sources.add(targetId)
                 }
             }
         }
@@ -517,7 +551,7 @@ class VaultRepository private constructor(private val appContext: Context) {
             return urlsMap.values.filter { rec ->
                 when (mode) {
                     "failed" -> rec.status == CacheStatus.ERROR
-                    "all" -> rec.status != CacheStatus.OK
+                    "all" -> rec.status == CacheStatus.PENDING || rec.status == CacheStatus.ERROR
                     else -> rec.status == CacheStatus.PENDING
                 }
             }.map { it.url }
@@ -637,6 +671,7 @@ class VaultRepository private constructor(private val appContext: Context) {
                     "ok", "largest" -> rec.status == CacheStatus.OK
                     "fonts" -> isFontAsset(rec.mime, rec.file, rec.url)
                     "error" -> rec.status == CacheStatus.ERROR
+                    "ignored" -> rec.status == CacheStatus.IGNORED
                     "pending" -> rec.status == CacheStatus.PENDING
                     else -> true
                 }

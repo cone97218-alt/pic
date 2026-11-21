@@ -3,12 +3,14 @@ package com.stvault.app.model
 enum class CacheStatus(val raw: String) {
     PENDING("pending"),
     OK("ok"),
-    ERROR("error");
+    ERROR("error"),
+    IGNORED("ignored");
 
     companion object {
         fun from(raw: String?): CacheStatus = when (raw) {
             "ok" -> OK
             "error" -> ERROR
+            "ignored" -> IGNORED
             else -> PENDING
         }
     }
@@ -43,6 +45,7 @@ data class VaultStats(
     val okUrls: Int = 0,
     val errorUrls: Int = 0,
     val pendingUrls: Int = 0,
+    val ignoredUrls: Int = 0,
     val totalBytes: Long = 0L
 )
 

@@ -65,11 +65,15 @@ class UrlsAdapter(
                 b.tvUrlStatus.setTextColor(ContextCompat.getColor(ctx, R.color.green))
             }
             CacheStatus.ERROR -> {
-                b.tvUrlStatus.text = "拉取失败 · ${rec.error}"
+                b.tvUrlStatus.text = "失败 · ${rec.error}"
                 b.tvUrlStatus.setTextColor(ContextCompat.getColor(ctx, R.color.red))
             }
+            CacheStatus.IGNORED -> {
+                b.tvUrlStatus.text = "已忽略 · 不再重试"
+                b.tvUrlStatus.setTextColor(ContextCompat.getColor(ctx, R.color.text_muted))
+            }
             CacheStatus.PENDING -> {
-                b.tvUrlStatus.text = "等待缓存"
+                b.tvUrlStatus.text = "待缓存"
                 b.tvUrlStatus.setTextColor(ContextCompat.getColor(ctx, R.color.text_muted))
             }
         }

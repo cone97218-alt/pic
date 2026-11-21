@@ -286,6 +286,7 @@ class MainActivity : AppCompatActivity() {
                 "ok" to "已缓存",
                 "fonts" to "字体",
                 "error" to "失败",
+                "ignored" to "已忽略",
                 "pending" to "待缓存",
                 "largest" to "大图优先"
             )
@@ -431,7 +432,25 @@ class MainActivity : AppCompatActivity() {
         }
         binding.btnStopCache.setOnClickListener {
             VaultDownloadService.stop(this)
-            toast("正在暂停并保存断点...")
+            toast("正在暂停...")
+        }
+        binding.btnIgnoreFailed.setOnClickListener {
+            val errCount = repo.statsFlow.value.errorUrls
+            if (errCount <= 0) {
+                toast("当前没有失败链接")
+                return@setOnClickListener
+            }
+            AlertDialog.Builder(this)
+                .setTitle("忽略失败链接")
+                .setMessage("将当前 $errCount 个失败链接标记为不再重试？之后仍可在「查图 → 已忽略」中查看或相册替换。")
+                .setPositiveButton("确定") { _, _ ->
+                    lifecycleScope.launch {
+                        val n = withContext(Dispatchers.IO) { repo.ignoreAllFailedUrls() }
+                        toast("已忽略 $n 个失败链接")
+                    }
+                }
+                .setNegativeButton("取消", null)
+                .show()
         }
         binding.btnExportZip.setOnClickListener {
             val stats = repo.statsFlow.value
