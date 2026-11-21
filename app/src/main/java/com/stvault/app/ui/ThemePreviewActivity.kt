@@ -315,12 +315,15 @@ class ThemePreviewActivity : AppCompatActivity() {
                     1 -> bodyClasses.add("bubblechat")
                     2 -> bodyClasses.add("documentstyle")
                 }
+                // Match real SillyTavern power-user.js avatar_styles exactly:
+                // 0=ROUND, 1=RECTANGULAR(big-avatars), 2=SQUARE(square-avatars), 3=ROUNDED(rounded-avatars)
                 when (json.optInt("avatar_style", 0)) {
-                    1 -> bodyClasses.add("square_avatars")
-                    2 -> bodyClasses.add("big-avatars")
+                    1 -> bodyClasses.add("big-avatars")
+                    2 -> bodyClasses.add("square-avatars")
+                    3 -> bodyClasses.add("rounded-avatars")
                 }
                 if (json.optBoolean("waifuMode", false)) bodyClasses.add("waifuMode")
-                if (json.optBoolean("noShadows", false)) bodyClasses.add("no-shadows")
+                if (json.optBoolean("noShadows", false)) bodyClasses.add("noShadows")
                 if (json.optBoolean("reduced_motion", false)) bodyClasses.add("reduced-motion")
 
                 fun putColor(jsonKey: String, cssVar: String) {
