@@ -171,11 +171,6 @@ class ThemePreviewActivity : AppCompatActivity() {
                     }
                 }
 
-                // 4. Short-circuit known dead/ignored links in 0ms so WebView never hangs waiting for timeout!
-                if (repo.isKnownDeadUrl(url)) {
-                    return WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
-                }
-
                 return null
             }
         }
@@ -427,12 +422,14 @@ class ThemePreviewActivity : AppCompatActivity() {
 <link rel="stylesheet" href="css/st-tailwind.css">
 <link rel="stylesheet" href="css/backgrounds.css">
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="css/toggle-dependent.css">
 <link rel="stylesheet" href="css/mobile-styles.css">
 $asyncLinks
 <style id="st-theme-vars">
 :root {
 $rootVars
 }
+#top-settings-holder { top: 0; left: 0; right: 0; }
 #send_but { display: flex !important; }
 #sheldheader { display: none; }
 /* Horizontal centered Quick Reply bar */
