@@ -5,9 +5,13 @@ import android.net.Uri
 import android.util.Base64
 import androidx.documentfile.provider.DocumentFile
 import com.stvault.app.model.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedOutputStream
@@ -34,9 +38,13 @@ class VaultRepository private constructor(private val appContext: Context) {
     private val _progressFlow = MutableStateFlow(DownloadProgress())
     val progressFlow: StateFlow<DownloadProgress> = _progressFlow.asStateFlow()
 
+    private val repoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     init {
-        imagesDir.mkdirs()
-        loadIndex()
+        repoScope.launch {
+            imagesDir.mkdirs()
+            loadIndex()
+        }
     }
 
     fun getVaultPathDisplay(): String = vaultDir.absolutePath
@@ -285,6 +293,75 @@ class VaultRepository private constructor(private val appContext: Context) {
         return ScanResult(scanned, matched, newUrls)
     }
 
+    /**
+     * Directly scans a local File directory (e.g., TT SillyTavern themes path when accessible).
+     */
+    fun scanLocalDirectory(
+        rootDir: File,
+        includePng: Boolean,
+        onProgress: (scannedFiles: Int, matchedFiles: Int) -> Unit = { _, _ -> }
+    ): ScanResult {
+        if (!rootDir.exists() || !rootDir.isDirectory) {
+            throw IllegalStateException("找不到目录或无读取权限：${rootDir.absolutePath}")
+        }
+        val testList = rootDir.listFiles()
+            ?: throw IllegalStateException("系统限制了直接读取该目录（请尝试授权 SAF 或所有文件访问权限）")
+
+        val allowedExts = mutableSetOf("json", "css", "txt", "html", "htm")
+        if (includePng) allowedExts.add("png")
+
+        var scanned = 0
+        var matched = 0
+        var newUrls = 0
+
+        fun walk(dir: File, prefix: String) {
+            val children = dir.listFiles() ?: return
+            for (child in children) {
+                val childName = child.name
+                if (child.isDirectory) {
+                    if (childName != "vault" && childName != ".git" && childName != "node_modules") {
+                        val nextPrefix = if (prefix.isEmpty()) childName else "$prefix/$childName"
+                        walk(child, nextPrefix)
+                    }
+                    continue
+                }
+                if (!child.isFile) continue
+                val ext = childName.substringAfterLast('.', "").lowercase()
+                if (ext !in allowedExts) continue
+                val len = child.length()
+                if (len <= 0L || len > 30L * 1024L * 1024L) continue
+
+                scanned++
+                if (scanned % 10 == 0) onProgress(scanned, matched)
+
+                try {
+                    val content: String = if (ext == "png") {
+                        UrlExtractor.extractCharaFromPng(child.readBytes()) ?: continue
+                    } else {
+                        child.readText(Charsets.UTF_8)
+                    }
+                    if (content.isBlank()) continue
+                    val (urls, isJson) = UrlExtractor.extract(content)
+                    if (urls.isNotEmpty()) {
+                        matched++
+                        val displayName = if (prefix.isEmpty()) childName else "$prefix/$childName"
+                        synchronized(lock) {
+                            newUrls += registerSourceLocked(displayName, "file://${child.absolutePath}", urls, isJson)
+                        }
+                    }
+                } catch (_: Exception) {
+                }
+            }
+        }
+
+        if (testList.isNotEmpty()) {
+            walk(rootDir, "")
+        }
+        onProgress(scanned, matched)
+        saveIndex()
+        return ScanResult(scanned, matched, newUrls)
+    }
+
     fun getUrlsToDownload(mode: String): List<String> {
         synchronized(lock) {
             return urlsMap.values.filter { rec ->
@@ -412,10 +489,16 @@ class VaultRepository private constructor(private val appContext: Context) {
     ): RepairResult {
         val source = getSourceById(sourceId) ?: throw IllegalArgumentException("找不到该美化记录")
         if (source.docUri.isBlank()) throw IllegalStateException("该记录缺少原文件权限，请去「复活」页手动选择文件")
-        val uri = Uri.parse(source.docUri)
-        val rawText = appContext.contentResolver.openInputStream(uri)?.use {
-            it.bufferedReader(Charsets.UTF_8).readText()
-        } ?: throw IllegalStateException("无法读取原文件，可能文件已被移动或删除")
+        val rawText = if (source.docUri.startsWith("file://")) {
+            val f = File(source.docUri.removePrefix("file://"))
+            if (!f.exists()) throw IllegalStateException("原文件不存在或无读取权限")
+            f.readText(Charsets.UTF_8)
+        } else {
+            val uri = Uri.parse(source.docUri)
+            appContext.contentResolver.openInputStream(uri)?.use {
+                it.bufferedReader(Charsets.UTF_8).readText()
+            } ?: throw IllegalStateException("无法读取原文件，可能文件已被移动或删除")
+        }
         val baseName = source.name.substringAfterLast('/')
         return repairRawText(rawText, baseName, mode, pathPrefix, onProgress)
     }

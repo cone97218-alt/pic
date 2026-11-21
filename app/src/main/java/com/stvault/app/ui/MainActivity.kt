@@ -9,6 +9,8 @@ import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.Settings
 import android.view.LayoutInflater
 import android.view.View
@@ -52,6 +54,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var urlsAdapter: UrlsAdapter
 
     private var savedTreeUri: Uri? = null
+    private var savedLocalDirPath: String? = null
     private var vaultSearchModeSources = true
 
     private var pendingReplaceUrl: String? = null
@@ -75,7 +78,26 @@ class MainActivity : AppCompatActivity() {
             } catch (_: Exception) {
             }
             savedTreeUri = uri
-            prefs.edit().putString("tree_uri", uri.toString()).apply()
+            savedLocalDirPath = null
+            prefs.edit().putString("tree_uri", uri.toString()).remove("local_dir_path").apply()
+            updateFolderLabel()
+            runFolderScan(uri)
+        }
+
+    // 9. SAF Direct Intent (for jumping straight into Android/data/com.tauritavern.client/...)
+    private val openTTTreeIntentLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val uri = result.data?.data ?: return@registerForActivityResult
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Exception) {
+            }
+            savedTreeUri = uri
+            savedLocalDirPath = null
+            prefs.edit().putString("tree_uri", uri.toString()).remove("local_dir_path").apply()
             updateFolderLabel()
             runFolderScan(uri)
         }
@@ -176,7 +198,6 @@ class MainActivity : AppCompatActivity() {
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        applySavedNightMode()
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -186,6 +207,7 @@ class MainActivity : AppCompatActivity() {
 
         repo = VaultRepository.getInstance(this)
         savedTreeUri = prefs.getString("tree_uri", null)?.let { Uri.parse(it) }
+        savedLocalDirPath = prefs.getString("local_dir_path", null)
         updateFolderLabel()
 
         requestNotificationPermissionIfNeeded()
@@ -292,13 +314,17 @@ class MainActivity : AppCompatActivity() {
 
         // Tab 1: Folder Pick & Scan
         binding.btnPickFolder.setOnClickListener { pickFolderLauncher.launch(savedTreeUri) }
+        binding.btnOpenTTFolder.setOnClickListener { openTauriTavernThemesFolder() }
         binding.btnScanFolder.setOnClickListener {
+            val localPath = savedLocalDirPath
             val uri = savedTreeUri
-            if (uri == null) {
-                toast("请先选择美化目录")
-                pickFolderLauncher.launch(null)
-            } else {
+            if (!localPath.isNullOrBlank()) {
+                runLocalDirScan(File(localPath))
+            } else if (uri != null) {
                 runFolderScan(uri)
+            } else {
+                toast("请先选择美化目录或点一键直达 TT 酒馆")
+                pickFolderLauncher.launch(null)
             }
         }
 
@@ -598,13 +624,116 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ================== Folder Scan & Vault UI ==================
+    private fun openTauriTavernThemesFolder() {
+        val ttThemesDir = File("/storage/emulated/0/Android/data/com.tauritavern.client/data/default-user/themes")
+        // 1. If directly readable via File API, scan immediately!
+        if (ttThemesDir.exists() && ttThemesDir.canRead() && ttThemesDir.listFiles() != null) {
+            savedLocalDirPath = ttThemesDir.absolutePath
+            savedTreeUri = null
+            prefs.edit().putString("local_dir_path", ttThemesDir.absolutePath).remove("tree_uri").apply()
+            updateFolderLabel()
+            runLocalDirScan(ttThemesDir)
+            return
+        }
+
+        // 2. Otherwise jump SAF picker straight into the TT SillyTavern themes subfolder via EXTRA_INITIAL_URI
+        AlertDialog.Builder(this)
+            .setTitle("访问 TT 酒馆美化目录")
+            .setMessage(
+                "安卓 11+ 系统默认隐藏了 Android/data 目录，提供两种直达方式：\n\n" +
+                    "1. 直接跳转授权（推荐）：系统文件选择器会直接定位到 TT 酒馆的 themes 目录，点击底部「使用此文件夹」即可。\n" +
+                    "2. 授予「所有文件访问权限」：适用于部分安卓 11/12 机型直接读取。"
+            )
+            .setPositiveButton("直接跳转 TT 目录授权") { _, _ ->
+                try {
+                    val targetUri = DocumentsContract.buildDocumentUri(
+                        "com.android.externalstorage.documents",
+                        "primary:Android/data/com.tauritavern.client/data/default-user/themes"
+                    )
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            putExtra(DocumentsContract.EXTRA_INITIAL_URI, targetUri)
+                        }
+                        addFlags(
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                        )
+                    }
+                    openTTTreeIntentLauncher.launch(intent)
+                } catch (_: Exception) {
+                    pickFolderLauncher.launch(null)
+                }
+            }
+            .setNeutralButton("授予所有文件权限") { _, _ ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+                    try {
+                        val intent = Intent(
+                            Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                            Uri.parse("package:$packageName")
+                        )
+                        startActivity(intent)
+                    } catch (_: Exception) {
+                        startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                    }
+                } else {
+                    toast("当前系统已具备权限，如果仍被拦截（安卓13/14+限制），请点「直接跳转」或用 MT管理器复制到 Download 后选择")
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun runLocalDirScan(dir: File) {
+        val includePng = binding.cbIncludePng.isChecked
+        binding.btnPickFolder.isEnabled = false
+        binding.btnOpenTTFolder.isEnabled = false
+        binding.btnScanFolder.isEnabled = false
+        binding.tvScanProgress.visibility = View.VISIBLE
+        binding.tvScanProgress.text = "正在扫描 TT 酒馆目录..."
+
+        lifecycleScope.launch {
+            try {
+                val res = withContext(Dispatchers.IO) {
+                    repo.scanLocalDirectory(dir, includePng) { scanned, matched ->
+                        runOnUiThread {
+                            binding.tvScanProgress.text = "已扫描 $scanned 个文件，命中 $matched 个美化..."
+                        }
+                    }
+                }
+                binding.tvScanProgress.text =
+                    "扫描完成：共扫 ${res.scannedFiles} 个文件，命中 ${res.matchedFiles} 个美化，新增 ${res.newUrls} 个图床"
+                toast("扫描完成，新增 ${res.newUrls} 个图床")
+            } catch (e: Exception) {
+                binding.tvScanProgress.text = "扫描失败：${e.message}"
+            } finally {
+                binding.btnPickFolder.isEnabled = true
+                binding.btnOpenTTFolder.isEnabled = true
+                binding.btnScanFolder.isEnabled = true
+            }
+        }
+    }
+
     private fun updateFolderLabel() {
+        val localPath = savedLocalDirPath
+        if (!localPath.isNullOrBlank()) {
+            binding.tvSelectedFolder.text = "已绑定 TT 目录：$localPath"
+            return
+        }
         val uri = savedTreeUri
         if (uri == null) {
             binding.tvSelectedFolder.text = "点击下方按钮授权你的美化目录"
-        } else {
-            val doc = DocumentFile.fromTreeUri(this, uri)
-            binding.tvSelectedFolder.text = "已绑定目录：${doc?.name ?: uri.lastPathSegment}"
+            return
+        }
+        binding.tvSelectedFolder.text = "已绑定目录：读取中..."
+        lifecycleScope.launch {
+            val name = withContext(Dispatchers.IO) {
+                try {
+                    DocumentFile.fromTreeUri(this@MainActivity, uri)?.name ?: uri.lastPathSegment
+                } catch (_: Exception) {
+                    uri.lastPathSegment
+                }
+            }
+            binding.tvSelectedFolder.text = "已绑定目录：$name"
         }
     }
 

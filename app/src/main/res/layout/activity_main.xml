@@ -385,6 +385,18 @@
                                 app:strokeColor="@color/border" />
                         </LinearLayout>
 
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnOpenTTFolder"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="44dp"
+                            android:layout_marginTop="8dp"
+                            android:text="一键直达 TT 酒馆美化目录 (themes)"
+                            android:textColor="@color/accent"
+                            android:textSize="13sp"
+                            app:cornerRadius="12dp"
+                            app:strokeColor="@color/pill_accent_stroke" />
+
                         <TextView
                             android:id="@+id/tvScanProgress"
                             android:layout_width="match_parent"
