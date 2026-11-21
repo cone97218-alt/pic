@@ -473,31 +473,49 @@ $safeCustomCss
   <div id="top-bar"></div>
   <div id="top-settings-holder">
     <div id="ai-config-button" class="drawer">
-      <div class="drawer-toggle drawer-header"><div id="leftNavDrawerIcon" class="drawer-icon fa-solid fa-sliders fa-fw closedIcon"></div></div>
+      <div class="drawer-toggle drawer-header">
+        <div id="leftNavDrawerIcon" class="drawer-icon fa-solid fa-sliders fa-fw closedIcon" title="AI Response Configuration" data-i18n="[title]AI Response Configuration"></div>
+      </div>
     </div>
     <div id="sys-settings-button" class="drawer">
-      <div class="drawer-toggle drawer-header"><div id="API-status-top" class="drawer-icon fa-solid fa-plug-circle-exclamation fa-fw closedIcon"></div></div>
+      <div class="drawer-toggle drawer-header">
+        <div id="API-status-top" class="drawer-icon fa-solid fa-plug-circle-exclamation fa-fw closedIcon" title="API Connections" data-i18n="[title]API Connections;[no_connection_text]api_no_connection"></div>
+      </div>
     </div>
     <div id="advanced-formatting-button" class="drawer">
-      <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-font fa-fw closedIcon"></div></div>
+      <div class="drawer-toggle">
+        <div class="drawer-icon fa-solid fa-font fa-fw closedIcon" title="AI Response Formatting" data-i18n="[title]AI Response Formatting"></div>
+      </div>
     </div>
     <div id="WI-SP-button" class="drawer">
-      <div class="drawer-toggle drawer-header"><div id="WIDrawerIcon" class="drawer-icon fa-solid fa-book-atlas fa-fw closedIcon"></div></div>
+      <div class="drawer-toggle drawer-header">
+        <div id="WIDrawerIcon" class="drawer-icon fa-solid fa-book-atlas fa-fw closedIcon" title="World Info" data-i18n="[title]World Info"></div>
+      </div>
     </div>
     <div id="user-settings-button" class="drawer">
-      <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-user-cog fa-fw closedIcon"></div></div>
+      <div class="drawer-toggle">
+        <div class="drawer-icon fa-solid fa-user-cog fa-fw closedIcon" title="User Settings" data-i18n="[title]User Settings"></div>
+      </div>
     </div>
     <div id="backgrounds-button" class="drawer">
-      <div id="backgrounds-drawer-toggle" class="drawer-toggle drawer-header"><div class="drawer-icon fa-solid fa-panorama fa-fw closedIcon"></div></div>
+      <div id="backgrounds-drawer-toggle" class="drawer-toggle drawer-header" title="Change Background Image" data-i18n="[title]Change Background Image">
+        <div class="drawer-icon fa-solid fa-panorama fa-fw closedIcon"></div>
+      </div>
     </div>
     <div id="extensions-settings-button" class="drawer">
-      <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-cubes fa-fw closedIcon"></div></div>
+      <div class="drawer-toggle">
+        <div class="drawer-icon fa-solid fa-cubes fa-fw closedIcon" title="Extensions" data-i18n="[title]Extensions"></div>
+      </div>
     </div>
     <div id="persona-management-button" class="drawer">
-      <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-face-smile fa-fw closedIcon"></div></div>
+      <div class="drawer-toggle">
+        <div class="drawer-icon fa-solid fa-face-smile fa-fw closedIcon" title="Persona Management" data-i18n="[title]Persona Management"></div>
+      </div>
     </div>
     <div id="rightNavHolder" class="drawer">
-      <div id="unimportantYes" class="drawer-toggle drawer-header"><div id="rightNavDrawerIcon" class="drawer-icon fa-solid fa-address-card fa-fw closedIcon"></div></div>
+      <div id="unimportantYes" class="drawer-toggle drawer-header">
+        <div id="rightNavDrawerIcon" class="drawer-icon fa-solid fa-address-card fa-fw closedIcon" title="Character Management" data-i18n="[title]Character Management"></div>
+      </div>
     </div>
   </div>
 
