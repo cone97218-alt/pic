@@ -933,12 +933,13 @@ class MainActivity : AppCompatActivity() {
     private fun showHostSettingsDialog() {
         val cfg = HostConfig.load(this)
         val providers = listOf(
-            "auto" to "自动 (Catbox 优先，失败转流浪图床)",
-            "sda1" to "流浪图床 (p.sda1.dev · 免配置)",
+            "auto" to "自动 (Catbox / 流浪图床)",
+            "sda1" to "流浪图床 (p.sda1.dev)",
+            "postimages" to "Postimages (postimages.org)",
             "catbox" to "Catbox (catbox.moe)",
-            "imgbb" to "ImgBB (需 API Key)",
-            "github" to "GitHub 仓库 (jsDelivr CDN)",
-            "custom" to "自定义图床 API (Lsky / SM.MS 等)"
+            "imgbb" to "ImgBB",
+            "github" to "GitHub 仓库 (jsDelivr)",
+            "custom" to "自定义图床 API"
         )
 
         val scroll = android.widget.ScrollView(this)
@@ -977,7 +978,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val etCatboxHash = makeField("Catbox userhash（选填，留空匿名上传）", cfg.catboxUserHash)
+        val etCatboxHash = makeField("Catbox userhash（选填）", cfg.catboxUserHash)
+        val etPiKey = makeField("Postimages API Key (postimages.org/login/api)", cfg.postimagesKey)
+        val etPiGallery = makeField("Postimages 相册 ID（选填）", cfg.postimagesGallery)
         val etImgbbKey = makeField("ImgBB API Key", cfg.imgbbApiKey)
         val etGhRepo = makeField("GitHub 仓库，例如 cone97218-alt/pic", cfg.githubRepo)
         val etGhBranch = makeField("分支名（默认 main）", cfg.githubBranch)
@@ -991,6 +994,10 @@ class MainActivity : AppCompatActivity() {
             fieldsContainer.removeAllViews()
             when (selected) {
                 "catbox", "auto" -> fieldsContainer.addView(etCatboxHash)
+                "postimages" -> {
+                    fieldsContainer.addView(etPiKey)
+                    fieldsContainer.addView(etPiGallery)
+                }
                 "imgbb" -> fieldsContainer.addView(etImgbbKey)
                 "github" -> {
                     fieldsContainer.addView(etGhRepo)
@@ -1019,6 +1026,8 @@ class MainActivity : AppCompatActivity() {
                 val newCfg = HostConfig(
                     provider = picked,
                     catboxUserHash = etCatboxHash.text.toString(),
+                    postimagesKey = etPiKey.text.toString(),
+                    postimagesGallery = etPiGallery.text.toString(),
                     imgbbApiKey = etImgbbKey.text.toString(),
                     githubRepo = etGhRepo.text.toString(),
                     githubBranch = etGhBranch.text.toString(),

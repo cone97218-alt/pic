@@ -141,9 +141,11 @@ class ThemePreviewActivity : AppCompatActivity() {
                             )
                             WebResourceResponse(mime, encoding, 200, "OK", headers, ByteArrayInputStream(bytes))
                         } catch (_: Exception) {
-                            null
+                            // CRITICAL: NEVER return null for sillytavern.local/* or WebView hangs 20s on DNS timeout!
+                            WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
                         }
                     }
+                    return WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
                 }
 
                 // 3. Local Vault cached images & fonts
@@ -416,6 +418,7 @@ class ThemePreviewActivity : AppCompatActivity() {
 <title>${escHtml(title)}</title>
 <link rel="stylesheet" href="css/fontawesome.min.css">
 <link rel="stylesheet" href="css/solid.min.css">
+<link rel="stylesheet" href="css/brands.min.css">
 <link rel="stylesheet" href="css/st-tailwind.css">
 <link rel="stylesheet" href="css/backgrounds.css">
 <link rel="stylesheet" href="style.css">
@@ -463,31 +466,31 @@ $safeCustomCss
   <div id="top-bar"></div>
   <div id="top-settings-holder">
     <div id="ai-config-button" class="drawer">
-      <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-sliders closedIcon"></div></div>
+      <div class="drawer-toggle"><div id="leftNavDrawerIcon" class="drawer-icon fa-solid fa-sliders fa-fw closedIcon"></div></div>
     </div>
     <div id="sys-settings-button" class="drawer">
-      <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-plug closedIcon"></div></div>
+      <div class="drawer-toggle"><div id="API-status-top" class="drawer-icon fa-solid fa-plug fa-fw closedIcon"></div></div>
     </div>
     <div id="advanced-formatting-button" class="drawer">
-      <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-font closedIcon"></div></div>
+      <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-font fa-fw closedIcon"></div></div>
     </div>
     <div id="WI-SP-button" class="drawer">
-      <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-book-atlas closedIcon"></div></div>
+      <div class="drawer-toggle"><div id="WIDrawerIcon" class="drawer-icon fa-solid fa-book-atlas fa-fw closedIcon"></div></div>
     </div>
     <div id="user-settings-button" class="drawer">
-      <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-face-smile closedIcon"></div></div>
+      <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-user-cog fa-fw closedIcon"></div></div>
     </div>
-    <div id="backgrounds-button" class="drawer">
-      <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-image closedIcon"></div></div>
+    <div id="logo_block" class="drawer">
+      <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-panorama fa-fw closedIcon"></div></div>
     </div>
     <div id="extensions-settings-button" class="drawer">
-      <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-cubes closedIcon"></div></div>
+      <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-cubes fa-fw closedIcon"></div></div>
     </div>
     <div id="persona-management-button" class="drawer">
-      <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-user-pen closedIcon"></div></div>
+      <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-face-smile fa-fw closedIcon"></div></div>
     </div>
-    <div id="rightNavDrawerIcon" class="drawer">
-      <div class="drawer-toggle"><div class="drawer-icon fa-solid fa-address-card closedIcon"></div></div>
+    <div id="rightNavDrawer" class="drawer">
+      <div class="drawer-toggle"><div id="rightNavDrawerIcon" class="drawer-icon fa-solid fa-address-card fa-fw closedIcon"></div></div>
     </div>
   </div>
 

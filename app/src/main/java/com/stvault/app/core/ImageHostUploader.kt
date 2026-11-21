@@ -21,8 +21,10 @@ import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 data class HostConfig(
-    val provider: String = "auto", // auto | catbox | sda1 | imgbb | github | custom
+    val provider: String = "auto", // auto | catbox | sda1 | postimages | imgbb | github | custom
     val catboxUserHash: String = "",
+    val postimagesKey: String = "",
+    val postimagesGallery: String = "",
     val imgbbApiKey: String = "",
     val githubRepo: String = "",
     val githubBranch: String = "main",
@@ -35,6 +37,7 @@ data class HostConfig(
     fun displayName(): String = when (provider) {
         "catbox" -> "Catbox"
         "sda1" -> "流浪图床 (sda1)"
+        "postimages" -> "Postimages"
         "imgbb" -> "ImgBB"
         "github" -> "GitHub (${githubRepo.ifBlank { "未配置" }})"
         "custom" -> "自定义图床"
@@ -49,6 +52,8 @@ data class HostConfig(
             return HostConfig(
                 provider = p.getString("provider", "auto") ?: "auto",
                 catboxUserHash = p.getString("catbox_hash", "") ?: "",
+                postimagesKey = p.getString("pi_key", "") ?: "",
+                postimagesGallery = p.getString("pi_gallery", "") ?: "",
                 imgbbApiKey = p.getString("imgbb_key", "") ?: "",
                 githubRepo = p.getString("gh_repo", "") ?: "",
                 githubBranch = p.getString("gh_branch", "main") ?: "main",
@@ -64,6 +69,8 @@ data class HostConfig(
             context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit()
                 .putString("provider", cfg.provider)
                 .putString("catbox_hash", cfg.catboxUserHash.trim())
+                .putString("pi_key", cfg.postimagesKey.trim())
+                .putString("pi_gallery", cfg.postimagesGallery.trim())
                 .putString("imgbb_key", cfg.imgbbApiKey.trim())
                 .putString("gh_repo", cfg.githubRepo.trim())
                 .putString("gh_branch", cfg.githubBranch.trim().ifBlank { "main" })
@@ -141,6 +148,7 @@ object ImageHostUploader {
         return when (cfg.provider) {
             "catbox" -> uploadCatboxWithRetry(file, mime, cfg.catboxUserHash)
             "sda1" -> uploadSda1(file, mime)
+            "postimages" -> uploadPostimages(file, mime, cfg)
             "imgbb" -> uploadImgBB(file, cfg.imgbbApiKey)
             "github" -> uploadGitHub(file, cfg)
             "custom" -> uploadCustom(file, mime, cfg)
@@ -216,6 +224,54 @@ object ImageHostUploader {
             if (!url.startsWith("http")) throw IOException("流浪图床返回异常")
             return url
         }
+    }
+
+    private fun uploadPostimages(file: File, mime: String, cfg: HostConfig): String {
+        if (cfg.postimagesKey.isBlank()) {
+            throw IOException("请先在「图床设置」中填写 Postimages API Key (postimages.org/login/api)")
+        }
+        val mediaType = (mime.ifBlank { "image/png" }).toMediaTypeOrNull()
+        val builder = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("key", cfg.postimagesKey)
+            .addFormDataPart("numfiles", "1")
+            .addFormDataPart("expire", "0")
+            .addFormDataPart("file", file.name, file.asRequestBody(mediaType))
+        if (cfg.postimagesGallery.isNotBlank()) {
+            builder.addFormDataPart("gallery", cfg.postimagesGallery)
+        }
+
+        val req = Request.Builder()
+            .url("https://api.postimage.org/1/upload")
+            .header("User-Agent", CHROME_UA)
+            .header("Accept", "application/json")
+            .post(builder.build())
+            .build()
+
+        var returnedUrl = ""
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw IOException("Postimages HTTP ${resp.code}")
+            val text = resp.body?.string()?.trim().orEmpty()
+            returnedUrl = extractFirstHttpUrlFromJson(text)
+                ?: Regex("""https?://[^\s"'<>]+""").find(text)?.value
+                ?: throw IOException("Postimages 返回异常")
+        }
+
+        // If Postimages returned a gallery page link (postimg.cc/xxx) instead of direct image (i.postimg.cc/xxx), resolve og:image!
+        if (returnedUrl.contains("postimg.cc/") && !returnedUrl.contains("i.postimg.cc/")) {
+            try {
+                val pageReq = Request.Builder().url(returnedUrl).header("User-Agent", CHROME_UA).get().build()
+                client.newCall(pageReq).execute().use { pResp ->
+                    val html = pResp.body?.string().orEmpty()
+                    val direct = Regex("""property=["']og:image["']\s+content=["'](https://i\.postimg\.cc/[^"']+)["']""", RegexOption.IGNORE_CASE)
+                        .find(html)?.groupValues?.getOrNull(1)
+                        ?: Regex("""https://i\.postimg\.cc/[^\s"'<>]+""").find(html)?.value
+                    if (!direct.isNullOrBlank()) return direct
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return returnedUrl
     }
 
     private fun uploadImgBB(file: File, apiKey: String): String {
