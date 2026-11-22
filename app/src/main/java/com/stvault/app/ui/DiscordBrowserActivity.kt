@@ -64,16 +64,13 @@ class DiscordBrowserActivity : AppCompatActivity() {
         val prefs = getSharedPreferences("st_inbox_prefs", Context.MODE_PRIVATE)
         zoomIndex = prefs.getInt("dc_web_zoom_idx", 1).coerceIn(0, zoomSteps.lastIndex)
 
-        // Tap「回库」to switch cleanly to MainActivity without reloading Discord; long-press to fully close & free RAM
+        // Tap「回库」to switch cleanly to MainActivity without reloading Discord; long-press to fully close & return to MainActivity
         binding.btnWebClose.setOnClickListener {
-            startActivity(
-                android.content.Intent(this, MainActivity::class.java).apply {
-                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                }
-            )
+            bringMainLibraryToFront()
         }
         binding.btnWebClose.setOnLongClickListener {
             toast("已彻底关闭囤囤浏览器")
+            bringMainLibraryToFront()
             finishAndRemoveTask()
             true
         }
@@ -316,9 +313,17 @@ class DiscordBrowserActivity : AppCompatActivity() {
             if (binding.webDiscord.canGoBack()) {
                 binding.webDiscord.goBack()
             } else {
-                finish()
+                bringMainLibraryToFront()
             }
         }
+    }
+
+    private fun bringMainLibraryToFront() {
+        startActivity(
+            android.content.Intent(this, MainActivity::class.java).apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            }
+        )
     }
 
     private fun hideSoftKeyboard() {
