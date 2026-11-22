@@ -3,6 +3,7 @@ package com.stvault.app.ui
 import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Bundle
+import android.view.MotionEvent
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
@@ -24,6 +25,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONTokener
+import kotlin.math.abs
 
 /**
  * Built-in Discord Web hoarding browser (「囤囤」).
@@ -47,7 +49,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
         val author: String
     )
 
-    @SuppressLint("SetJavaScriptEnabled")
+    @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityDiscordBrowserBinding.inflate(layoutInflater)
@@ -141,15 +143,64 @@ class DiscordBrowserActivity : AppCompatActivity() {
             }
         }
 
-        binding.fabHoard.setOnClickListener {
-            if (busy) {
-                toast("正在囤入中，请稍候...")
-                return@setOnClickListener
-            }
-            scanVisibleAttachments()
-        }
+        // Make the floating「囤囤」button freely draggable anywhere on screen so it never blocks Discord inputs
+        setupDraggableHoardButton()
 
         web.loadUrl("https://discord.com/app")
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupDraggableHoardButton() {
+        val fab = binding.fabHoard
+        val touchSlop = 8f * resources.displayMetrics.density
+        var downRawX = 0f
+        var downRawY = 0f
+        var startX = 0f
+        var startY = 0f
+        var isDragging = false
+
+        fab.setOnTouchListener { v, event ->
+            val parent = v.parent as? View ?: return@setOnTouchListener false
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downRawX = event.rawX
+                    downRawY = event.rawY
+                    startX = v.x
+                    startY = v.y
+                    isDragging = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - downRawX
+                    val dy = event.rawY - downRawY
+                    if (!isDragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
+                        isDragging = true
+                    }
+                    if (isDragging) {
+                        val maxX = (parent.width - v.width).coerceAtLeast(0).toFloat()
+                        val maxY = (parent.height - v.height).coerceAtLeast(0).toFloat()
+                        v.x = (startX + dx).coerceIn(0f, maxX)
+                        v.y = (startY + dy).coerceIn(0f, maxY)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (!isDragging) {
+                        if (busy) {
+                            toast("正在囤入中，请稍候...")
+                        } else {
+                            scanVisibleAttachments()
+                        }
+                    }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    isDragging = false
+                    true
+                }
+                else -> false
+            }
+        }
     }
 
     private fun injectMobileLayoutHelper() {
@@ -314,17 +365,34 @@ class DiscordBrowserActivity : AppCompatActivity() {
          */
         private val MOBILE_LAYOUT_JS = """
             (function() {
+              try {
+                var vp = document.querySelector('meta[name="viewport"]');
+                if (!vp) {
+                  vp = document.createElement('meta');
+                  vp.name = 'viewport';
+                  document.head.appendChild(vp);
+                }
+                vp.content = 'width=device-width, initial-scale=1.0, maximum-scale=2.0, user-scalable=yes';
+              } catch (e) {}
+
               if (!document.getElementById('st-mobile-dc-style')) {
                 var s = document.createElement('style');
                 s.id = 'st-mobile-dc-style';
                 s.textContent = [
+                  'html, body, #app-mount { width: 100% !important; min-width: 0 !important; max-width: 100% !important; overflow-x: hidden !important; margin: 0 !important; padding: 0 !important; }',
                   'div[class*="membersWrap_"], aside[class*="membersWrap_"] { display: none !important; }',
-                  'html.st-hide-sidebar nav[class*="guilds_"], html.st-hide-sidebar div[class*="guilds_"] { display: none !important; }',
-                  'html.st-hide-sidebar div[class*="base_"] > div[class*="content_"] > div[class*="sidebar_"] { display: none !important; }',
-                  'html.st-hide-sidebar div[class*="sidebarList_"] { display: none !important; }',
-                  'html.st-hide-sidebar div[class*="base_"] { left: 0 !important; width: 100vw !important; }',
-                  'html.st-hide-sidebar div[class*="chat_"], html.st-hide-sidebar main[class*="chatContent_"] { min-width: 0 !important; width: 100% !important; max-width: 100vw !important; }',
-                  'html.st-hide-sidebar div[class*="chatLayerWrapper_"] { position: fixed !important; inset: 0 !important; width: 100vw !important; max-width: 100vw !important; z-index: 60 !important; }',
+                  'html.st-hide-sidebar nav[class*="guilds_"], html.st-hide-sidebar div[class*="guilds_"] { display: none !important; width: 0 !important; min-width: 0 !important; }',
+                  'html.st-hide-sidebar div[class*="base_"] > div[class*="content_"] > div[class*="sidebar_"] { display: none !important; width: 0 !important; min-width: 0 !important; }',
+                  'html.st-hide-sidebar div[class*="sidebarList_"], html.st-hide-sidebar div[class*="resizeHandle_"] { display: none !important; }',
+                  'html.st-hide-sidebar div[class*="base_"] { position: relative !important; left: 0 !important; right: 0 !important; margin-left: 0 !important; width: 100% !important; min-width: 0 !important; max-width: 100% !important; }',
+                  'html.st-hide-sidebar div[class*="base_"] > div[class*="content_"] { width: 100% !important; min-width: 0 !important; max-width: 100% !important; margin: 0 !important; left: 0 !important; }',
+                  'html.st-hide-sidebar div[class*="chat_"], html.st-hide-sidebar main[class*="chatContent_"], html.st-hide-sidebar div[class*="container_"] { min-width: 0 !important; max-width: 100% !important; margin-left: 0 !important; left: 0 !important; box-sizing: border-box !important; }',
+                  'html.st-hide-sidebar div[class*="chatLayerWrapper_"] { position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important; width: 100% !important; min-width: 0 !important; max-width: 100% !important; margin: 0 !important; padding: 0 !important; transform: none !important; z-index: 40 !important; box-sizing: border-box !important; }',
+                  'html.st-hide-sidebar div[class*="chatLayerWrapper_"] > * { width: 100% !important; min-width: 0 !important; max-width: 100% !important; margin: 0 !important; left: 0 !important; }',
+                  'html.st-hide-sidebar section[class*="title_"] div[class*="children_"] { min-width: 0 !important; flex: 1 1 auto !important; overflow: hidden !important; }',
+                  'html.st-hide-sidebar section[class*="title_"] h1, html.st-hide-sidebar section[class*="title_"] div[class*="titleWrapper_"] { min-width: 0 !important; overflow: hidden !important; text-overflow: ellipsis !important; white-space: nowrap !important; }',
+                  'html.st-hide-sidebar section[class*="title_"] div[class*="toolbar_"] { flex-shrink: 0 !important; position: relative !important; z-index: 5 !important; }',
+                  'html.st-hide-sidebar ol[class*="scrollerInner_"], html.st-hide-sidebar li[class*="messageListItem_"] { max-width: 100% !important; box-sizing: border-box !important; }',
                   'html:not(.st-hide-sidebar) div[class*="base_"] > div[class*="content_"] > div[class*="sidebar_"] { width: calc(100vw - 72px) !important; min-width: 240px !important; max-width: 100vw !important; }',
                   'html:not(.st-hide-sidebar) div[class*="sidebarList_"] { width: calc(100vw - 72px) !important; }'
                 ].join('\n');
