@@ -1087,6 +1087,37 @@ class VaultRepository private constructor(private val appContext: Context) {
         return true
     }
 
+    /**
+     * Re-derives variant tags for all existing multi-variant theme series using the latest
+     * series-subtraction + common-part removal + punctuation cleanup rules.
+     * Returns Pair(updatedSeriesCount, updatedThemeCount).
+     */
+    fun recalculateAllThemeVariantTags(): Pair<Int, Int> {
+        var seriesCount = 0
+        var themeCount = 0
+        synchronized(lock) {
+            val groups = sourcesMap.values
+                .filter { it.seriesKey.isNotBlank() }
+                .groupBy { it.seriesKey }
+            for ((_, members) in groups) {
+                if (members.size < 2) continue
+                val seriesName = members.firstNotNullOfOrNull { it.seriesName.takeIf { s -> s.isNotBlank() } }
+                    ?: ThemeVariantGrouper.extractDisplaySeriesName(members.first().name)
+                val derivedTags = ThemeVariantGrouper.deriveVariantTags(seriesName, members.map { it.name })
+                seriesCount++
+                for ((idx, cur) in members.withIndex()) {
+                    sourcesMap[cur.id] = cur.copy(
+                        seriesName = seriesName,
+                        variantTag = derivedTags.getOrNull(idx).orEmpty()
+                    )
+                    themeCount++
+                }
+            }
+        }
+        if (themeCount > 0) saveIndex()
+        return seriesCount to themeCount
+    }
+
     fun searchSourceRows(
         query: String,
         filter: String = "all",

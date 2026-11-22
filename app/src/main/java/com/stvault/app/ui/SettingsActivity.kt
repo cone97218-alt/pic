@@ -105,6 +105,21 @@ class SettingsActivity : AppCompatActivity() {
         binding.swGroupThemeVariants.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean("group_theme_variants", isChecked).apply()
         }
+        binding.btnRecalcVariantTags.setOnClickListener {
+            VaultSheets.confirm(
+                ctx = this,
+                title = "重算全部系列变体标签",
+                message = "按最新规则（剔除系列名 + 剔除同系列公共部分 + 清洗孤立括号与标点）重新生成所有已有系列的变体标签，不会改动原名与文件。",
+                confirmText = "立即重算"
+            ) {
+                val (seriesCnt, themeCnt) = vaultRepo.recalculateAllThemeVariantTags()
+                if (themeCnt == 0) {
+                    Toast.makeText(this, "当前没有多变体美化系列", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this, "已刷新 $seriesCnt 套系列（共 $themeCnt 个美化）的变体标签", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
 
         // 3. Hierarchical Categories
         binding.btnManageThemeCats.setOnClickListener {

@@ -31,8 +31,8 @@ object ThemeVariantGrouper {
     )
 
     private val EXT_RE = Regex("\\.(json|css|html|htm|txt)$", RegexOption.IGNORE_CASE)
-    private val SPLIT_RE = Regex("[/\\-_·•\\s()（）\\[\\]【】]+")
-    private val NORM_KEY_RE = Regex("[\\s_\\-/·•()（）\\[\\]【】]+")
+    private val SPLIT_RE = Regex("[/\\-_·•\\s()（）\\[\\]【】「」『』《》〈〉〔〕［］{}<>]+")
+    private val NORM_KEY_RE = Regex("[\\s_\\-/·•()（）\\[\\]【】「」『』《》〈〉〔〕［］{}<>]+")
 
     fun extractDisplaySeriesName(rawName: String): String {
         val cleaned = EXT_RE.replace(rawName.trim(), "").trim()
@@ -174,8 +174,93 @@ object ThemeVariantGrouper {
         return vA != vB && (vA.isNotEmpty() || vB.isNotEmpty())
     }
 
-    private val EMPTY_BRACKET_RE = Regex("\\(\\s*\\)|（\\s*）|\\[\\s*\\]|【\\s*】")
-    private val TRIM_SEP_CHARS = charArrayOf(' ', '\t', '-', '_', '/', '\\', '·', '•', '|', ':', '：', '(', ')', '（', '）', '[', ']', '【', '】', '~', '—')
+    private val EMPTY_BRACKET_RE = Regex("\\(\\s*\\)|（\\s*）|\\[\\s*\\]|【\\s*】|「\\s*」|『\\s*』|《\\s*》|〈\\s*〉|〔\\s*〕|［\\s*］|\\{\\s*\\}|<\\s*>")
+    private val MULTI_DOT_RE = Regex("[·•\\s]{2,}")
+    private val TRIM_SEP_CHARS = charArrayOf(
+        ' ', '\t', '-', '_', '/', '\\', '·', '•', '|', ':', '：', '~', '—', '－',
+        ',', '，', '.', '。', '+', '、', ';', '；', '"', '\'', '“', '”', '‘', '’'
+    )
+    private val BRACKET_PAIRS = mapOf(
+        '(' to ')', '（' to '）', '[' to ']', '【' to '】',
+        '「' to '」', '『' to '』', '《' to '》', '〈' to '〉',
+        '〔' to '〕', '［' to '］', '{' to '}', '<' to '>'
+    )
+    private val CLOSING_BRACKETS = BRACKET_PAIRS.values.toSet()
+
+    /**
+     * Cleans dangling/unmatched half-brackets (even in the middle of a string),
+     * empty brackets, redundant outer wrapping brackets, and trailing/leading separators.
+     */
+    fun cleanDanglingPunctuation(raw: String): String {
+        var s = raw.trim()
+        if (s.isEmpty()) return ""
+
+        // 1. Remove empty brackets iteratively
+        repeat(3) {
+            val next = EMPTY_BRACKET_RE.replace(s, " ").trim(*TRIM_SEP_CHARS)
+            if (next == s) return@repeat
+            s = next
+        }
+        if (s.isEmpty()) return ""
+
+        // 2. Stack-match brackets to identify and remove any unmatched left or right bracket
+        val stack = ArrayDeque<Pair<Char, Int>>()
+        val unmatched = HashSet<Int>()
+        for (i in s.indices) {
+            val ch = s[i]
+            if (ch in BRACKET_PAIRS) {
+                stack.addLast(ch to i)
+            } else if (ch in CLOSING_BRACKETS) {
+                if (stack.isNotEmpty() && BRACKET_PAIRS[stack.last().first] == ch) {
+                    stack.removeLast()
+                } else {
+                    unmatched.add(i)
+                }
+            }
+        }
+        for ((_, idx) in stack) unmatched.add(idx)
+
+        if (unmatched.isNotEmpty()) {
+            val sb = StringBuilder(s.length)
+            for (i in s.indices) {
+                if (i in unmatched) {
+                    // If surrounded by word chars, insert '·' to avoid gluing two separate words
+                    val prevOk = sb.isNotEmpty() && sb.last() !in TRIM_SEP_CHARS
+                    val nextOk = (i + 1 < s.length) && s[i + 1] !in TRIM_SEP_CHARS && (i + 1) !in unmatched
+                    if (prevOk && nextOk) sb.append('·')
+                } else {
+                    sb.append(s[i])
+                }
+            }
+            s = sb.toString()
+        }
+
+        // 3. Strip outer wrapping bracket pairs like "(粉色)" or "【暗夜】"
+        repeat(3) {
+            s = s.trim(*TRIM_SEP_CHARS)
+            if (s.length >= 2 && BRACKET_PAIRS[s.first()] == s.last()) {
+                // Make sure first & last actually pair with each other (not "(a)-(b)")
+                var depth = 0
+                var pairsOuter = true
+                for (i in 0 until s.length - 1) {
+                    if (s[i] == s.first()) depth++
+                    else if (s[i] == s.last()) depth--
+                    if (depth == 0) {
+                        pairsOuter = false
+                        break
+                    }
+                }
+                if (pairsOuter) {
+                    s = s.substring(1, s.length - 1).trim(*TRIM_SEP_CHARS)
+                } else return@repeat
+            } else return@repeat
+        }
+
+        // 4. Final cleanup of empty brackets, repeated separators, and edges
+        s = EMPTY_BRACKET_RE.replace(s, " ")
+        s = MULTI_DOT_RE.replace(s, "·")
+        return s.trim(*TRIM_SEP_CHARS)
+    }
 
     /**
      * Derives clean variant tags for all themes in a series by:
@@ -218,13 +303,13 @@ object ThemeVariantGrouper {
         }
 
         // Step 2b: character-level common prefix & suffix removal (length >= 2 to avoid chopping single-char suffixes like "版")
-        var step2b = step2a.map { it.trim(*TRIM_SEP_CHARS) }
+        var step2b = step2a.map { cleanDanglingPunctuation(it) }
         val nonEmptyIndices = step2b.indices.filter { step2b[it].isNotEmpty() }
         if (nonEmptyIndices.size >= 2) {
             val lcpLen = commonPrefixLengthIgnoreCase(nonEmptyIndices.map { step2b[it] })
             if (lcpLen >= 2) {
                 val cand = step2b.mapIndexed { idx, s ->
-                    if (idx in nonEmptyIndices) s.substring(lcpLen).trim(*TRIM_SEP_CHARS) else s
+                    if (idx in nonEmptyIndices) cleanDanglingPunctuation(s.substring(lcpLen)) else s
                 }
                 if (cand.any { it.isNotEmpty() }) {
                     step2b = cand
@@ -237,7 +322,7 @@ object ThemeVariantGrouper {
             if (lcsLen >= 2) {
                 val cand = step2b.mapIndexed { idx, s ->
                     if (idx in nonEmptyAfterPrefix && s.length > lcsLen) {
-                        s.substring(0, s.length - lcsLen).trim(*TRIM_SEP_CHARS)
+                        cleanDanglingPunctuation(s.substring(0, s.length - lcsLen))
                     } else s
                 }
                 // Apply suffix strip only if all previously non-empty members remain non-empty
@@ -250,11 +335,11 @@ object ThemeVariantGrouper {
         // Step 3: finalize & fallback
         val hasAnyNonEmpty = step2b.any { it.isNotEmpty() }
         return step2b.mapIndexed { idx, tag ->
-            val clean = EMPTY_BRACKET_RE.replace(tag, "").trim(*TRIM_SEP_CHARS)
+            val clean = cleanDanglingPunctuation(tag)
             when {
                 clean.isNotEmpty() -> clean
                 hasAnyNonEmpty -> "默认"
-                else -> EXT_RE.replace(memberNames[idx].trim(), "").trim()
+                else -> cleanDanglingPunctuation(EXT_RE.replace(memberNames[idx].trim(), ""))
             }
         }
     }
@@ -275,8 +360,7 @@ object ThemeVariantGrouper {
                 }
             }
         }
-        s = EMPTY_BRACKET_RE.replace(s, " ")
-        return s.trim(*TRIM_SEP_CHARS)
+        return cleanDanglingPunctuation(s)
     }
 
     private fun commonPrefixLengthIgnoreCase(list: List<String>): Int {
