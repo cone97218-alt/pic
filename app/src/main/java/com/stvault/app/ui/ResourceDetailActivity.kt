@@ -504,7 +504,7 @@ class ResourceDetailActivity : AppCompatActivity() {
             setCardBackgroundColor(color(R.color.surface))
             radius = dp(14).toFloat()
             cardElevation = 0f
-            strokeColor = color(R.color.border)
+            setStrokeColor(color(R.color.border))
             strokeWidth = dp(1)
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                 bottomMargin = dp(10)
@@ -554,7 +554,7 @@ class ResourceDetailActivity : AppCompatActivity() {
         var expanded = false
         box.setOnClickListener {
             expanded = !expanded
-            tvBody.maxLines = if (expanded) Integer.MAX_VALUE else 3
+            tvBody.maxLines = if (expanded) Int.MAX_VALUE else 3
         }
         box.addView(tvBody)
         card.addView(box)
@@ -569,9 +569,9 @@ class ResourceDetailActivity : AppCompatActivity() {
             }
         }
         val group = ChipGroup(this).apply {
-            isSingleLine = true
-            isSingleSelection = true
-            isSelectionRequired = true
+            setSingleLine(true)
+            setSingleSelection(true)
+            setSelectionRequired(true)
         }
         val accent = color(R.color.accent)
         val onAccent = color(R.color.on_accent)
@@ -644,14 +644,17 @@ class ResourceDetailActivity : AppCompatActivity() {
         }
 
     private fun makeSecondaryButton(label: String, onClick: () -> Unit): MaterialButton =
-        MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+        MaterialButton(this).apply {
             text = label
             textSize = 13f
             setTextColor(color(R.color.text_primary))
+            backgroundTintList = ColorStateList.valueOf(android.graphics.Color.TRANSPARENT)
             strokeColor = ColorStateList.valueOf(color(R.color.border))
+            strokeWidth = dp(1)
             cornerRadius = dp(10)
             insetTop = 0
             insetBottom = 0
+            elevation = 0f
             setOnClickListener { onClick() }
         }
 
