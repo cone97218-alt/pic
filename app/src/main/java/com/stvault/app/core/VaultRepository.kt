@@ -994,14 +994,15 @@ class VaultRepository private constructor(private val appContext: Context) {
         val clean = newSeriesName.trim()
         if (seriesKey.isBlank() || clean.isEmpty()) return false
         synchronized(lock) {
-            var changed = false
-            for ((id, cur) in sourcesMap) {
-                if (cur.seriesKey == seriesKey) {
-                    sourcesMap[id] = cur.copy(seriesName = clean)
-                    changed = true
-                }
+            val members = sourcesMap.values.filter { it.seriesKey == seriesKey }
+            if (members.isEmpty()) return false
+            val derivedTags = ThemeVariantGrouper.deriveVariantTags(clean, members.map { it.name })
+            for ((idx, cur) in members.withIndex()) {
+                sourcesMap[cur.id] = cur.copy(
+                    seriesName = clean,
+                    variantTag = derivedTags.getOrNull(idx).orEmpty().ifBlank { cur.variantTag }
+                )
             }
-            if (!changed) return false
         }
         saveIndex()
         return true
@@ -1063,13 +1064,14 @@ class VaultRepository private constructor(private val appContext: Context) {
         val cleanSeriesName = seriesName.trim()
         val key = ThemeVariantGrouper.normalizeKey(cleanSeriesName).ifBlank { cleanSeriesName.lowercase() }
         synchronized(lock) {
-            for (id in ids) {
-                val cur = sourcesMap[id] ?: continue
-                val (_, autoVar) = ThemeVariantGrouper.extractSeriesAndVariant(cur.name)
-                sourcesMap[id] = cur.copy(
+            val members = ids.mapNotNull { sourcesMap[it] }
+            if (members.size < 2) return
+            val derivedTags = ThemeVariantGrouper.deriveVariantTags(cleanSeriesName, members.map { it.name })
+            for ((idx, cur) in members.withIndex()) {
+                sourcesMap[cur.id] = cur.copy(
                     seriesKey = key,
                     seriesName = cleanSeriesName,
-                    variantTag = cur.variantTag.ifBlank { autoVar }
+                    variantTag = derivedTags.getOrNull(idx).orEmpty()
                 )
             }
         }

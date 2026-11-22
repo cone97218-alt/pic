@@ -174,6 +174,133 @@ object ThemeVariantGrouper {
         return vA != vB && (vA.isNotEmpty() || vB.isNotEmpty())
     }
 
+    private val EMPTY_BRACKET_RE = Regex("\\(\\s*\\)|（\\s*）|\\[\\s*\\]|【\\s*】")
+    private val TRIM_SEP_CHARS = charArrayOf(' ', '\t', '-', '_', '/', '\\', '·', '•', '|', ':', '：', '(', ')', '（', '）', '[', ']', '【', '】', '~', '—')
+
+    /**
+     * Derives clean variant tags for all themes in a series by:
+     * 1. Removing the user-defined [seriesName] from each member's original name.
+     * 2. Removing tokens and common prefixes/suffixes shared across all members.
+     * 3. Keeping only the distinguishing part as each member's variant tag.
+     */
+    fun deriveVariantTags(seriesName: String, memberNames: List<String>): List<String> {
+        if (memberNames.isEmpty()) return emptyList()
+        if (memberNames.size == 1) {
+            val single = stripSeriesFromName(memberNames[0], seriesName)
+            return listOf(single.ifBlank { extractSeriesAndVariant(memberNames[0]).second })
+        }
+
+        // Step 1: strip file extension and the seriesName itself
+        val afterSeries = memberNames.map { stripSeriesFromName(it, seriesName) }
+
+        // Step 2a: token-level common part removal
+        val tokenLists = afterSeries.map { s ->
+            s.split(SPLIT_RE).map { it.trim(*TRIM_SEP_CHARS) }.filter { it.isNotEmpty() }
+        }
+        val nonEmptyTokenLists = tokenLists.filter { it.isNotEmpty() }
+        val step2a = if (nonEmptyTokenLists.size >= 2) {
+            var common = nonEmptyTokenLists.first().map { it.lowercase() }.toSet()
+            for (i in 1 until nonEmptyTokenLists.size) {
+                common = common intersect nonEmptyTokenLists[i].map { it.lowercase() }.toSet()
+                if (common.isEmpty()) break
+            }
+            if (common.isNotEmpty()) {
+                val reduced = tokenLists.map { list ->
+                    list.filterNot { it.lowercase() in common }.joinToString("·")
+                }
+                // Only apply if at least one member remains non-empty
+                if (reduced.any { it.isNotEmpty() }) reduced else afterSeries
+            } else {
+                afterSeries
+            }
+        } else {
+            afterSeries
+        }
+
+        // Step 2b: character-level common prefix & suffix removal (length >= 2 to avoid chopping single-char suffixes like "版")
+        var step2b = step2a.map { it.trim(*TRIM_SEP_CHARS) }
+        val nonEmptyIndices = step2b.indices.filter { step2b[it].isNotEmpty() }
+        if (nonEmptyIndices.size >= 2) {
+            val lcpLen = commonPrefixLengthIgnoreCase(nonEmptyIndices.map { step2b[it] })
+            if (lcpLen >= 2) {
+                val cand = step2b.mapIndexed { idx, s ->
+                    if (idx in nonEmptyIndices) s.substring(lcpLen).trim(*TRIM_SEP_CHARS) else s
+                }
+                if (cand.any { it.isNotEmpty() }) {
+                    step2b = cand
+                }
+            }
+        }
+        val nonEmptyAfterPrefix = step2b.indices.filter { step2b[it].isNotEmpty() }
+        if (nonEmptyAfterPrefix.size >= 2) {
+            val lcsLen = commonSuffixLengthIgnoreCase(nonEmptyAfterPrefix.map { step2b[it] })
+            if (lcsLen >= 2) {
+                val cand = step2b.mapIndexed { idx, s ->
+                    if (idx in nonEmptyAfterPrefix && s.length > lcsLen) {
+                        s.substring(0, s.length - lcsLen).trim(*TRIM_SEP_CHARS)
+                    } else s
+                }
+                // Apply suffix strip only if all previously non-empty members remain non-empty
+                if (nonEmptyAfterPrefix.all { cand[it].isNotEmpty() }) {
+                    step2b = cand
+                }
+            }
+        }
+
+        // Step 3: finalize & fallback
+        val hasAnyNonEmpty = step2b.any { it.isNotEmpty() }
+        return step2b.mapIndexed { idx, tag ->
+            val clean = EMPTY_BRACKET_RE.replace(tag, "").trim(*TRIM_SEP_CHARS)
+            when {
+                clean.isNotEmpty() -> clean
+                hasAnyNonEmpty -> "默认"
+                else -> EXT_RE.replace(memberNames[idx].trim(), "").trim()
+            }
+        }
+    }
+
+    private fun stripSeriesFromName(rawName: String, seriesName: String): String {
+        var s = EXT_RE.replace(rawName.trim(), "").trim()
+        val series = seriesName.trim()
+        if (series.isNotEmpty()) {
+            val exactRe = Regex(Regex.escape(series), RegexOption.IGNORE_CASE)
+            val removed = exactRe.replace(s, " ")
+            if (removed != s) {
+                s = removed
+            } else {
+                // Fallback: remove multi-char tokens of seriesName (e.g. series has slightly different separators)
+                val sTokens = series.split(SPLIT_RE).filter { it.length >= 2 }
+                for (tok in sTokens) {
+                    s = Regex(Regex.escape(tok), RegexOption.IGNORE_CASE).replace(s, " ")
+                }
+            }
+        }
+        s = EMPTY_BRACKET_RE.replace(s, " ")
+        return s.trim(*TRIM_SEP_CHARS)
+    }
+
+    private fun commonPrefixLengthIgnoreCase(list: List<String>): Int {
+        if (list.size < 2) return 0
+        val minLen = list.minOf { it.length }
+        var len = 0
+        while (len < minLen) {
+            val c = list[0][len].lowercaseChar()
+            if (list.all { it[len].lowercaseChar() == c }) len++ else break
+        }
+        return len
+    }
+
+    private fun commonSuffixLengthIgnoreCase(list: List<String>): Int {
+        if (list.size < 2) return 0
+        val minLen = list.minOf { it.length }
+        var len = 0
+        while (len < minLen) {
+            val c = list[0][list[0].length - 1 - len].lowercaseChar()
+            if (list.all { it[it.length - 1 - len].lowercaseChar() == c }) len++ else break
+        }
+        return len
+    }
+
     fun normalizeKey(raw: String): String {
         return NORM_KEY_RE.replace(raw.trim().lowercase(), "")
     }
