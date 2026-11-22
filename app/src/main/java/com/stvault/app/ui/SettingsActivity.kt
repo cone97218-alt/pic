@@ -71,59 +71,48 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun showCategoryManagerDialog(scope: String, title: String) {
         val cats = catManager.getCategories(scope)
-        val labels = if (cats.isEmpty()) arrayOf("（暂无分类，点下方「新建分类」添加）")
-        else cats.map { "${catManager.formatIndentedLabel(it)}   [点击删除]" }.toTypedArray()
-
-        AlertDialog.Builder(this)
-            .setTitle(title)
-            .setItems(labels) { _, which ->
-                if (cats.isEmpty()) return@setItems
-                val target = cats[which]
-                AlertDialog.Builder(this)
-                    .setTitle("删除分类")
-                    .setMessage("删除「$target」及其子分类？")
-                    .setPositiveButton("删除") { _, _ ->
-                        catManager.deleteCategory(scope, target)
-                        toast("已删除分类")
-                        showCategoryManagerDialog(scope, title)
-                    }
-                    .setNegativeButton("取消", null)
-                    .show()
+        if (cats.isEmpty()) {
+            showAddCategoryDialog(scope, title)
+            return
+        }
+        val items = cats.map { PickerItem(id = it, title = catManager.formatIndentedLabel(it), subtitle = "点击删除") }
+        VaultSheets.searchablePicker(
+            ctx = this,
+            title = title,
+            items = items,
+            searchHint = "搜索分类...",
+            headerAction = "+ 新建" to { showAddCategoryDialog(scope, title) }
+        ) { picked ->
+            VaultSheets.confirm(
+                ctx = this,
+                title = "删除分类",
+                message = "确定删除「${picked.id}」及其子分类？",
+                confirmText = "删除",
+                destructive = true
+            ) {
+                catManager.deleteCategory(scope, picked.id)
+                toast("已删除分类")
+                showCategoryManagerDialog(scope, title)
             }
-            .setPositiveButton("新建分类") { _, _ ->
-                showAddCategoryDialog(scope, title)
-            }
-            .setNegativeButton("关闭", null)
-            .show()
+        }
     }
 
     private fun showAddCategoryDialog(scope: String, title: String) {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 24, 48, 8)
-        }
-        val et = EditText(this).apply {
-            hint = "例如：古风  或  古风/仙侠  或  古风/仙侠/师尊"
-            isSingleLine = true
-            textSize = 13.5f
-        }
-        box.addView(et)
-
-        AlertDialog.Builder(this)
-            .setTitle("新建$title（1~3级）")
-            .setMessage("用斜杠 / 分隔层级，父级分类会自动创建。")
-            .setView(box)
-            .setPositiveButton("添加") { _, _ ->
-                val added = catManager.addCategory(scope, et.text?.toString().orEmpty())
-                if (added != null) {
-                    toast("已添加：$added")
-                    showCategoryManagerDialog(scope, title)
-                } else {
-                    toast("请输入有效的分类名称")
-                }
+        VaultSheets.input(
+            ctx = this,
+            title = "新建$title（1~3级）",
+            message = "用斜杠 / 分隔层级，例如 古风/仙侠/师尊，父级分类会自动创建。",
+            hint = "例如：古风/仙侠",
+            confirmText = "添加"
+        ) { raw ->
+            val added = catManager.addCategory(scope, raw)
+            if (added != null) {
+                toast("已添加：$added")
+                showCategoryManagerDialog(scope, title)
+            } else {
+                toast("请输入有效的分类名称")
             }
-            .setNegativeButton("取消", null)
-            .show()
+        }
     }
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()

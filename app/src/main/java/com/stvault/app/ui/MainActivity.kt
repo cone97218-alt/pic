@@ -869,17 +869,17 @@ class MainActivity : AppCompatActivity() {
                 toast("当前没有失败链接")
                 return@setOnClickListener
             }
-            AlertDialog.Builder(this)
-                .setTitle("忽略失败链接")
-                .setMessage("将当前 $errCount 个失败链接标记为不再重试？之后仍可在「查图 → 已忽略」中查看或相册替换。")
-                .setPositiveButton("确定") { _, _ ->
-                    lifecycleScope.launch {
-                        val n = withContext(Dispatchers.IO) { repo.ignoreAllFailedUrls() }
-                        toast("已忽略 $n 个失败链接")
-                    }
+            VaultSheets.confirm(
+                ctx = this,
+                title = "忽略失败链接",
+                message = "将当前 $errCount 个失败链接标记为不再重试？之后仍可在「图库 → 已忽略」中查看或相册替换。",
+                confirmText = "忽略"
+            ) {
+                lifecycleScope.launch {
+                    val n = withContext(Dispatchers.IO) { repo.ignoreAllFailedUrls() }
+                    toast("已忽略 $n 个失败链接")
                 }
-                .setNegativeButton("取消", null)
-                .show()
+            }
         }
         binding.btnExportZip.setOnClickListener {
             val stats = repo.statsFlow.value
@@ -1031,12 +1031,14 @@ class MainActivity : AppCompatActivity() {
                     showUpdateDialog(info)
                 } else {
                     binding.dotUpdateAvailable.visibility = View.GONE
-                    AlertDialog.Builder(this@MainActivity)
-                        .setTitle("已是最新版本")
-                        .setMessage("当前版本 v${BuildConfig.VERSION_NAME} 已与 GitHub 仓库最新 Release (${info.tagName}) 同步。")
-                        .setPositiveButton("知道了", null)
-                        .setNeutralButton("重新下载安装") { _, _ -> downloadAndInstallUpdate(info) }
-                        .show()
+                    VaultSheets.info(
+                        ctx = this@MainActivity,
+                        title = "已是最新版本",
+                        message = "当前版本 v${BuildConfig.VERSION_NAME} 已与 GitHub 最新 Release (${info.tagName}) 同步。",
+                        primaryText = "知道了",
+                        secondaryText = "重新下载",
+                        onSecondary = { downloadAndInstallUpdate(info) }
+                    )
                 }
             } catch (e: Exception) {
                 toast("检查更新失败：${e.message}")
@@ -1046,12 +1048,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun showUpdateDialog(info: ReleaseInfo) {
         val sizeStr = if (info.apkSize > 0) " (${formatBytes(info.apkSize)})" else ""
-        AlertDialog.Builder(this)
-            .setTitle("发现新版本 ${info.tagName}")
-            .setMessage("当前版本：v${BuildConfig.VERSION_NAME}\n最新版本：${info.tagName}$sizeStr\n\n${info.changelog}")
-            .setPositiveButton("立即更新") { _, _ -> downloadAndInstallUpdate(info) }
-            .setNegativeButton("稍后", null)
-            .show()
+        VaultSheets.info(
+            ctx = this,
+            title = "发现新版本 ${info.tagName}",
+            message = "当前版本：v${BuildConfig.VERSION_NAME}\n最新版本：${info.tagName}$sizeStr\n\n${info.changelog}",
+            primaryText = "立即更新",
+            onPrimary = { downloadAndInstallUpdate(info) },
+            secondaryText = "稍后"
+        )
     }
 
     private fun downloadAndInstallUpdate(info: ReleaseInfo) {
@@ -1163,21 +1167,21 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 dlg.dismiss()
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle("存档打包完成")
-                    .setMessage(
-                        "已将 ${res.imageCount} 张图片（涵盖 ${res.sourceCount} 个美化）以及完整对照索引 manifest.json 整理进 ZIP 压缩包。\n\n压缩包大小：${formatBytes(res.totalBytes)}"
-                    )
-                    .setPositiveButton("直接分享到其他软件") { _, _ ->
+                VaultSheets.info(
+                    ctx = this@MainActivity,
+                    title = "存档打包完成",
+                    message = "已将 ${res.imageCount} 张图片（涵盖 ${res.sourceCount} 个美化）以及完整对照索引 manifest.json 整理进 ZIP 压缩包。\n\n压缩包大小：${formatBytes(res.totalBytes)}",
+                    primaryText = "分享到其他软件",
+                    onPrimary = {
                         val shareIntent = Intent(Intent.ACTION_SEND).apply {
                             type = "application/zip"
                             putExtra(Intent.EXTRA_STREAM, uri)
                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         }
                         startActivity(Intent.createChooser(shareIntent, "发送图床压缩包到..."))
-                    }
-                    .setNegativeButton("完成", null)
-                    .show()
+                    },
+                    secondaryText = "完成"
+                )
             } catch (e: Exception) {
                 dlg.dismiss()
                 toast("打包失败：${e.message}")
@@ -1199,16 +1203,16 @@ class MainActivity : AppCompatActivity() {
         }
 
         // 2. Guide user to pick via MT Manager inside Android's SAF sidebar (works on Android 13/14/15!)
-        AlertDialog.Builder(this)
-            .setTitle("访问 TT 酒馆目录")
-            .setMessage(
-                "由于安卓 13/14+ 系统限制，普通应用无法直接打开 Android/data，但你可以直接借助手机里的 MT 管理器授权：\n\n" +
-                    "1. 点下方「打开文件选择器」\n" +
-                    "2. 点左上角菜单 ≡ → 选择「MT管理器」\n" +
-                    "3. 进入 Android/data/com.tauritavern.client/data/default-user/themes\n" +
-                    "4. 点底部「使用此文件夹」即可直接扫描"
-            )
-            .setPositiveButton("打开文件选择器") { _, _ ->
+        VaultSheets.info(
+            ctx = this,
+            title = "访问 TT 酒馆目录",
+            message = "由于安卓 13/14+ 系统限制，普通应用无法直接打开 Android/data，但你可以直接借助手机里的 MT 管理器授权：\n\n" +
+                "1. 点下方「打开文件选择器」\n" +
+                "2. 点左上角菜单 ≡ → 选择「MT管理器」\n" +
+                "3. 进入 Android/data/com.tauritavern.client/data/default-user/themes\n" +
+                "4. 点底部「使用此文件夹」即可直接扫描",
+            primaryText = "打开文件选择器",
+            onPrimary = {
                 try {
                     val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
                         putExtra("android.provider.extra.SHOW_ADVANCED", true)
@@ -1221,9 +1225,9 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: Exception) {
                     pickFolderLauncher.launch(null)
                 }
-            }
-            .setNegativeButton("取消", null)
-            .show()
+            },
+            secondaryText = "取消"
+        )
     }
 
     private fun runLocalDirScan(dir: File) {
@@ -1355,22 +1359,23 @@ class MainActivity : AppCompatActivity() {
 
     private fun confirmDeleteSource(source: SourceRecord) {
         val cleanName = source.name.substringAfterLast('/')
-        AlertDialog.Builder(this)
-            .setTitle("删除美化")
-            .setMessage("确定删除「$cleanName」？\n\n将同时清理仅由该美化引用的独享图床缓存，不影响其他美化共用的图片。")
-            .setPositiveButton("删除") { _, _ ->
-                lifecycleScope.launch {
-                    val res = withContext(Dispatchers.IO) { repo.deleteSource(source.id) }
-                    activeSourceDialog?.dismiss()
-                    if (res != null) {
-                        val freedStr = if (res.freedBytes > 0L) "，释放 ${formatBytes(res.freedBytes)}" else ""
-                        toast("已删除，清理 ${res.removedUrls} 条独享链接$freedStr")
-                        refreshVaultList()
-                    }
+        VaultSheets.confirm(
+            ctx = this,
+            title = "删除美化",
+            message = "确定删除「$cleanName」？\n将同时清理仅由该美化引用的独享图床缓存，不影响其他美化共用的图片。",
+            confirmText = "删除",
+            destructive = true
+        ) {
+            lifecycleScope.launch {
+                val res = withContext(Dispatchers.IO) { repo.deleteSource(source.id) }
+                activeSourceDialog?.dismiss()
+                if (res != null) {
+                    val freedStr = if (res.freedBytes > 0L) "，释放 ${formatBytes(res.freedBytes)}" else ""
+                    toast("已删除，清理 ${res.removedUrls} 条独享链接$freedStr")
+                    refreshVaultList()
                 }
             }
-            .setNegativeButton("取消", null)
-            .show()
+        }
     }
 
     private fun showSourceDetailDialog(source: SourceRecord) {
@@ -1769,18 +1774,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun confirmDeleteCharacter(c: CharacterRecord) {
-        AlertDialog.Builder(this)
-            .setTitle("删除角色卡")
-            .setMessage("确定删除「${c.name}」？将同时清理该卡独享的外链图床缓存。")
-            .setPositiveButton("删除") { _, _ ->
-                lifecycleScope.launch {
-                    withContext(Dispatchers.IO) { libRepo.deleteCharacter(c.id) }
-                    toast("已删除角色卡")
-                    refreshCharactersList()
-                }
+        VaultSheets.confirm(
+            ctx = this,
+            title = "删除角色卡",
+            message = "确定删除「${c.name}」？将同时清理该卡独享的外链图床缓存。",
+            confirmText = "删除",
+            destructive = true
+        ) {
+            lifecycleScope.launch {
+                withContext(Dispatchers.IO) { libRepo.deleteCharacter(c.id) }
+                toast("已删除角色卡")
+                refreshCharactersList()
             }
-            .setNegativeButton("取消", null)
-            .show()
+        }
     }
 
     private fun refreshWorldBooksList() {
@@ -1807,18 +1813,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun confirmDeleteWorldBook(w: WorldBookRecord) {
-        AlertDialog.Builder(this)
-            .setTitle("删除世界书")
-            .setMessage("确定删除「${w.name}」？")
-            .setPositiveButton("删除") { _, _ ->
-                lifecycleScope.launch {
-                    withContext(Dispatchers.IO) { libRepo.deleteWorldBook(w.id) }
-                    toast("已删除世界书")
-                    refreshWorldBooksList()
-                }
+        VaultSheets.confirm(
+            ctx = this,
+            title = "删除世界书",
+            message = "确定删除「${w.name}」？",
+            confirmText = "删除",
+            destructive = true
+        ) {
+            lifecycleScope.launch {
+                withContext(Dispatchers.IO) { libRepo.deleteWorldBook(w.id) }
+                toast("已删除世界书")
+                refreshWorldBooksList()
             }
-            .setNegativeButton("取消", null)
-            .show()
+        }
     }
 
     private fun refreshPresetsList() {
@@ -1840,18 +1847,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun confirmDeletePreset(p: PresetRecord) {
-        AlertDialog.Builder(this)
-            .setTitle("删除预设")
-            .setMessage("确定删除「${p.name}」？")
-            .setPositiveButton("删除") { _, _ ->
-                lifecycleScope.launch {
-                    withContext(Dispatchers.IO) { libRepo.deletePreset(p.id) }
-                    toast("已删除预设")
-                    refreshPresetsList()
-                }
+        VaultSheets.confirm(
+            ctx = this,
+            title = "删除预设",
+            message = "确定删除「${p.name}」？",
+            confirmText = "删除",
+            destructive = true
+        ) {
+            lifecycleScope.launch {
+                withContext(Dispatchers.IO) { libRepo.deletePreset(p.id) }
+                toast("已删除预设")
+                refreshPresetsList()
             }
-            .setNegativeButton("取消", null)
-            .show()
+        }
     }
 
     private fun refreshComponentsList() {
@@ -1885,52 +1893,42 @@ class MainActivity : AppCompatActivity() {
 
     private fun showCategoryFilterPicker(scope: String, current: String, onPicked: (String) -> Unit) {
         val cats = catManager.getCategories(scope)
-        val labels = mutableListOf(if (current.isEmpty()) "✓ 全部分类" else "全部分类")
+        val items = mutableListOf(PickerItem("", "全部分类"))
         for (c in cats) {
-            val mark = if (c == current) "✓ " else ""
-            labels.add("$mark${catManager.formatIndentedLabel(c)}")
+            items.add(PickerItem(c, catManager.formatIndentedLabel(c)))
         }
-        AlertDialog.Builder(this)
-            .setTitle("按分类筛选")
-            .setItems(labels.toTypedArray()) { _, idx ->
-                if (idx == 0) onPicked("")
-                else onPicked(cats[idx - 1])
-            }
-            .setPositiveButton("新建分类") { _, _ ->
+        VaultSheets.searchablePicker(
+            ctx = this,
+            title = "按分类筛选",
+            items = items,
+            selectedId = current,
+            searchHint = "搜索分类...",
+            headerAction = "+ 新建" to {
                 showQuickAddCategoryDialog(scope) {
                     showCategoryFilterPicker(scope, current, onPicked)
                 }
             }
-            .setNegativeButton("取消", null)
-            .show()
+        ) { picked ->
+            onPicked(picked.id)
+        }
     }
 
     private fun showQuickAddCategoryDialog(scope: String, onAdded: () -> Unit) {
-        val box = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            setPadding(48, 24, 48, 8)
-        }
-        val et = android.widget.EditText(this).apply {
-            hint = "如：古风  或  古风/仙侠  或  古风/仙侠/师尊"
-            isSingleLine = true
-            textSize = 13.5f
-        }
-        box.addView(et)
-        AlertDialog.Builder(this)
-            .setTitle("新建分类（1~3级）")
-            .setMessage("用斜杠 / 分隔层级，父级会自动创建。")
-            .setView(box)
-            .setPositiveButton("添加") { _, _ ->
-                val added = catManager.addCategory(scope, et.text?.toString().orEmpty())
-                if (added != null) {
-                    toast("已添加：$added")
-                    onAdded()
-                } else {
-                    toast("请输入有效名称")
-                }
+        VaultSheets.input(
+            ctx = this,
+            title = "新建分类（1~3级）",
+            message = "用斜杠 / 分隔层级，例如 古风/仙侠/师尊，父级会自动创建。",
+            hint = "例如：古风/仙侠",
+            confirmText = "添加"
+        ) { raw ->
+            val added = catManager.addCategory(scope, raw)
+            if (added != null) {
+                toast("已添加：$added")
+                onAdded()
+            } else {
+                toast("请输入有效名称")
             }
-            .setNegativeButton("取消", null)
-            .show()
+        }
     }
 
     private fun showThemeCategoryAssignDialog(source: SourceRecord) {
@@ -1941,39 +1939,33 @@ class MainActivity : AppCompatActivity() {
             }
             return
         }
-        val labels = allCats.map { catManager.formatIndentedLabel(it) }.toTypedArray()
-        val checked = BooleanArray(allCats.size) { allCats[it] in source.categories }
-        AlertDialog.Builder(this)
-            .setTitle("设置美化分类（多选）")
-            .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
-                checked[which] = isChecked
-            }
-            .setPositiveButton("保存") { _, _ ->
-                val picked = allCats.filterIndexed { i, _ -> checked[i] }
-                repo.setSourceCategories(source.id, picked)
-                toast("分类已更新")
-                refreshVaultList()
-            }
-            .setNeutralButton("新建分类") { _, _ ->
+        val items = allCats.map { PickerItem(it, catManager.formatIndentedLabel(it)) }
+        VaultSheets.multiSelect(
+            ctx = this,
+            title = "美化分类（可多选）",
+            items = items,
+            preselectedIds = source.categories.toSet(),
+            headerAction = "+ 新建" to {
                 showQuickAddCategoryDialog(CategoryManager.SCOPE_THEMES) {
                     showThemeCategoryAssignDialog(source)
                 }
             }
-            .setNegativeButton("取消", null)
-            .show()
+        ) { picked ->
+            repo.setSourceCategories(source.id, picked)
+            toast("分类已更新")
+            refreshVaultList()
+        }
     }
 
     private fun showCharacterActionMenu(c: CharacterRecord) {
-        val opts = arrayOf("设置分类标签（多选）", "删除角色卡")
-        AlertDialog.Builder(this)
-            .setTitle(c.name)
-            .setItems(opts) { _, which ->
-                when (which) {
-                    0 -> showCharacterCategoryAssignDialog(c)
-                    1 -> confirmDeleteCharacter(c)
-                }
-            }
-            .show()
+        VaultSheets.actionList(
+            ctx = this,
+            title = c.name,
+            actions = listOf(
+                SheetAction("设置分类标签", "多选 1~3 级分类") { showCharacterCategoryAssignDialog(c) },
+                SheetAction("删除角色卡", destructive = true) { confirmDeleteCharacter(c) }
+            )
+        )
     }
 
     private fun showCharacterCategoryAssignDialog(c: CharacterRecord) {
@@ -1984,26 +1976,22 @@ class MainActivity : AppCompatActivity() {
             }
             return
         }
-        val labels = allCats.map { catManager.formatIndentedLabel(it) }.toTypedArray()
-        val checked = BooleanArray(allCats.size) { allCats[it] in c.categories }
-        AlertDialog.Builder(this)
-            .setTitle("设置角色卡分类（多选）")
-            .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
-                checked[which] = isChecked
-            }
-            .setPositiveButton("保存") { _, _ ->
-                val picked = allCats.filterIndexed { i, _ -> checked[i] }
-                libRepo.setCharacterCategories(c.id, picked)
-                toast("分类已更新")
-                refreshCharactersList()
-            }
-            .setNeutralButton("新建分类") { _, _ ->
+        val items = allCats.map { PickerItem(it, catManager.formatIndentedLabel(it)) }
+        VaultSheets.multiSelect(
+            ctx = this,
+            title = "角色卡分类（可多选）",
+            items = items,
+            preselectedIds = c.categories.toSet(),
+            headerAction = "+ 新建" to {
                 showQuickAddCategoryDialog(CategoryManager.SCOPE_CHARACTERS) {
                     showCharacterCategoryAssignDialog(c)
                 }
             }
-            .setNegativeButton("取消", null)
-            .show()
+        ) { picked ->
+            libRepo.setCharacterCategories(c.id, picked)
+            toast("分类已更新")
+            refreshCharactersList()
+        }
     }
 
     private fun showComponentDetailDialog(comp: ComponentRecord) {
@@ -2014,54 +2002,62 @@ class MainActivity : AppCompatActivity() {
             } else {
                 "当前状态：全局独立"
             }
-            val preview = "$linkInfo\n\n${content.take(1500)}" + if (content.length > 1500) "\n..." else ""
-            AlertDialog.Builder(this@MainActivity)
-                .setTitle(comp.name)
-                .setMessage(preview)
-                .setPositiveButton("关联宿主") { _, _ -> showLinkComponentDialog(comp) }
-                .setNeutralButton("导出") { _, _ ->
+            val preview = "$linkInfo\n\n${content.take(2000)}" + if (content.length > 2000) "\n..." else ""
+            VaultSheets.info(
+                ctx = this@MainActivity,
+                title = comp.name,
+                message = preview,
+                primaryText = "关联宿主",
+                onPrimary = { showLinkComponentDialog(comp) },
+                secondaryText = "关闭",
+                tertiaryText = "导出",
+                onTertiary = {
                     pendingExportCompFile = libRepo.getComponentFile(comp)
                     exportCompFileLauncher.launch(comp.fileName)
                 }
-                .setNegativeButton("关闭", null)
-                .show()
+            )
         }
     }
 
     private fun showLinkComponentDialog(comp: ComponentRecord) {
-        val options = arrayOf("设为全局独立", "关联到角色卡", "关联到预设", "关联到世界书", "关联到美化")
-        AlertDialog.Builder(this)
-            .setTitle("关联「${comp.name}」")
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> {
-                        libRepo.linkComponent(comp.id, "", "", "")
-                        toast("已设为全局独立")
-                        refreshActiveWorkspace()
+        VaultSheets.actionList(
+            ctx = this,
+            title = "关联「${comp.name}」",
+            actions = listOf(
+                SheetAction("设为全局独立", "不绑定到特定资源", checked = comp.linkedTargetId.isEmpty()) {
+                    libRepo.linkComponent(comp.id, "", "", "")
+                    toast("已设为全局独立")
+                    refreshActiveWorkspace()
+                },
+                SheetAction("关联到角色卡", "支持搜索查找角色卡") {
+                    pickLinkTarget(comp, "character", "选择角色卡") {
+                        libRepo.searchCharacters("").map { PickerItem(it.id, it.name, it.fileName) }
                     }
-                    1 -> pickLinkTarget(comp, "character", "选择角色卡") {
-                        libRepo.searchCharacters("").map { it.id to it.name }
+                },
+                SheetAction("关联到预设", "支持搜索查找预设") {
+                    pickLinkTarget(comp, "preset", "选择预设") {
+                        libRepo.searchPresets("").map { PickerItem(it.id, it.name, it.fileName) }
                     }
-                    2 -> pickLinkTarget(comp, "preset", "选择预设") {
-                        libRepo.searchPresets("").map { it.id to it.name }
+                },
+                SheetAction("关联到世界书", "支持搜索查找世界书") {
+                    pickLinkTarget(comp, "worldbook", "选择世界书") {
+                        libRepo.searchWorldBooks("").map { PickerItem(it.id, it.name, it.fileName) }
                     }
-                    3 -> pickLinkTarget(comp, "worldbook", "选择世界书") {
-                        libRepo.searchWorldBooks("").map { it.id to it.name }
-                    }
-                    4 -> pickLinkTarget(comp, "theme", "选择美化") {
-                        repo.searchSources("").map { it.id to it.name.substringAfterLast('/') }
+                },
+                SheetAction("关联到美化", "支持搜索查找美化") {
+                    pickLinkTarget(comp, "theme", "选择美化") {
+                        repo.searchSources("").map { PickerItem(it.id, it.name.substringAfterLast('/'), it.folderName) }
                     }
                 }
-            }
-            .setNegativeButton("取消", null)
-            .show()
+            )
+        )
     }
 
     private fun pickLinkTarget(
         comp: ComponentRecord,
         targetType: String,
         title: String,
-        loader: () -> List<Pair<String, String>>
+        loader: () -> List<PickerItem>
     ) {
         lifecycleScope.launch {
             val targets = withContext(Dispatchers.IO) { loader() }
@@ -2069,33 +2065,34 @@ class MainActivity : AppCompatActivity() {
                 toast("该模块暂无可关联资源")
                 return@launch
             }
-            val names = targets.map { it.second }.toTypedArray()
-            AlertDialog.Builder(this@MainActivity)
-                .setTitle(title)
-                .setItems(names) { _, idx ->
-                    val (tid, tname) = targets[idx]
-                    libRepo.linkComponent(comp.id, targetType, tid, tname)
-                    toast("已关联到「$tname」")
-                    refreshActiveWorkspace()
-                }
-                .setNegativeButton("取消", null)
-                .show()
+            VaultSheets.searchablePicker(
+                ctx = this@MainActivity,
+                title = title,
+                items = targets,
+                selectedId = if (comp.linkedTargetType == targetType) comp.linkedTargetId else null,
+                searchHint = "输入关键词快速查找..."
+            ) { picked ->
+                libRepo.linkComponent(comp.id, targetType, picked.id, picked.title)
+                toast("已关联到「${picked.title}」")
+                refreshActiveWorkspace()
+            }
         }
     }
 
     private fun confirmDeleteComponent(c: ComponentRecord) {
-        AlertDialog.Builder(this)
-            .setTitle("删除组件")
-            .setMessage("确定删除「${c.name}」？")
-            .setPositiveButton("删除") { _, _ ->
-                lifecycleScope.launch {
-                    withContext(Dispatchers.IO) { libRepo.deleteComponent(c.id) }
-                    toast("已删除组件")
-                    refreshActiveWorkspace()
-                }
+        VaultSheets.confirm(
+            ctx = this,
+            title = "删除组件",
+            message = "确定删除「${c.name}」？",
+            confirmText = "删除",
+            destructive = true
+        ) {
+            lifecycleScope.launch {
+                withContext(Dispatchers.IO) { libRepo.deleteComponent(c.id) }
+                toast("已删除组件")
+                refreshActiveWorkspace()
             }
-            .setNegativeButton("取消", null)
-            .show()
+        }
     }
 
     private fun toast(msg: String) {

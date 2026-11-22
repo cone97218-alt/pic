@@ -168,69 +168,77 @@ class ResourceDetailActivity : AppCompatActivity() {
     }
 
     private fun showMoreActionsMenu() {
-        val actions = mutableListOf<Pair<String, () -> Unit>>()
+        val actions = mutableListOf<SheetAction>()
         if (resType == TYPE_CHARACTER) {
             currentCharacter?.let { c ->
-                actions.add("分类标签" to { showCharacterCategoryDialog(c) })
+                actions.add(SheetAction("分类标签", "多选 1~3 级分类") { showCharacterCategoryDialog(c) })
                 if (c.urls.isNotEmpty()) {
-                    actions.add("图床换链复活" to { runCharacterRepair(c) })
+                    actions.add(SheetAction("图床换链复活", "保留原 PNG 无损替换失效链接") { runCharacterRepair(c) })
                 }
             }
         }
-        actions.add("删除当前版本" to { confirmDelete() })
-
-        AlertDialog.Builder(this)
-            .setItems(actions.map { it.first }.toTypedArray()) { _, which ->
-                actions[which].second()
-            }
-            .show()
+        actions.add(SheetAction("删除当前版本", destructive = true) { confirmDelete() })
+        VaultSheets.actionList(this, actions = actions)
     }
 
     private fun showCharacterCategoryDialog(c: CharacterRecord) {
         val allCats = catManager.getCategories(CategoryManager.SCOPE_CHARACTERS)
         if (allCats.isEmpty()) {
-            toast("请先在「设置 → 管理自定义分类」中新建角色卡分类")
+            VaultSheets.input(
+                ctx = this,
+                title = "新建角色卡分类（1~3级）",
+                message = "用斜杠 / 分隔层级，例如 古风/仙侠/师尊",
+                hint = "例如：古风/仙侠",
+                confirmText = "添加"
+            ) { raw ->
+                val added = catManager.addCategory(CategoryManager.SCOPE_CHARACTERS, raw)
+                if (added != null) showCharacterCategoryDialog(c)
+            }
             return
         }
-        val labels = allCats.map { catManager.formatIndentedLabel(it) }.toTypedArray()
-        val checked = BooleanArray(allCats.size) { allCats[it] in c.categories }
-        AlertDialog.Builder(this)
-            .setTitle("选择分类（可多选）")
-            .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
-                checked[which] = isChecked
+        val items = allCats.map { PickerItem(it, catManager.formatIndentedLabel(it)) }
+        VaultSheets.multiSelect(
+            ctx = this,
+            title = "选择分类（可多选）",
+            items = items,
+            preselectedIds = c.categories.toSet(),
+            headerAction = "+ 新建" to {
+                VaultSheets.input(this, "新建角色卡分类", "用 / 分隔 1~3 级", "例如：古风/仙侠", confirmText = "添加") { raw ->
+                    if (catManager.addCategory(CategoryManager.SCOPE_CHARACTERS, raw) != null) {
+                        showCharacterCategoryDialog(c)
+                    }
+                }
             }
-            .setPositiveButton("保存") { _, _ ->
-                val picked = allCats.filterIndexed { i, _ -> checked[i] }
-                libRepo.setCharacterCategories(c.id, picked)
-                currentCharacter = c.copy(categories = picked)
-                toast("分类已更新")
-                rebuildCurrentList()
-            }
-            .setNegativeButton("取消", null)
-            .show()
+        ) { picked ->
+            libRepo.setCharacterCategories(c.id, picked)
+            currentCharacter = c.copy(categories = picked)
+            toast("分类已更新")
+            rebuildCurrentList()
+        }
     }
 
     private fun confirmDelete() {
-        AlertDialog.Builder(this)
-            .setTitle("删除资源")
-            .setMessage("确定从库中删除当前版本？将同时清理仅由其引用的独享图床缓存。")
-            .setPositiveButton("删除") { _, _ ->
-                lifecycleScope.launch {
-                    withContext(Dispatchers.IO) {
-                        when (resType) {
-                            TYPE_CHARACTER -> libRepo.deleteCharacter(resId)
-                            TYPE_WORLDBOOK -> libRepo.deleteWorldBook(resId)
-                            TYPE_PRESET -> libRepo.deletePreset(resId)
-                            else -> Unit
-                        }
+        VaultSheets.confirm(
+            ctx = this,
+            title = "删除当前版本",
+            message = "确定从库中删除当前版本？将同时清理仅由其引用的独享图床缓存。",
+            confirmText = "删除",
+            destructive = true
+        ) {
+            lifecycleScope.launch {
+                withContext(Dispatchers.IO) {
+                    when (resType) {
+                        TYPE_CHARACTER -> libRepo.deleteCharacter(resId)
+                        TYPE_WORLDBOOK -> libRepo.deleteWorldBook(resId)
+                        TYPE_PRESET -> libRepo.deletePreset(resId)
+                        else -> Unit
                     }
-                    toast("已删除")
-                    setResult(RESULT_OK)
-                    finish()
                 }
+                toast("已删除")
+                setResult(RESULT_OK)
+                finish()
             }
-            .setNegativeButton("取消", null)
-            .show()
+        }
     }
 
     // ==================== VERSION SWITCHER ====================
@@ -247,20 +255,19 @@ class ResourceDetailActivity : AppCompatActivity() {
         binding.btnDetailVersion.visibility = View.VISIBLE
         binding.btnDetailVersion.text = "${cur.second} ▾"
         binding.btnDetailVersion.setOnClickListener {
-            val labels = versions.map { (id, ver, fname) ->
-                val mark = if (id == currentId) "✓ " else ""
-                "$mark$ver  ·  $fname"
-            }.toTypedArray()
-            AlertDialog.Builder(this)
-                .setTitle("切换版本 (${versions.size})")
-                .setItems(labels) { _, idx ->
-                    val pickedId = versions[idx].first
-                    if (pickedId != resId) {
-                        resId = pickedId
+            val actions = versions.map { (id, ver, fname) ->
+                SheetAction(
+                    label = ver,
+                    subtitle = fname,
+                    checked = (id == currentId)
+                ) {
+                    if (id != resId) {
+                        resId = id
                         reloadById()
                     }
                 }
-                .show()
+            }
+            VaultSheets.actionList(this, title = "切换版本 (${versions.size})", actions = actions)
         }
     }
 
@@ -316,28 +323,30 @@ class ResourceDetailActivity : AppCompatActivity() {
     }
 
     private fun runCharacterRepair(rec: CharacterRecord) {
-        val modes = arrayOf("上传图床换链（保留原 PNG）", "WebP 压缩内嵌 Base64")
-        AlertDialog.Builder(this)
-            .setTitle("角色卡图床复活")
-            .setItems(modes) { _, which ->
-                val mode = if (which == 0) "catbox" else "base64_webp"
-                toast("正在处理角色卡图床...")
-                lifecycleScope.launch {
-                    try {
-                        val (fileName, bytes, res) = withContext(Dispatchers.IO) {
-                            libRepo.repairCharacterCard(rec.id, mode)
-                        }
-                        toast("已替换 ${res.matchedCount}/${res.totalUrls} 张，请选择保存位置")
-                        pendingExportFile = null
-                        pendingExportBytes = bytes
-                        exportDocLauncher.launch(fileName)
-                    } catch (e: Exception) {
-                        toast("复活失败：${e.message}")
+        fun exec(mode: String) {
+            toast("正在处理角色卡图床...")
+            lifecycleScope.launch {
+                try {
+                    val (fileName, bytes, res) = withContext(Dispatchers.IO) {
+                        libRepo.repairCharacterCard(rec.id, mode)
                     }
+                    toast("已替换 ${res.matchedCount}/${res.totalUrls} 张，请选择保存位置")
+                    pendingExportFile = null
+                    pendingExportBytes = bytes
+                    exportDocLauncher.launch(fileName)
+                } catch (e: Exception) {
+                    toast("复活失败：${e.message}")
                 }
             }
-            .setNegativeButton("取消", null)
-            .show()
+        }
+        VaultSheets.actionList(
+            ctx = this,
+            title = "角色卡图床复活",
+            actions = listOf(
+                SheetAction("上传图床换链", "保留原 PNG 封面无损替换链接") { exec("catbox") },
+                SheetAction("WebP 压缩内嵌 Base64", "离线内嵌，不依赖外部图床") { exec("base64_webp") }
+            )
+        )
     }
 
     // ==================== WORLD BOOK DETAIL ====================
