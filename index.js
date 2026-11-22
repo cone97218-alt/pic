@@ -23,10 +23,11 @@
 
     const DISPLAY_NAME = '酒馆匣互联';
     const CANDIDATE_PORTS = [8796, 8797, 8798, 8799, 8800];
-    const CHUNK_BYTES = 384 * 1024;
-    const FAST_LIMIT_BYTES = 512 * 1024;
-    const BATCH_MAX_ITEMS = 6;
-    const BATCH_MAX_BYTES = 520 * 1024;
+    // Stay safely within Tauri Android IPC argument size limit (~100-128 KB)
+    const CHUNK_BYTES = 60 * 1024;
+    const FAST_LIMIT_BYTES = 60 * 1024;
+    const BATCH_MAX_ITEMS = 5;
+    const BATCH_MAX_BYTES = 84 * 1024;
     const TOOL_NAMES = [
         'stvault_ping', 'stvault_sync_inventory',
         'stvault_outbox_list', 'stvault_outbox_fetch', 'stvault_outbox_ack',
@@ -201,11 +202,15 @@
         try {
             return await callTool(name, args);
         } catch (err) {
-            log('通道短暂波动，正在自动重连...');
-            setStatus('通道波动，正在自动重连...', '');
-            await new Promise((r) => setTimeout(r, 600));
-            await connect();
-            return await callTool(name, args);
+            const msg = err && err.message ? err.message : String(err);
+            log('调用 ' + name + ' 异常（' + msg + '），重试一次...');
+            await new Promise((r) => setTimeout(r, 400));
+            try {
+                return await callTool(name, args);
+            } catch (_) {
+                await connect(true);
+                return await callTool(name, args);
+            }
         }
     }
 
@@ -222,16 +227,18 @@
         } catch (_) {}
     }
 
-    async function connect() {
-        log('正在初始化本机 MCP 通道...');
+    async function connect(silent) {
+        if (!silent) log('正在初始化本机 MCP 通道...');
         const api = (await hostReady()).api.mcp;
         await forgetOldServers();
 
         for (const port of CANDIDATE_PORTS) {
             let created = null;
             try {
-                setStatus('正在探测端口 ' + port + '...', '');
-                log('探测端口 ' + port + '...');
+                if (!silent) {
+                    setStatus('正在探测端口 ' + port + '...', '');
+                    log('探测端口 ' + port + '...');
+                }
                 created = await api.servers.create({
                     displayName: DISPLAY_NAME,
                     endpoint: 'http://127.0.0.1:' + port + '/mcp',
@@ -258,13 +265,15 @@
                 if (!ping || ping.app !== 'stvault') throw new Error('not_stvault');
 
                 state.connected = true;
-                setStatus('已连接酒馆匣 · 端口 ' + port, 'stv-ok');
-                log('连接成功（端口 ' + port + '）');
-                await syncInventory();
-                startPolling();
+                if (!silent) {
+                    setStatus('已连接酒馆匣 · 端口 ' + port, 'stv-ok');
+                    log('连接成功（端口 ' + port + '）');
+                    await syncInventory();
+                    startPolling();
+                }
                 return true;
             } catch (err) {
-                log('端口 ' + port + ' 未连上：' + (err && err.message ? err.message : String(err)));
+                if (!silent) log('端口 ' + port + ' 未连上：' + (err && err.message ? err.message : String(err)));
                 state.registrationId = null;
                 state.connected = false;
                 if (created) {
