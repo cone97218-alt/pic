@@ -184,39 +184,106 @@
         throw new Error('未找到酒馆匣本机通道');
     }
 
+    function asObject(v) {
+        if (typeof v === 'string') {
+            try {
+                const p = JSON.parse(v);
+                return (p && typeof p === 'object' && !Array.isArray(p)) ? p : null;
+            } catch (_) { return null; }
+        }
+        return (v && typeof v === 'object' && !Array.isArray(v)) ? v : null;
+    }
+
+    function asArray(v) {
+        if (Array.isArray(v)) return v;
+        if (typeof v === 'string') {
+            try {
+                const p = JSON.parse(v);
+                return Array.isArray(p) ? p : [];
+            } catch (_) { return []; }
+        }
+        return [];
+    }
+
+    function betterArray(a, b) {
+        const pa = asArray(a);
+        return pa.length > 0 ? pa : asArray(b);
+    }
+
+    function contextApi() {
+        try {
+            if (window.SillyTavern && typeof window.SillyTavern.getContext === 'function') {
+                return window.SillyTavern.getContext() || {};
+            }
+        } catch (_) {}
+        return {};
+    }
+
+    function mergedSettings(raw) {
+        const api = asObject(raw) || {};
+        const nested = asObject(api.settings) || {};
+        const ctx = contextApi();
+        const src = Object.assign({}, ctx, api, nested);
+        src.themes = betterArray(src.themes, ctx.themes);
+        src.world_names = betterArray(src.world_names, ctx.world_names);
+        src.openai_settings = betterArray(src.openai_settings, ctx.openai_settings);
+        src.openai_setting_names = betterArray(src.openai_setting_names, ctx.openai_setting_names);
+        return src;
+    }
+
     async function fetchStSettings() {
-        const headers = await getHeaders();
-        headers['Content-Type'] = 'application/json';
-        const resp = await fetch('/api/settings/get', { method: 'POST', headers, body: '{}' });
-        if (!resp.ok) throw new Error('读取酒馆设置失败');
-        return resp.json();
+        let data = {};
+        try {
+            const headers = await getHeaders();
+            headers['Content-Type'] = 'application/json';
+            const resp = await fetch('/api/settings/get', { method: 'POST', headers, body: '{}' });
+            if (resp.ok) data = await resp.json();
+        } catch (_) {}
+        return mergedSettings(data);
     }
 
     async function fetchStCharacters() {
-        const headers = await getHeaders();
-        headers['Content-Type'] = 'application/json';
-        const resp = await fetch('/api/characters/all', { method: 'POST', headers, body: '{}' });
-        if (!resp.ok) return [];
-        const data = await resp.json();
-        return Array.isArray(data) ? data : [];
+        try {
+            const headers = await getHeaders();
+            headers['Content-Type'] = 'application/json';
+            const resp = await fetch('/api/characters/all', { method: 'POST', headers, body: '{}' });
+            if (resp.ok) {
+                const data = await resp.json();
+                if (Array.isArray(data) && data.length > 0) return data;
+            }
+        } catch (_) {}
+        const ctx = contextApi();
+        return Array.isArray(ctx.characters) ? ctx.characters : [];
+    }
+
+    function extractPresetNames(src) {
+        const names = [];
+        const rawNames = src.openai_setting_names;
+        if (Array.isArray(rawNames)) {
+            for (const n of rawNames) if (n) names.push(String(n));
+        } else if (rawNames && typeof rawNames === 'object') {
+            names.push(...Object.keys(rawNames));
+        }
+        return names;
     }
 
     async function syncInventory() {
         if (!state.connected) return;
         try {
-            const [settingsData, chars] = await Promise.all([fetchStSettings(), fetchStCharacters()]);
-            const themes = Array.isArray(settingsData.themes) ? settingsData.themes.map(t => t && t.name).filter(Boolean) : [];
-            const worldbooks = Array.isArray(settingsData.world_names) ? settingsData.world_names.filter(Boolean) : [];
-            const presets = [];
-            if (settingsData.openai_setting_names && typeof settingsData.openai_setting_names === 'object') {
-                presets.push(...Object.keys(settingsData.openai_setting_names));
-            }
+            const [src, chars] = await Promise.all([fetchStSettings(), fetchStCharacters()]);
+            const themes = asArray(src.themes).map(t => {
+                const obj = asObject(t);
+                return obj && (obj.name || obj.theme_name);
+            }).filter(Boolean);
+            const worldbooks = asArray(src.world_names).map(w => String(w || '').trim()).filter(Boolean);
+            const presets = extractPresetNames(src);
             const characters = chars.map(c => c && (c.name || c.avatar)).filter(Boolean);
 
             await callTool('stvault_sync_inventory', { themes, characters, worldbooks, presets });
-            log('已同步在库清单：美化 ' + themes.length + ' · 角色卡 ' + characters.length + ' · 世界书 ' + worldbooks.length + ' · 预设 ' + presets.length);
+            setStatus('已连接 · 美化 ' + themes.length + ' · 卡 ' + characters.length + ' · 书 ' + worldbooks.length + ' · 预设 ' + presets.length, 'stv-ok');
+            log('同步清单完成：美化 ' + themes.length + ' · 角色卡 ' + characters.length + ' · 世界书 ' + worldbooks.length + ' · 预设 ' + presets.length);
         } catch (e) {
-            log('同步清单失败：' + e.message);
+            log('同步清单失败：' + (e && e.message ? e.message : String(e)));
         }
     }
 
@@ -232,68 +299,108 @@
     }
 
     async function handlePull(kind) {
-        log('收到酒馆匣拉取请求：' + kind);
+        log('开始拉取：' + kind);
+        setStatus('正在同步 ' + kind + ' 到酒馆匣...', 'stv-ok');
         const enc = new TextEncoder();
         let totalSent = 0;
-        const settingsData = await fetchStSettings();
+        let failCount = 0;
+        const src = await fetchStSettings();
 
         if (kind === 'all' || kind === 'theme') {
-            const themes = Array.isArray(settingsData.themes) ? settingsData.themes : [];
-            for (const t of themes) {
-                if (!t || !t.name) continue;
-                const bytes = enc.encode(JSON.stringify(t, null, 2));
-                await pushBytesToVault('theme', t.name + '.json', bytes);
-                totalSent++;
+            const themes = asArray(src.themes).map(asObject).filter(Boolean);
+            log('读取到美化 ' + themes.length + ' 个，开始推送...');
+            for (let i = 0; i < themes.length; i++) {
+                const t = themes[i];
+                const tName = String(t.name || t.theme_name || ('theme_' + (i + 1)));
+                try {
+                    setStatus('正在推送美化 ' + (i + 1) + '/' + themes.length + '：' + tName, 'stv-ok');
+                    const bytes = enc.encode(JSON.stringify(t, null, 2));
+                    await pushBytesToVault('theme', tName + '.json', bytes);
+                    totalSent++;
+                } catch (e) {
+                    failCount++;
+                    log('美化推送失败（' + tName + '）：' + (e && e.message ? e.message : String(e)));
+                }
             }
         }
         // Pull characters BEFORE worldbooks so embedded worldbooks are deduplicated automatically
         if (kind === 'all' || kind === 'character') {
             const chars = await fetchStCharacters();
+            log('读取到角色卡 ' + chars.length + ' 张，开始推送...');
             const headers = await getHeaders();
             headers['Content-Type'] = 'application/json';
-            for (const c of chars) {
+            for (let i = 0; i < chars.length; i++) {
+                const c = chars[i];
                 if (!c || !c.avatar) continue;
                 try {
+                    setStatus('正在推送角色卡 ' + (i + 1) + '/' + chars.length + '：' + (c.name || c.avatar), 'stv-ok');
                     const r = await fetch('/api/characters/export', {
                         method: 'POST', headers,
                         body: JSON.stringify({ format: 'png', avatar_url: c.avatar })
                     });
-                    if (!r.ok) continue;
+                    if (!r.ok) { failCount++; continue; }
                     const buf = new Uint8Array(await r.arrayBuffer());
                     await pushBytesToVault('character', c.avatar, buf);
                     totalSent++;
-                } catch (_) {}
+                } catch (e) {
+                    failCount++;
+                    log('角色卡推送失败（' + (c.name || c.avatar) + '）：' + (e && e.message ? e.message : String(e)));
+                }
             }
         }
         if (kind === 'all' || kind === 'worldbook') {
-            const names = Array.isArray(settingsData.world_names) ? settingsData.world_names : [];
+            const names = asArray(src.world_names).map(w => String(w || '').trim()).filter(Boolean);
+            log('读取到世界书 ' + names.length + ' 本，开始推送...');
             const headers = await getHeaders();
             headers['Content-Type'] = 'application/json';
-            for (const name of names) {
+            for (let i = 0; i < names.length; i++) {
+                const name = names[i];
                 try {
+                    setStatus('正在推送世界书 ' + (i + 1) + '/' + names.length + '：' + name, 'stv-ok');
                     const r = await fetch('/api/worldinfo/get', { method: 'POST', headers, body: JSON.stringify({ name }) });
-                    if (!r.ok) continue;
+                    if (!r.ok) { failCount++; continue; }
                     const wb = await r.json();
                     wb.name = wb.name || name;
                     await pushBytesToVault('worldbook', name + '.json', enc.encode(JSON.stringify(wb, null, 2)));
                     totalSent++;
-                } catch (_) {}
+                } catch (e) {
+                    failCount++;
+                    log('世界书推送失败（' + name + '）：' + (e && e.message ? e.message : String(e)));
+                }
             }
         }
         if (kind === 'all' || kind === 'preset') {
-            const map = settingsData.openai_setting_names || {};
-            const presetsArr = Array.isArray(settingsData.openai_settings) ? settingsData.openai_settings : [];
-            for (const [pName, pIdx] of Object.entries(map)) {
-                const raw = presetsArr[pIdx];
-                if (!raw) continue;
-                const text = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
-                await pushBytesToVault('preset', pName + '.json', enc.encode(text));
-                totalSent++;
+            const presetsArr = asArray(src.openai_settings);
+            const rawNames = src.openai_setting_names;
+            const pairs = [];
+            if (Array.isArray(rawNames)) {
+                presetsArr.forEach((raw, idx) => {
+                    const obj = asObject(raw);
+                    if (obj) pairs.push([String(rawNames[idx] || obj.name || ('preset_' + (idx + 1))), obj]);
+                });
+            } else if (rawNames && typeof rawNames === 'object') {
+                for (const [pName, pIdx] of Object.entries(rawNames)) {
+                    const obj = asObject(presetsArr[pIdx]);
+                    if (obj) pairs.push([pName, obj]);
+                }
+            }
+            log('读取到预设 ' + pairs.length + ' 个，开始推送...');
+            for (let i = 0; i < pairs.length; i++) {
+                const [pName, obj] = pairs[i];
+                try {
+                    setStatus('正在推送预设 ' + (i + 1) + '/' + pairs.length + '：' + pName, 'stv-ok');
+                    await pushBytesToVault('preset', pName + '.json', enc.encode(JSON.stringify(obj, null, 2)));
+                    totalSent++;
+                } catch (e) {
+                    failCount++;
+                    log('预设推送失败（' + pName + '）：' + (e && e.message ? e.message : String(e)));
+                }
             }
         }
 
-        const summary = '已同步 ' + totalSent + ' 项至酒馆匣';
-        await callTool('stvault_pull_done', { summary });
+        const summary = '同步完成：推送 ' + totalSent + ' 项' + (failCount > 0 ? '（失败 ' + failCount + '）' : '');
+        try { await callTool('stvault_pull_done', { summary }); } catch (_) {}
+        setStatus(summary, 'stv-ok');
         log(summary);
     }
 

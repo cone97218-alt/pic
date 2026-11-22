@@ -576,12 +576,18 @@ class MainActivity : AppCompatActivity() {
             binding.drawerLayout.closeDrawer(GravityCompat.START)
             DuplicateCleanerActivity.open(this)
         }
+        var lastInvTotal = -1
         lifecycleScope.launch {
             com.stvault.app.core.TavernBridgeManager.getInstance(this@MainActivity).stateFlow.collectLatest { st ->
                 binding.drawer.tvDrawerBridgeStatus.text = when {
                     st.connected -> "已连接"
                     st.running -> "监听中"
                     else -> "未开启"
+                }
+                val invTotal = st.installedThemesCount + st.installedCharsCount + st.installedWbsCount + st.installedPresetsCount
+                if (invTotal != lastInvTotal) {
+                    lastInvTotal = invTotal
+                    refreshActiveWorkspace()
                 }
             }
         }

@@ -13,18 +13,40 @@ import androidx.core.app.NotificationCompat
 import com.stvault.app.R
 import com.stvault.app.core.TavernBridgeManager
 import com.stvault.app.ui.TavernBridgeActivity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
 /**
  * Lightweight foreground service that keeps the 127.0.0.1 loopback MCP server alive
- * when the user switches from 酒馆匣 to TauriTavern.
+ * when the user switches from 酒馆匣 to TauriTavern, with live sync status updates.
  */
 class TavernBridgeService : Service() {
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         createChannel()
+        scope.launch {
+            TavernBridgeManager.getInstance(this@TavernBridgeService).stateFlow.collectLatest { st ->
+                if (st.running && st.port > 0) {
+                    val nm = getSystemService(NotificationManager::class.java)
+                    val text = when {
+                        st.lastDiagLog.isNotEmpty() -> st.lastDiagLog
+                        st.lastPullSummary.isNotEmpty() -> st.lastPullSummary
+                        st.connected -> "已连接 TT 酒馆 · 端口 ${st.port}"
+                        else -> "本机通道 127.0.0.1:${st.port} 运行中"
+                    }
+                    nm?.notify(NOTIF_ID, buildNotification(st.port, text))
+                }
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -39,11 +61,12 @@ class TavernBridgeService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        startForeground(NOTIF_ID, buildNotification(port))
+        startForeground(NOTIF_ID, buildNotification(port, "本机通道 127.0.0.1:$port 运行中，切回 TT 酒馆即可连接"))
         return START_STICKY
     }
 
     override fun onDestroy() {
+        scope.cancel()
         TavernBridgeManager.getInstance(this).stopServer()
         super.onDestroy()
     }
@@ -62,7 +85,7 @@ class TavernBridgeService : Service() {
         }
     }
 
-    private fun buildNotification(port: Int): Notification {
+    private fun buildNotification(port: Int, contentText: String): Notification {
         val openIntent = Intent(this, TavernBridgeActivity::class.java)
         val pi = PendingIntent.getActivity(
             this, 0, openIntent,
@@ -70,9 +93,10 @@ class TavernBridgeService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_module_theme)
-            .setContentTitle("酒馆互联已开启")
-            .setContentText("本机通道 127.0.0.1:$port 运行中，切回 TT 酒馆即可连接")
+            .setContentTitle("酒馆互联 · 端口 $port")
+            .setContentText(contentText)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .setContentIntent(pi)
             .build()
     }

@@ -290,6 +290,7 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
 
             "stvault_sync_inventory" -> {
                 updateInventoryFromJson(args)
+                lastDiagLog = "已同步清单：美化 ${installedThemes.size} · 卡 ${installedChars.size} · 书 ${installedWbs.size} · 预设 ${installedPresets.size}"
                 JSONObject().apply {
                     put("ok", true)
                     put("outboxCount", synchronized(lock) { outboxMap.size })
@@ -407,6 +408,7 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                         session.chunks[k]?.let { baos.write(it) }
                     }
                     val status = ingestIncomingFromTavern(session.kind, session.fileName, baos.toByteArray())
+                    lastDiagLog = "已接收：${session.fileName} ($status)"
                     JSONObject().apply {
                         put("ok", true)
                         put("status", status)
