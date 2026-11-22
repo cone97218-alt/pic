@@ -694,35 +694,47 @@ class DiscordBrowserActivity : AppCompatActivity() {
                     var tries = 0;
                     var timer = setInterval(function() {
                       tries++;
-                      // Strictly match Discord's slash-command autocomplete popup (never generic channel listboxes!)
+                      // Strictly match Discord's slash-command autocomplete popup
                       var popup = document.querySelector('div[class*="autocomplete_"]');
-                      var hasCmdRows = popup && popup.querySelectorAll('div[class*="autocompleteRow_"], [class*="commandName_"], [role="option"]').length > 0;
-                      if (popup && hasCmdRows && popup.getBoundingClientRect().height > 20) {
-                        clearInterval(timer);
-                        var rows = popup.querySelectorAll('[role="option"], div[class*="autocompleteRow_"], div[class*="clickable_"]');
-                        var firstText = (rows && rows.length > 0) ? (rows[0].textContent || '').toLowerCase() : '';
-                        var matched = null;
-                        if (rows && rows.length > 1 && targetName && firstText.indexOf(targetName) === -1) {
-                          for (var i = 1; i < rows.length; i++) {
-                            if ((rows[i].textContent || '').toLowerCase().indexOf(targetName) !== -1) {
-                              matched = rows[i];
-                              break;
-                            }
-                          }
-                        }
-                        if (matched) {
-                          matched.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-                          matched.click();
-                          if (window.STHoardBridge && window.STHoardBridge.requestNativeEnter) {
-                            window.STHoardBridge.requestNativeEnter(420);
-                          }
-                        } else if (window.STHoardBridge && window.STHoardBridge.requestNativeTabThenEnter) {
-                          window.STHoardBridge.requestNativeTabThenEnter(120, 420);
-                        }
-                      } else if (tries >= 26) {
-                        clearInterval(timer);
+                      if (!popup || popup.getBoundingClientRect().height < 20) {
+                        if (tries >= 26) clearInterval(timer);
+                        return;
                       }
-                    }, 120);
+                      var rows = popup.querySelectorAll('[role="option"], div[class*="autocompleteRow_"]');
+                      if (!rows || rows.length === 0) {
+                        if (tries >= 26) clearInterval(timer);
+                        return;
+                      }
+                      // Only pick a row that actually matches targetName (avoid clicking category headers or wrong bots)
+                      var matched = null;
+                      for (var i = 0; i < rows.length; i++) {
+                        var t = (rows[i].textContent || '').toLowerCase();
+                        if (targetName && t.indexOf(targetName) !== -1) {
+                          matched = rows[i];
+                          break;
+                        }
+                      }
+                      if (!matched) {
+                        if (tries >= 26) clearInterval(timer);
+                        return;
+                      }
+                      clearInterval(timer);
+                      matched.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                      matched.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                      matched.click();
+                      // Wait for Discord to convert raw "/cmd" into a real Slash Command pill before pressing Enter!
+                      setTimeout(function() {
+                        var b2 = findVisibleBox();
+                        var rawTxt = b2 ? (b2.textContent || '').trim() : '';
+                        // If textbox still contains raw unparsed "/..." plain text and no slash pill exists, DO NOT press Enter (prevents AutoMod block!)
+                        var hasSlashPill = !!document.querySelector('[class*="optionPill_"], [class*="commandName_"], [data-slate-void="true"]');
+                        if (hasSlashPill || (rawTxt.indexOf('/') !== 0)) {
+                          if (window.STHoardBridge && window.STHoardBridge.requestNativeEnter) {
+                            window.STHoardBridge.requestNativeEnter(180);
+                          }
+                        }
+                      }, 420);
+                    }, 150);
                   };
                   // Trigger '/' via real native KEYCODE_SLASH so Discord's slash command UI opens
                   if (window.STHoardBridge && window.STHoardBridge.requestNativeSlashType) {
