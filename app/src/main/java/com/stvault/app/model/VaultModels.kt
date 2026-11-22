@@ -74,3 +74,83 @@ data class RepairResult(
     val missingCount: Int,
     val repairedText: String
 )
+
+// ==================== Multi-Module Resource Models ====================
+
+data class CharacterRecord(
+    val id: String,
+    val name: String,
+    val fileName: String,
+    val creator: String = "",
+    val tags: List<String> = emptyList(),
+    val spec: String = "v2",
+    val isPng: Boolean = true,
+    val cardFile: String = "",
+    val thumbFile: String = "",
+    val fileSize: Long = 0L,
+    val hasEmbeddedBook: Boolean = false,
+    val embeddedBookEntryCount: Int = 0,
+    val embeddedRegexCount: Int = 0,
+    val embeddedHelperCount: Int = 0,
+    val urls: List<String> = emptyList(),
+    val contentHash: String = "",
+    val sourceType: String = "local", // "local" | "url"
+    val sourceRef: String = "",
+    val addedAt: Long = System.currentTimeMillis()
+)
+
+data class WorldBookRecord(
+    val id: String,
+    val name: String,
+    val fileName: String,
+    val entryCount: Int = 0,
+    val constantCount: Int = 0,
+    val totalChars: Int = 0,
+    val urls: List<String> = emptyList(),
+    val bookFile: String = "",
+    val fileSize: Long = 0L,
+    val contentHash: String = "",
+    val originCardId: String = "",
+    val originCardName: String = "",
+    val addedAt: Long = System.currentTimeMillis()
+)
+
+data class PresetRecord(
+    val id: String,
+    val name: String,
+    val fileName: String,
+    val promptCount: Int = 0,
+    val enabledPromptCount: Int = 0,
+    val temperature: Double? = null,
+    val topP: Double? = null,
+    val maxTokens: Int? = null,
+    val presetFile: String = "",
+    val fileSize: Long = 0L,
+    val contentHash: String = "",
+    val addedAt: Long = System.currentTimeMillis()
+)
+
+data class ComponentRecord(
+    val id: String,
+    val name: String,
+    val fileName: String,
+    val type: String = "regex", // "regex" | "helper" | "qr"
+    val summary: String = "",
+    val urls: List<String> = emptyList(),
+    val linkedTargetType: String = "", // "" | "character" | "preset" | "worldbook" | "theme"
+    val linkedTargetId: String = "",
+    val linkedTargetName: String = "",
+    val compFile: String = "",
+    val fileSize: Long = 0L,
+    val contentHash: String = "",
+    val addedAt: Long = System.currentTimeMillis()
+)
+
+data class LibraryCounts(
+    val themes: Int = 0,
+    val characters: Int = 0,
+    val worldBooks: Int = 0,
+    val presets: Int = 0,
+    val components: Int = 0,
+    val totalStorageBytes: Long = 0L
+)

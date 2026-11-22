@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/nav_preset_list"
+        android:icon="@drawable/ic_module_preset"
+        android:title="预设库" />
+    <item
+        android:id="@+id/nav_preset_components"
+        android:icon="@drawable/ic_module_component"
+        android:title="关联组件" />
+</menu>

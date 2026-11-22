@@ -49,11 +49,39 @@ class VaultRepository private constructor(private val appContext: Context) {
         repoScope.launch {
             imagesDir.mkdirs()
             fontsDir.mkdirs()
-            File(themesRootDir, "ui").mkdirs()
-            File(themesRootDir, "regex").mkdirs()
-            File(themesRootDir, "cards").mkdirs()
-            File(themesRootDir, "other").mkdirs()
+            themesRootDir.mkdirs()
+            migrateLegacyThemeSubdirs()
             loadIndex()
+        }
+    }
+
+    fun getVaultRootDir(): File = vaultDir
+
+    private fun migrateLegacyThemeSubdirs() {
+        val legacySubdirs = listOf("ui", "regex", "cards", "other")
+        for (sub in legacySubdirs) {
+            val dir = File(themesRootDir, sub)
+            if (!dir.exists() || !dir.isDirectory) continue
+            val files = dir.listFiles() ?: emptyArray()
+            for (f in files) {
+                if (f.isFile) {
+                    val dst = File(themesRootDir, f.name)
+                    if (!dst.exists()) {
+                        if (!f.renameTo(dst)) {
+                            try {
+                                f.copyTo(dst, overwrite = false)
+                                f.delete()
+                            } catch (_: Exception) {
+                            }
+                        }
+                    } else {
+                        f.delete()
+                    }
+                }
+            }
+            if (dir.listFiles().isNullOrEmpty()) {
+                dir.delete()
+            }
         }
     }
 
@@ -70,23 +98,9 @@ class VaultRepository private constructor(private val appContext: Context) {
         return File(dir, fileName)
     }
 
-    private fun classifySourceCategory(name: String, rawContent: String): String {
-        val lowerName = name.lowercase()
-        if (lowerName.endsWith(".png")) return "cards"
-        if (lowerName.endsWith(".css")) return "ui"
-        val trimmed = rawContent.trim()
-        if (trimmed.startsWith("{")) {
-            if (trimmed.contains("\"findRegex\"") && trimmed.contains("\"replaceString\"")) return "regex"
-            if (trimmed.contains("\"custom_css\"") || trimmed.contains("\"main_text_color\"") || trimmed.contains("\"blur_tint_color\"")) return "ui"
-        }
-        return "other"
-    }
-
-    private fun resolveSourceFile(sourceId: String, category: String): File {
-        val safeCat = if (category in setOf("ui", "regex", "cards", "other")) category else "other"
-        val dir = File(themesRootDir, safeCat)
-        dir.mkdirs()
-        return File(dir, "$sourceId.txt")
+    private fun resolveSourceFile(sourceId: String, @Suppress("UNUSED_PARAMETER") category: String = "ui"): File {
+        themesRootDir.mkdirs()
+        return File(themesRootDir, "$sourceId.txt")
     }
 
     fun getVaultPathDisplay(): String = vaultDir.absolutePath
@@ -385,7 +399,105 @@ class VaultRepository private constructor(private val appContext: Context) {
     }
 
     /**
-     * Imports one or more user-selected theme files directly via SAF document URIs.
+     * Registers URLs owned by another module (characters / worldbooks / components)
+     * into the shared asset pool. Returns count of newly discovered URLs.
+     */
+    fun registerExternalUrls(ownerKey: String, urls: List<String>): Int {
+        if (urls.isEmpty()) return 0
+        var added = 0
+        synchronized(lock) {
+            for (u in urls) {
+                if (UrlExtractor.isNonImageUrl(u)) continue
+                val existing = urlsMap[u]
+                if (existing == null) {
+                    urlsMap[u] = UrlRecord(
+                        url = u,
+                        hash = sha1Short(u),
+                        sources = mutableListOf(ownerKey)
+                    )
+                    added++
+                } else if (!existing.sources.contains(ownerKey)) {
+                    existing.sources.add(ownerKey)
+                }
+            }
+            refreshStatsLocked()
+        }
+        saveIndex()
+        return added
+    }
+
+    /**
+     * Unregisters an external module owner from the shared asset pool and deletes
+     * any cached files no longer referenced by any module.
+     */
+    fun unregisterExternalOwner(ownerKey: String): DeleteSourceResult {
+        val removedFilesToDelete = mutableListOf<File>()
+        var removedUrls = 0
+        var freedBytes = 0L
+
+        synchronized(lock) {
+            val orphanUrls = mutableListOf<UrlRecord>()
+            val iter = urlsMap.entries.iterator()
+            while (iter.hasNext()) {
+                val rec = iter.next().value
+                if (rec.sources.remove(ownerKey) && rec.sources.isEmpty()) {
+                    orphanUrls.add(rec)
+                    iter.remove()
+                    removedUrls++
+                }
+            }
+            if (orphanUrls.isNotEmpty()) {
+                val stillUsedFiles = HashSet<String>()
+                for (rec in urlsMap.values) {
+                    if (rec.file.isNotEmpty()) stillUsedFiles.add(rec.file)
+                }
+                val scheduled = HashSet<String>()
+                for (orphan in orphanUrls) {
+                    if (orphan.file.isNotEmpty() && orphan.file !in stillUsedFiles && scheduled.add(orphan.file)) {
+                        val f = resolveAssetFile(orphan.file, orphan.mime, orphan.url)
+                        if (f.exists()) {
+                            freedBytes += f.length()
+                            removedFilesToDelete.add(f)
+                        }
+                    }
+                }
+            }
+            refreshStatsLocked()
+        }
+
+        for (f in removedFilesToDelete) {
+            try { f.delete() } catch (_: Exception) {}
+        }
+        if (removedUrls > 0) saveIndex()
+        return DeleteSourceResult(removedUrls, freedBytes)
+    }
+
+    fun getUrlRecordsForUrls(urls: List<String>): List<UrlRecord> {
+        synchronized(lock) {
+            return urls.map { u ->
+                urlsMap[u]?.copy() ?: UrlRecord(url = u, hash = sha1Short(u))
+            }
+        }
+    }
+
+    fun getCountsForUrls(urls: List<String>): Triple<Int, Int, Int> {
+        synchronized(lock) {
+            var ok = 0
+            var err = 0
+            var pending = 0
+            for (u in urls) {
+                when (urlsMap[u]?.status) {
+                    CacheStatus.OK -> ok++
+                    CacheStatus.ERROR -> err++
+                    else -> pending++
+                }
+            }
+            return Triple(ok, err, pending)
+        }
+    }
+
+    /**
+     * Imports one or more user-selected theme files (JSON / CSS / TXT / HTML) directly via SAF.
      */
     fun importFileUris(uris: List<Uri>): ScanResult {
         var scanned = 0
@@ -399,18 +511,13 @@ class VaultRepository private constructor(private val appContext: Context) {
                 ?: uri.lastPathSegment?.substringAfterLast('/')
                 ?: "theme_${System.currentTimeMillis()}.json"
             val ext = fileName.substringAfterLast('.', "").lowercase()
+            if (ext == "png") continue
             scanned++
 
             try {
-                val content: String = if (ext == "png") {
-                    val bytes = appContext.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                        ?: continue
-                    UrlExtractor.extractCharaFromPng(bytes) ?: continue
-                } else {
-                    appContext.contentResolver.openInputStream(uri)?.use {
-                        it.bufferedReader(Charsets.UTF_8).readText()
-                    } ?: continue
-                }
+                val content: String = appContext.contentResolver.openInputStream(uri)?.use {
+                    it.bufferedReader(Charsets.UTF_8).readText()
+                } ?: continue
                 if (content.isBlank()) continue
                 val (urls, isJson) = UrlExtractor.extract(content)
                 if (urls.isNotEmpty()) {
@@ -457,7 +564,7 @@ class VaultRepository private constructor(private val appContext: Context) {
     ): Pair<Int, Boolean> {
         if (urls.isEmpty()) return 0 to false
         val sourceId = sha1Short(if (docUri.isNotBlank()) docUri else name)
-        val category = classifySourceCategory(name, rawContent)
+        val category = "ui"
 
         // Check if an existing record already represents this exact file (by contentHash)
         val existingDup = if (contentHash.isNotEmpty()) {
@@ -465,7 +572,7 @@ class VaultRepository private constructor(private val appContext: Context) {
         } else null
 
         if (existingDup != null) {
-            if (rawContent.isNotEmpty() && rawContent.length <= 2 * 1024 * 1024) {
+            if (rawContent.isNotEmpty() && rawContent.length <= 20 * 1024 * 1024) {
                 try {
                     val f = resolveSourceFile(existingDup.id, existingDup.category)
                     if (!f.exists() || f.length() == 0L) {
@@ -484,7 +591,7 @@ class VaultRepository private constructor(private val appContext: Context) {
         val legacySameName = sourcesMap.values.firstOrNull { it.id != sourceId && it.name == name && it.contentHash.isEmpty() }
         val targetId = legacySameName?.id ?: sourceId
 
-        if (rawContent.isNotEmpty() && rawContent.length <= 2 * 1024 * 1024) {
+        if (rawContent.isNotEmpty() && rawContent.length <= 20 * 1024 * 1024) {
             try {
                 resolveSourceFile(targetId, category).writeText(rawContent, Charsets.UTF_8)
             } catch (_: Exception) {
@@ -522,18 +629,17 @@ class VaultRepository private constructor(private val appContext: Context) {
     }
 
     /**
-     * Recursively scans an Android SAF folder selected by the user.
+     * Recursively scans an Android SAF folder for theme files (JSON / CSS / TXT / HTML).
      */
     fun scanTreeUri(
         treeUri: Uri,
-        includePng: Boolean,
+        @Suppress("UNUSED_PARAMETER") includePng: Boolean = false,
         onProgress: (scannedFiles: Int, matchedFiles: Int) -> Unit = { _, _ -> }
     ): ScanResult {
         val rootDoc = DocumentFile.fromTreeUri(appContext, treeUri)
             ?: throw IllegalStateException("无法读取所选文件夹")
 
-        val allowedExts = mutableSetOf("json", "css", "txt", "html", "htm")
-        if (includePng) allowedExts.add("png")
+        val allowedExts = setOf("json", "css", "txt", "html", "htm")
 
         var scanned = 0
         var matched = 0
@@ -564,15 +670,9 @@ class VaultRepository private constructor(private val appContext: Context) {
                 if (scanned % 10 == 0) onProgress(scanned, matched)
 
                 try {
-                    val content: String = if (ext == "png") {
-                        val bytes = appContext.contentResolver.openInputStream(child.uri)?.use { it.readBytes() }
-                            ?: continue
-                        UrlExtractor.extractCharaFromPng(bytes) ?: continue
-                    } else {
-                        appContext.contentResolver.openInputStream(child.uri)?.use {
-                            it.bufferedReader(Charsets.UTF_8).readText()
-                        } ?: continue
-                    }
+                    val content = appContext.contentResolver.openInputStream(child.uri)?.use {
+                        it.bufferedReader(Charsets.UTF_8).readText()
+                    } ?: continue
                     if (content.isBlank()) continue
                     val (urls, isJson) = UrlExtractor.extract(content)
                     if (urls.isNotEmpty()) {
@@ -601,11 +701,11 @@ class VaultRepository private constructor(private val appContext: Context) {
     }
 
     /**
-     * Directly scans a local File directory (e.g., TT SillyTavern themes path when accessible).
+     * Directly scans a local File directory for theme files (JSON / CSS / TXT / HTML).
      */
     fun scanLocalDirectory(
         rootDir: File,
-        includePng: Boolean,
+        @Suppress("UNUSED_PARAMETER") includePng: Boolean = false,
         onProgress: (scannedFiles: Int, matchedFiles: Int) -> Unit = { _, _ -> }
     ): ScanResult {
         if (!rootDir.exists() || !rootDir.isDirectory) {
@@ -614,8 +714,7 @@ class VaultRepository private constructor(private val appContext: Context) {
         val testList = rootDir.listFiles()
             ?: throw IllegalStateException("系统限制了直接读取该目录（请尝试授权 SAF 或所有文件访问权限）")
 
-        val allowedExts = mutableSetOf("json", "css", "txt", "html", "htm")
-        if (includePng) allowedExts.add("png")
+        val allowedExts = setOf("json", "css", "txt", "html", "htm")
 
         var scanned = 0
         var matched = 0
@@ -643,11 +742,7 @@ class VaultRepository private constructor(private val appContext: Context) {
                 if (scanned % 10 == 0) onProgress(scanned, matched)
 
                 try {
-                    val content: String = if (ext == "png") {
-                        UrlExtractor.extractCharaFromPng(child.readBytes()) ?: continue
-                    } else {
-                        child.readText(Charsets.UTF_8)
-                    }
+                    val content = child.readText(Charsets.UTF_8)
                     if (content.isBlank()) continue
                     val (urls, isJson) = UrlExtractor.extract(content)
                     if (urls.isNotEmpty()) {
