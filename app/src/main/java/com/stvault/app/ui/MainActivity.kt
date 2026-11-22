@@ -2323,20 +2323,49 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val items = allCats.map { PickerItem(it, catManager.formatIndentedLabel(it)) }
-        VaultSheets.multiSelect(
-            ctx = this,
-            title = "美化分类（可多选）",
-            items = items,
-            preselectedIds = source.categories.toSet(),
-            headerAction = "+ 新建" to {
-                showQuickAddCategoryDialog(CategoryManager.SCOPE_THEMES) {
-                    showThemeCategoryAssignDialog(source)
+        val beforeSet = source.categories.toSet()
+        val variants = repo.getVariantsForTheme(source.seriesKey)
+        if (variants.size > 1) {
+            VaultSheets.multiSelect(
+                ctx = this,
+                title = "设置分类",
+                items = items,
+                preselectedIds = beforeSet,
+                headerAction = "+ 新建" to {
+                    showQuickAddCategoryDialog(CategoryManager.SCOPE_THEMES) {
+                        showThemeCategoryAssignDialog(source)
+                    }
+                },
+                primaryConfirmText = "全系列 (${variants.size})",
+                secondaryConfirm = "仅当前" to { picked ->
+                    repo.setSourceCategories(source.id, picked)
+                    toast("已更新当前变体分类")
+                    refreshVaultList()
                 }
+            ) { picked ->
+                val afterSet = picked.toSet()
+                val added = afterSet - beforeSet
+                val removed = beforeSet - afterSet
+                val cnt = repo.deltaUpdateThemeSeriesCategories(source.seriesKey, added, removed)
+                toast("已同步分类至全系列 ($cnt)")
+                refreshVaultList()
             }
-        ) { picked ->
-            repo.setSourceCategories(source.id, picked)
-            toast("分类已更新")
-            refreshVaultList()
+        } else {
+            VaultSheets.multiSelect(
+                ctx = this,
+                title = "设置分类",
+                items = items,
+                preselectedIds = beforeSet,
+                headerAction = "+ 新建" to {
+                    showQuickAddCategoryDialog(CategoryManager.SCOPE_THEMES) {
+                        showThemeCategoryAssignDialog(source)
+                    }
+                }
+            ) { picked ->
+                repo.setSourceCategories(source.id, picked)
+                toast("分类已更新")
+                refreshVaultList()
+            }
         }
     }
 
@@ -2722,20 +2751,49 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val items = allCats.map { PickerItem(it, catManager.formatIndentedLabel(it)) }
-        VaultSheets.multiSelect(
-            ctx = this,
-            title = "角色卡分类（可多选）",
-            items = items,
-            preselectedIds = c.categories.toSet(),
-            headerAction = "+ 新建" to {
-                showQuickAddCategoryDialog(CategoryManager.SCOPE_CHARACTERS) {
-                    showCharacterCategoryAssignDialog(c)
+        val beforeSet = c.categories.toSet()
+        val seriesMembers = libRepo.getCharactersInSeries(c.seriesKey)
+        if (seriesMembers.size > 1) {
+            VaultSheets.multiSelect(
+                ctx = this,
+                title = "设置分类",
+                items = items,
+                preselectedIds = beforeSet,
+                headerAction = "+ 新建" to {
+                    showQuickAddCategoryDialog(CategoryManager.SCOPE_CHARACTERS) {
+                        showCharacterCategoryAssignDialog(c)
+                    }
+                },
+                primaryConfirmText = "全系列 (${seriesMembers.size})",
+                secondaryConfirm = "仅当前" to { picked ->
+                    libRepo.setCharacterCategories(c.id, picked)
+                    toast("已更新当前版本分类")
+                    refreshCharactersList()
                 }
+            ) { picked ->
+                val afterSet = picked.toSet()
+                val added = afterSet - beforeSet
+                val removed = beforeSet - afterSet
+                val cnt = libRepo.deltaUpdateCharacterSeriesCategories(c.seriesKey, added, removed)
+                toast("已同步分类至全系列 ($cnt)")
+                refreshCharactersList()
             }
-        ) { picked ->
-            libRepo.setCharacterCategories(c.id, picked)
-            toast("分类已更新")
-            refreshCharactersList()
+        } else {
+            VaultSheets.multiSelect(
+                ctx = this,
+                title = "设置分类",
+                items = items,
+                preselectedIds = beforeSet,
+                headerAction = "+ 新建" to {
+                    showQuickAddCategoryDialog(CategoryManager.SCOPE_CHARACTERS) {
+                        showCharacterCategoryAssignDialog(c)
+                    }
+                }
+            ) { picked ->
+                libRepo.setCharacterCategories(c.id, picked)
+                toast("分类已更新")
+                refreshCharactersList()
+            }
         }
     }
 
@@ -3024,7 +3082,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             toast("已为 ${ids.size} 项更新分类")
-            exitBatchMode()
+            batchSelectedIds.clear()
+            syncBatchUi()
             refreshActiveWorkspace()
         }
     }
@@ -3058,7 +3117,15 @@ class MainActivity : AppCompatActivity() {
             lifecycleScope.launch {
                 withContext(Dispatchers.IO) {
                     when (activeWorkspace) {
-                        "themes" -> repo.mergeThemeSeries(ids, clean)
+                        "themes" -> {
+                            val expandedIds = ids.flatMap { id ->
+                                val s = repo.getSourceById(id)
+                                if (s != null && s.seriesKey.isNotBlank()) {
+                                    repo.getVariantsForTheme(s.seriesKey).map { it.id }
+                                } else listOf(id)
+                            }.distinct()
+                            repo.mergeThemeSeries(expandedIds, clean)
+                        }
                         "characters" -> libRepo.mergeCharacterVersions(ids, clean)
                         "worldbooks" -> libRepo.mergeWorldBookVersions(ids, clean)
                         "presets" -> libRepo.mergePresetVersions(ids, clean)
@@ -3067,7 +3134,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 toast("已合并 ${ids.size} 项到「$clean」")
-                exitBatchMode()
+                batchSelectedIds.clear()
+                syncBatchUi()
                 refreshActiveWorkspace()
             }
         }
@@ -3098,7 +3166,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 toast("已批量删除 ${ids.size} 项")
-                exitBatchMode()
+                batchSelectedIds.clear()
+                syncBatchUi()
                 refreshActiveWorkspace()
             }
         }

@@ -216,6 +216,27 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         saveCharactersIndex()
     }
 
+    fun getCharactersInSeries(seriesKey: String): List<CharacterRecord> = synchronized(lock) {
+        if (seriesKey.isBlank()) return emptyList()
+        charactersMap.values.filter { it.seriesKey == seriesKey }
+    }
+
+    fun deltaUpdateCharacterSeriesCategories(seriesKey: String, added: Set<String>, removed: Set<String>): Int {
+        if (seriesKey.isBlank()) return 0
+        var count = 0
+        synchronized(lock) {
+            for ((id, cur) in charactersMap) {
+                if (cur.seriesKey == seriesKey) {
+                    val next = ((cur.categories - removed) + added).distinct()
+                    charactersMap[id] = cur.copy(categories = next)
+                    count++
+                }
+            }
+        }
+        if (count > 0) saveCharactersIndex()
+        return count
+    }
+
     fun batchSetCharacterCategories(ids: List<String>, categories: List<String>, append: Boolean) {
         if (ids.isEmpty()) return
         synchronized(lock) {

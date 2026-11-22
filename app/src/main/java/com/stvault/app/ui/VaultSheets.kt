@@ -470,6 +470,8 @@ object VaultSheets {
         items: List<PickerItem>,
         preselectedIds: Set<String>,
         headerAction: Pair<String, () -> Unit>? = null,
+        primaryConfirmText: String = "保存",
+        secondaryConfirm: Pair<String, (List<String>) -> Unit>? = null,
         onConfirm: (List<String>) -> Unit
     ) {
         val (sheet, root) = createSheet(ctx)
@@ -580,11 +582,22 @@ object VaultSheets {
                 topMargin = dp(ctx, 14)
             }
         }
-        btnRow.addView(makeOutlinedBtn(ctx, "取消") { sheet.dismiss() }, LinearLayout.LayoutParams(0, dp(ctx, 44), 0.85f).apply { marginEnd = dp(ctx, 10) })
-        btnRow.addView(makePrimaryBtn(ctx, "保存") {
-            sheet.dismiss()
-            onConfirm(selected.toList())
-        }, LinearLayout.LayoutParams(0, dp(ctx, 44), 1.3f))
+        if (secondaryConfirm != null) {
+            btnRow.addView(makeOutlinedBtn(ctx, secondaryConfirm.first) {
+                sheet.dismiss()
+                secondaryConfirm.second(selected.toList())
+            }, LinearLayout.LayoutParams(0, dp(ctx, 44), 0.95f).apply { marginEnd = dp(ctx, 10) })
+            btnRow.addView(makePrimaryBtn(ctx, primaryConfirmText) {
+                sheet.dismiss()
+                onConfirm(selected.toList())
+            }, LinearLayout.LayoutParams(0, dp(ctx, 44), 1.15f))
+        } else {
+            btnRow.addView(makeOutlinedBtn(ctx, "取消") { sheet.dismiss() }, LinearLayout.LayoutParams(0, dp(ctx, 44), 0.85f).apply { marginEnd = dp(ctx, 10) })
+            btnRow.addView(makePrimaryBtn(ctx, primaryConfirmText) {
+                sheet.dismiss()
+                onConfirm(selected.toList())
+            }, LinearLayout.LayoutParams(0, dp(ctx, 44), 1.3f))
+        }
         root.addView(btnRow)
         sheet.show()
     }

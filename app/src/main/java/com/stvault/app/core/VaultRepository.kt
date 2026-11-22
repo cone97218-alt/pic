@@ -952,6 +952,26 @@ class VaultRepository private constructor(private val appContext: Context) {
         saveIndex()
     }
 
+    /**
+     * Delta-syncs category additions and removals across all variants in a theme series,
+     * preserving any variant-specific categories that were not touched.
+     */
+    fun deltaUpdateThemeSeriesCategories(seriesKey: String, added: Set<String>, removed: Set<String>): Int {
+        if (seriesKey.isBlank()) return 0
+        var count = 0
+        synchronized(lock) {
+            for ((id, cur) in sourcesMap) {
+                if (cur.seriesKey == seriesKey) {
+                    val next = ((cur.categories - removed) + added).distinct()
+                    sourcesMap[id] = cur.copy(categories = next)
+                    count++
+                }
+            }
+        }
+        if (count > 0) saveIndex()
+        return count
+    }
+
     fun batchSetSourceCategories(ids: List<String>, categories: List<String>, append: Boolean) {
         if (ids.isEmpty()) return
         synchronized(lock) {
