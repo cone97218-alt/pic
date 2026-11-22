@@ -3,10 +3,12 @@ package com.stvault.app.ui
 import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -145,7 +147,35 @@ class DiscordBrowserActivity : AppCompatActivity() {
         setupDraggableHoardDock()
         refreshActiveQuickCmdLabel()
 
+        web.addJavascriptInterface(object {
+            @JavascriptInterface
+            fun onSidebarStateChanged(hidden: Boolean) {
+                runOnUiThread {
+                    sidebarHidden = hidden
+                    binding.btnWebSidebar.text = if (hidden) "频道" else "看消息"
+                }
+            }
+
+            @JavascriptInterface
+            fun requestNativeEnter(delayMs: Long) {
+                runOnUiThread {
+                    binding.webDiscord.postDelayed({
+                        dispatchNativeEnterKey()
+                    }, delayMs.coerceIn(80L, 1200L))
+                }
+            }
+        }, "STHoardBridge")
+
         web.loadUrl("https://discord.com/app")
+    }
+
+    private fun dispatchNativeEnterKey() {
+        try {
+            hideSoftKeyboard()
+            binding.webDiscord.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
+            binding.webDiscord.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+        } catch (_: Exception) {
+        }
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -259,18 +289,8 @@ class DiscordBrowserActivity : AppCompatActivity() {
     }
 
     private fun injectMobileLayoutHelper() {
-        binding.webDiscord.evaluateJavascript(MOBILE_LAYOUT_JS) {
-            applySidebarMode()
-        }
-    }
-
-    private fun applySidebarMode() {
-        binding.btnWebSidebar.text = if (sidebarHidden) "频道" else "看消息"
-        val flag = if (sidebarHidden) "true" else "false"
-        binding.webDiscord.evaluateJavascript(
-            "if(window.__stSetSidebarHidden) window.__stSetSidebarHidden($flag);",
-            null
-        )
+        // Never overwrite current DOM sidebar state on sub-frame / message onPageFinished!
+        binding.webDiscord.evaluateJavascript(MOBILE_LAYOUT_JS, null)
     }
 
     private fun applyZoom() {
@@ -616,17 +636,22 @@ class DiscordBrowserActivity : AppCompatActivity() {
                       } else {
                         fireKey('Tab', 'Tab', 9);
                       }
-                      setTimeout(function() {
-                        box.focus();
-                        fireKey('Enter', 'Enter', 13);
-                      }, 360);
+                      if (window.STHoardBridge && window.STHoardBridge.requestNativeEnter) {
+                        window.STHoardBridge.requestNativeEnter(380);
+                      } else {
+                        setTimeout(function() { box.focus(); fireKey('Enter', 'Enter', 13); }, 380);
+                      }
                     } else if (tries >= 28) {
                       clearInterval(timer);
                       // Do not send as plain text if slash menu did not open
                     }
                   }, 120);
                 } else {
-                  setTimeout(function() { fireKey('Enter', 'Enter', 13); }, 200);
+                  if (window.STHoardBridge && window.STHoardBridge.requestNativeEnter) {
+                    window.STHoardBridge.requestNativeEnter(200);
+                  } else {
+                    setTimeout(function() { fireKey('Enter', 'Enter', 13); }, 200);
+                  }
                 }
                 return 'OK';
               } catch (e) {
@@ -738,6 +763,9 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 } else {
                   document.documentElement.classList.remove('st-hide-sidebar');
                 }
+                if (window.STHoardBridge && window.STHoardBridge.onSidebarStateChanged) {
+                  window.STHoardBridge.onSidebarStateChanged(!!hidden);
+                }
               };
               if (!window.__stSidebarAutoBound) {
                 window.__stSidebarAutoBound = true;
@@ -759,7 +787,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
                   var inSidebar = a.closest('div[class*="sidebar_"], div[class*="sidebarList_"]');
                   if (inSidebar && !document.documentElement.classList.contains('st-hide-sidebar')) {
                     setTimeout(function() {
-                      document.documentElement.classList.add('st-hide-sidebar');
+                      window.__stSetSidebarHidden(true);
                     }, 180);
                   }
                 }, true);
