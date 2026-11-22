@@ -759,6 +759,7 @@ class MainActivity : AppCompatActivity() {
         val options = if (vaultSearchModeSources) {
             listOf(
                 "all" to "最新扫描",
+                "installed" to "已装",
                 "not_installed" to "未装",
                 "has_error" to "有失败",
                 "incomplete" to "未下完",
@@ -2135,7 +2136,7 @@ class MainActivity : AppCompatActivity() {
     private fun showThemeActionMenu(source: SourceRecord) {
         VaultSheets.actionList(
             ctx = this,
-            title = source.name.substringAfterLast('/'),
+            title = source.name,
             actions = listOf(
                 SheetAction("装入酒馆", "推送到 TT 酒馆，支持原版或图床修复版") {
                     pushThemeToTavern(source)

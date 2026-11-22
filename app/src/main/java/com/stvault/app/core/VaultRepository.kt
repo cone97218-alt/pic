@@ -206,7 +206,6 @@ class VaultRepository private constructor(private val appContext: Context) {
                                 if (!UrlExtractor.isNonImageUrl(u)) urlList.add(u)
                             }
                         }
-                        if (urlList.isEmpty()) continue
                         val cat = o.optString("category", "ui").ifBlank { "ui" }
                         val legacySrcName = "$id.txt"
                         if (legacySrcName in legacySources) {
@@ -538,7 +537,6 @@ class VaultRepository private constructor(private val appContext: Context) {
     ): Pair<Int, Boolean>? {
         if (rawText.isBlank()) return null
         val (urls, isJson) = UrlExtractor.extract(rawText)
-        if (urls.isEmpty()) return null
         val contentHash = sha256Short(rawText.trim().toByteArray(Charsets.UTF_8))
         val res = synchronized(lock) {
             registerSourceLocked(
@@ -548,7 +546,8 @@ class VaultRepository private constructor(private val appContext: Context) {
                 isJson = isJson,
                 contentHash = contentHash,
                 rawContent = rawText,
-                folderName = folderName
+                folderName = folderName,
+                allowEmptyUrls = true
             )
         }
         saveIndex()
@@ -643,9 +642,10 @@ class VaultRepository private constructor(private val appContext: Context) {
         isJson: Boolean,
         contentHash: String,
         rawContent: String = "",
-        folderName: String = ""
+        folderName: String = "",
+        allowEmptyUrls: Boolean = false
     ): Pair<Int, Boolean> {
-        if (urls.isEmpty()) return 0 to false
+        if (urls.isEmpty() && !allowEmptyUrls) return 0 to false
         val sourceId = sha1Short(if (docUri.isNotBlank()) docUri else name)
         val category = "ui"
         val displayName = extractThemeDisplayName(rawContent, isJson, name)
@@ -1042,6 +1042,8 @@ class VaultRepository private constructor(private val appContext: Context) {
                 SourceRowUi(s, ok, err, pending)
             }.filter { r ->
                 when (filter) {
+                    "installed" -> TavernBridgeManager.getInstance(appContext)
+                        .isThemeInstalled(r.source.name, r.source.fileName)
                     "not_installed" -> !TavernBridgeManager.getInstance(appContext)
                         .isThemeInstalled(r.source.name, r.source.fileName)
                     "has_error" -> r.errCount > 0

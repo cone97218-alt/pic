@@ -432,7 +432,9 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
             "stvault_push_batch" -> {
                 val arr = args.optJSONArray("items") ?: JSONArray()
                 val embeddedWbKeys = buildEmbeddedWorldBookKeys(ResourceLibraryRepository.getInstance(appContext))
-                var okCount = 0
+                var imported = 0
+                var overwritten = 0
+                var conflicts = 0
                 for (i in 0 until arr.length()) {
                     val o = arr.optJSONObject(i) ?: continue
                     val kind = o.optString("kind", "")
@@ -441,15 +443,24 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                     if (b64.isEmpty()) continue
                     try {
                         val bytes = Base64.decode(b64, Base64.DEFAULT)
-                        ingestIncomingFromTavern(kind, fileName, bytes, embeddedWbKeys)
-                        okCount++
+                        when (ingestIncomingFromTavern(kind, fileName, bytes, embeddedWbKeys)) {
+                            "imported" -> imported++
+                            "overwritten" -> overwritten++
+                            "conflict" -> conflicts++
+                            else -> Unit
+                        }
                     } catch (_: Exception) {
                     }
                 }
-                lastDiagLog = "批量接收完成：$okCount 项"
+                val totalOk = imported + overwritten + conflicts
+                val parts = mutableListOf<String>()
+                if (imported > 0) parts.add("新增 $imported")
+                if (overwritten > 0) parts.add("覆盖 $overwritten")
+                if (conflicts > 0) parts.add("待确认冲突 $conflicts")
+                lastDiagLog = if (parts.isNotEmpty()) "批量接收：" + parts.joinToString(" · ") else "批量接收完成"
                 JSONObject().apply {
                     put("ok", true)
-                    put("count", okCount)
+                    put("count", totalOk)
                 }
             }
 

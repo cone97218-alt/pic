@@ -45,7 +45,7 @@ class SourcesAdapter(
         val s = row.source
         val ctx = holder.binding.root.context
         val d = ctx.resources.displayMetrics.density
-        val cleanName = s.name.substringAfterLast('/')
+        val cleanName = s.name
         val isSelected = selectionMode && s.id in selectedIds
 
         holder.binding.tvSourceName.text = if (isSelected) "✓  $cleanName" else cleanName
@@ -59,9 +59,13 @@ class SourcesAdapter(
 
         val meta = buildString {
             if (installed) append("已装 · ")
-            append("已缓存 ${row.okCount}/${s.urls.size}")
-            if (row.errCount > 0) append(" · 失败 ${row.errCount}")
-            if (row.pendingCount > 0) append(" · 待缓存 ${row.pendingCount}")
+            if (s.urls.isEmpty()) {
+                append("纯样式")
+            } else {
+                append("已缓存 ${row.okCount}/${s.urls.size}")
+                if (row.errCount > 0) append(" · 失败 ${row.errCount}")
+                if (row.pendingCount > 0) append(" · 待缓存 ${row.pendingCount}")
+            }
             if (catLabel.isNotEmpty()) append(" · $catLabel")
         }
         holder.binding.tvSourceMeta.text = meta
