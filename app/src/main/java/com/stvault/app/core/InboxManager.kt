@@ -361,7 +361,12 @@ object InboxManager {
 
         var maxSnowflakeId = lastId.toLongOrNull() ?: 0L
         var maxSnowflakeStr = lastId
-        for (msg in allMessages) {
+        val appliedUserTags = LinkedHashSet<String>()
+
+        fun snowflakeTimeMs(idNum: Long): Long = (idNum ushr 22) + 1420070400000L
+
+        for (i in allMessages.indices) {
+            val msg = allMessages[i]
             val idStr = msg.optString("id", "")
             val idNum = idStr.toLongOrNull() ?: 0L
             if (idNum > maxSnowflakeId) {
@@ -371,13 +376,42 @@ object InboxManager {
             val snapshots = msg.optJSONArray("message_snapshots")
             val hasSnapshots = snapshots != null && snapshots.length() > 0
             val hasAttachments = (msg.optJSONArray("attachments")?.length() ?: 0) > 0
-            // Parse optional tags / author shorthand written by the user (with or without '#')
-            val userTags = extractForwardTags(msg.optString("content", ""), hasSnapshots || hasAttachments)
+
+            // 1. Tags on the message itself (e.g. direct upload with caption or text+links with #tag)
+            val tagList = LinkedHashSet<String>()
+            tagList.addAll(extractForwardTags(msg.optString("content", ""), hasSnapshots || hasAttachments))
+
+            // 2. Discord sends the Forward "Optional Message" as a SEPARATE text-only message immediately after the forward!
+            if (hasSnapshots || hasAttachments) {
+                val nextMsg = allMessages.getOrNull(i + 1)
+                if (nextMsg != null) {
+                    val nextSnaps = nextMsg.optJSONArray("message_snapshots")
+                    val nextAtts = nextMsg.optJSONArray("attachments")
+                    val nextHasFiles = (nextSnaps != null && nextSnaps.length() > 0) ||
+                        (nextAtts != null && nextAtts.length() > 0)
+                    val sameAuthor = msg.optJSONObject("author")?.optString("id").orEmpty() ==
+                        nextMsg.optJSONObject("author")?.optString("id").orEmpty()
+                    val nextIdNum = nextMsg.optString("id", "").toLongOrNull() ?: 0L
+                    val deltaMs = if (idNum > 0L && nextIdNum >= idNum) {
+                        snowflakeTimeMs(nextIdNum) - snowflakeTimeMs(idNum)
+                    } else Long.MAX_VALUE
+                    val nextContent = nextMsg.optString("content", "")
+                    val nextHasUrls = extractDownloadableUrls(nextContent, strictOnly = true).isNotEmpty()
+
+                    if (!nextHasFiles && !nextHasUrls && sameAuthor && deltaMs in 0L..30_000L) {
+                        tagList.addAll(extractForwardTags(nextContent, isForwardOrAttachment = true))
+                    }
+                }
+            }
+
+            val userTags = tagList.toList()
+            if (userTags.isNotEmpty()) appliedUserTags.addAll(userTags)
+
             collectFromMessageLike(msg, userTags)
             // Forwarded message snapshots (Discord Forward feature)
             if (snapshots != null) {
-                for (i in 0 until snapshots.length()) {
-                    val snapMsg = snapshots.optJSONObject(i)?.optJSONObject("message") ?: continue
+                for (j in 0 until snapshots.length()) {
+                    val snapMsg = snapshots.optJSONObject(j)?.optJSONObject("message") ?: continue
                     collectFromMessageLike(snapMsg, userTags)
                 }
             }
@@ -415,10 +449,11 @@ object InboxManager {
         }
 
         val now = System.currentTimeMillis()
+        val tagHint = if (appliedUserTags.isNotEmpty()) " · 标签：${appliedUserTags.joinToString("/")}" else ""
         val note = if (list.isEmpty()) {
             "检查 ${allMessages.size} 条消息，无新附件"
         } else {
-            summary.formatMessage()
+            summary.formatMessage() + tagHint
         }
         prefs(context).edit()
             .apply { if (maxSnowflakeStr.isNotBlank()) putString(KEY_DC_LAST_MSG, maxSnowflakeStr) }
