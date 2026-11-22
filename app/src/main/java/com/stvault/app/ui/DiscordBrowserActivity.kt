@@ -62,9 +62,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
         zoomIndex = prefs.getInt("dc_web_zoom_idx", 1).coerceIn(0, zoomSteps.lastIndex)
 
         binding.btnWebClose.setOnClickListener { finish() }
-        binding.btnWebBack.setOnClickListener {
-            if (binding.webDiscord.canGoBack()) binding.webDiscord.goBack() else finish()
-        }
+        binding.btnWebBack.setOnClickListener { handleSmartBack() }
         binding.btnWebReload.setOnClickListener { binding.webDiscord.reload() }
         binding.btnWebCommands.setOnClickListener { showQuickCommandsSheet() }
         binding.btnWebSidebar.setOnClickListener {
@@ -83,11 +81,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (binding.webDiscord.canGoBack()) {
-                    binding.webDiscord.goBack()
-                } else {
-                    finish()
-                }
+                handleSmartBack()
             }
         })
 
@@ -218,6 +212,40 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 showQuickCommandsSheet()
             } else {
                 sendDiscordCommand(active)
+            }
+        }
+    }
+
+    private fun handleSmartBack() {
+        val js = """
+            (function() {
+              try {
+                var layer = document.querySelector('div[class*="chatLayerWrapper_"]');
+                if (layer && layer.getBoundingClientRect().width > 40) {
+                  var closeBtn = layer.querySelector('[aria-label="关闭"], [aria-label="Close"], [aria-label="关闭帖子"], [aria-label="Close Thread"], [class*="closeButton_"]');
+                  if (!closeBtn) {
+                    var btns = layer.querySelectorAll('section[class*="title_"] div[class*="toolbar_"] [role="button"], section[class*="title_"] div[class*="toolbar_"] button');
+                    if (btns && btns.length > 0) closeBtn = btns[btns.length - 1];
+                  }
+                  if (closeBtn) {
+                    closeBtn.click();
+                    return 'CLOSED_THREAD';
+                  }
+                  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+                  return 'CLOSED_THREAD';
+                }
+                return 'NO_THREAD';
+              } catch (e) {
+                return 'NO_THREAD';
+              }
+            })();
+        """.trimIndent()
+        binding.webDiscord.evaluateJavascript(js) { res ->
+            if (res?.contains("CLOSED_THREAD") == true) return@evaluateJavascript
+            if (binding.webDiscord.canGoBack()) {
+                binding.webDiscord.goBack()
+            } else {
+                finish()
             }
         }
     }
