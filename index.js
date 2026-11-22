@@ -223,12 +223,15 @@
     }
 
     async function connect() {
+        log('正在初始化本机 MCP 通道...');
         const api = (await hostReady()).api.mcp;
         await forgetOldServers();
 
         for (const port of CANDIDATE_PORTS) {
             let created = null;
             try {
+                setStatus('正在探测端口 ' + port + '...', '');
+                log('探测端口 ' + port + '...');
                 created = await api.servers.create({
                     displayName: DISPLAY_NAME,
                     endpoint: 'http://127.0.0.1:' + port + '/mcp',
