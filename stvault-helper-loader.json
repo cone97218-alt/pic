@@ -3,8 +3,8 @@
   "id": "stvault-bridge-hotloader",
   "name": "酒馆匣互联（热更新）",
   "enabled": true,
-  "info": "自动加载最新版酒馆匣互联面板，免手动更新扩展。",
-  "content": "(async () => {\n  const urls = [\n    'https://cdn.jsdelivr.net/gh/cone97218-alt/pic@main/index.js?t=' + Date.now(),\n    'https://raw.githubusercontent.com/cone97218-alt/pic/main/index.js?t=' + Date.now()\n  ];\n  for (const url of urls) {\n    try {\n      const res = await fetch(url, { cache: 'no-store' });\n      if (!res.ok) continue;\n      const code = await res.text();\n      if (code && code.includes('stvault_ping')) {\n        new Function(code)();\n        return;\n      }\n    } catch (_) {}\n  }\n})();",
+  "info": "自动加载最新版酒馆匣互联面板（在 TT 扩展面板中打开），免手动更新。",
+  "content": "(async () => {\n  const w = (() => {\n    try { if (window.__TAURITAVERN__ || window.SillyTavern) return window; } catch (_) {}\n    try { if (window.parent && (window.parent.__TAURITAVERN__ || window.parent.SillyTavern)) return window.parent; } catch (_) {}\n    try { if (window.top && (window.top.__TAURITAVERN__ || window.top.SillyTavern)) return window.top; } catch (_) {}\n    return window;\n  })();\n  const toast = (type, msg) => { try { w.toastr && w.toastr[type] && w.toastr[type](msg, '酒馆匣互联'); } catch (_) {} };\n  const urls = [\n    'https://raw.githubusercontent.com/cone97218-alt/pic/main/index.js?t=' + Date.now(),\n    'https://cdn.jsdelivr.net/gh/cone97218-alt/pic@main/index.js?t=' + Date.now()\n  ];\n  let lastErr = '';\n  for (const url of urls) {\n    try {\n      const res = await (w.fetch || fetch)(url, { cache: 'no-store' });\n      if (!res.ok) { lastErr = 'HTTP ' + res.status; continue; }\n      const code = await res.text();\n      if (code && code.includes('getMainWin')) {\n        (new w.Function(code))();\n        toast('success', '已加载，请在 TT 扩展面板中打开「酒馆匣互联」');\n        return;\n      }\n      lastErr = '远端缓存尚未刷新';\n    } catch (e) { lastErr = String(e && e.message ? e.message : e); }\n  }\n  toast('error', '加载失败（' + lastErr + '），请检查网络或改用原生扩展');\n})();",
   "button": {
     "enabled": false,
     "buttons": []

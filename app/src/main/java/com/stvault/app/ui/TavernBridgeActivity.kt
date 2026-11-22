@@ -344,36 +344,49 @@ class TavernBridgeActivity : AppCompatActivity() {
 
         val HELPER_LOADER_JS = """
 (async () => {
+  const w = (() => {
+    try { if (window.__TAURITAVERN__ || window.SillyTavern) return window; } catch (_) {}
+    try { if (window.parent && (window.parent.__TAURITAVERN__ || window.parent.SillyTavern)) return window.parent; } catch (_) {}
+    try { if (window.top && (window.top.__TAURITAVERN__ || window.top.SillyTavern)) return window.top; } catch (_) {}
+    return window;
+  })();
+  const toast = (type, msg) => { try { w.toastr && w.toastr[type] && w.toastr[type](msg, '酒馆匣互联'); } catch (_) {} };
   const urls = [
-    'https://cdn.jsdelivr.net/gh/cone97218-alt/pic@main/index.js?t=' + Date.now(),
-    'https://raw.githubusercontent.com/cone97218-alt/pic/main/index.js?t=' + Date.now()
+    'https://raw.githubusercontent.com/cone97218-alt/pic/main/index.js?t=' + Date.now(),
+    'https://cdn.jsdelivr.net/gh/cone97218-alt/pic@main/index.js?t=' + Date.now()
   ];
+  let lastErr = '';
   for (const url of urls) {
     try {
-      const res = await fetch(url, { cache: 'no-store' });
-      if (!res.ok) continue;
+      const res = await (w.fetch || fetch)(url, { cache: 'no-store' });
+      if (!res.ok) { lastErr = 'HTTP ' + res.status; continue; }
       const code = await res.text();
-      if (code && code.includes('stvault_ping')) {
-        new Function(code)();
+      if (code && code.includes('getMainWin')) {
+        (new w.Function(code))();
+        toast('success', '已加载，请在 TT 扩展面板中打开「酒馆匣互联」');
         return;
       }
-    } catch (_) {}
+      lastErr = '远端缓存尚未刷新';
+    } catch (e) { lastErr = String(e && e.message ? e.message : e); }
   }
+  toast('error', '加载失败（' + lastErr + '），请检查网络或改用原生扩展');
 })();
         """.trimIndent()
 
-        val HELPER_SCRIPT_JSON = """
-{
-  "type": "script",
-  "id": "stvault-bridge-hotloader",
-  "name": "酒馆匣互联（热更新）",
-  "enabled": true,
-  "info": "自动加载最新版酒馆匣互联面板，免手动更新扩展。",
-  "content": "(async () => {\n  const urls = [\n    'https://cdn.jsdelivr.net/gh/cone97218-alt/pic@main/index.js?t=' + Date.now(),\n    'https://raw.githubusercontent.com/cone97218-alt/pic/main/index.js?t=' + Date.now()\n  ];\n  for (const url of urls) {\n    try {\n      const res = await fetch(url, { cache: 'no-store' });\n      if (!res.ok) continue;\n      const code = await res.text();\n      if (code && code.includes('stvault_ping')) {\n        new Function(code)();\n        return;\n      }\n    } catch (_) {}\n  }\n})();",
-  "button": { "enabled": false, "buttons": [] },
-  "data": {}
-}
-        """.trimIndent()
+        val HELPER_SCRIPT_JSON: String
+            get() = org.json.JSONObject().apply {
+                put("type", "script")
+                put("id", "stvault-bridge-hotloader")
+                put("name", "酒馆匣互联（热更新）")
+                put("enabled", true)
+                put("info", "自动加载最新版酒馆匣互联面板（在 TT 扩展面板中打开），免手动更新。")
+                put("content", HELPER_LOADER_JS)
+                put("button", org.json.JSONObject().apply {
+                    put("enabled", false)
+                    put("buttons", org.json.JSONArray())
+                })
+                put("data", org.json.JSONObject())
+            }.toString(2)
 
         fun open(ctx: Context) {
             ctx.startActivity(Intent(ctx, TavernBridgeActivity::class.java))
