@@ -3223,17 +3223,37 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyBatchCategoryDelta(ids: List<String>, added: Set<String>, removed: Set<String>) {
         lifecycleScope.launch {
-            withContext(Dispatchers.IO) {
+            val targetCount = withContext(Dispatchers.IO) {
                 if (activeWorkspace == "themes") {
-                    repo.batchDeltaUpdateSourceCategories(ids, added, removed)
+                    val fold = prefs.getBoolean("fold_theme_variants", true)
+                    val expanded = if (fold) {
+                        ids.flatMap { id ->
+                            val s = repo.getSourceById(id)
+                            if (s != null && s.seriesKey.isNotBlank()) {
+                                repo.getVariantsForTheme(s.seriesKey).map { it.id }
+                            } else listOf(id)
+                        }.distinct()
+                    } else ids
+                    repo.batchDeltaUpdateSourceCategories(expanded, added, removed)
+                    expanded.size
                 } else {
-                    libRepo.batchDeltaUpdateCharacterCategories(ids, added, removed)
+                    val fold = prefs.getBoolean("fold_versions", true)
+                    val expanded = if (fold) {
+                        ids.flatMap { id ->
+                            val c = libRepo.getCharacterById(id)
+                            if (c != null && c.seriesKey.isNotBlank()) {
+                                libRepo.getCharactersInSeries(c.seriesKey).map { it.id }
+                            } else listOf(id)
+                        }.distinct()
+                    } else ids
+                    libRepo.batchDeltaUpdateCharacterCategories(expanded, added, removed)
+                    expanded.size
                 }
             }
             val msg = when {
-                added.isEmpty() && removed.isNotEmpty() -> "已从 ${ids.size} 项移除 ${removed.size} 个分类"
-                added.isNotEmpty() && removed.isEmpty() -> "已为 ${ids.size} 项添加 ${added.size} 个分类"
-                else -> "已为 ${ids.size} 项更新分类"
+                added.isEmpty() && removed.isNotEmpty() -> "已从 $targetCount 项移除 ${removed.size} 个分类"
+                added.isNotEmpty() && removed.isEmpty() -> "已为 $targetCount 项添加 ${added.size} 个分类"
+                else -> "已为 $targetCount 项更新分类"
             }
             toast(msg)
             batchSelectedIds.clear()
