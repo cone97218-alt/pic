@@ -105,6 +105,29 @@ class DuplicateCleanerActivity : AppCompatActivity() {
         }
     }
 
+    private fun mergeClusterAsThemeSeries(cluster: DuplicateCluster) {
+        val suggested = cluster.items.first().name
+        val ids = cluster.items.map { it.id }
+        VaultSheets.input(
+            ctx = this,
+            title = "归入同系列美化",
+            message = "合并后在美化列表仅占 1 行，点开详情或预览页可自由切换各配色变体。",
+            hint = "输入系列名称",
+            initialValue = suggested,
+            confirmText = "归入"
+        ) { name ->
+            val clean = name.trim()
+            if (clean.isEmpty()) return@input
+            lifecycleScope.launch {
+                withContext(Dispatchers.IO) {
+                    vaultRepo.mergeThemeSeries(ids, clean)
+                }
+                toast("已归入「$clean」系列")
+                rescan()
+            }
+        }
+    }
+
     private fun mergeClusterAsVersions(cluster: DuplicateCluster) {
         val suggested = cluster.items.first().name
         val ids = cluster.items.map { it.id }
@@ -293,7 +316,9 @@ class DuplicateCleanerActivity : AppCompatActivity() {
                 rescan()
             }
             addBtn("手动删") { pickItemToDelete(c) }
-            if (c.module != "themes") {
+            if (c.module == "themes") {
+                addBtn("归入同系列", bold = true) { mergeClusterAsThemeSeries(c) }
+            } else {
                 addBtn("合并版本", bold = true) { mergeClusterAsVersions(c) }
             }
             addBtn("保留最新", bold = true) { keepNewestOnly(c) }

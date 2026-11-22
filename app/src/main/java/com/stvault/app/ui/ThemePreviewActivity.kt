@@ -86,7 +86,9 @@ class ThemePreviewActivity : AppCompatActivity() {
         binding.btnPreviewInstall.setOnClickListener { showInstallToTavernSheet() }
         binding.btnVariantPrev.setOnClickListener { stepVariant(-1) }
         binding.btnVariantNext.setOnClickListener { stepVariant(1) }
-        binding.btnVariantPicker.setOnClickListener { showVariantPickerSheet() }
+        binding.tvPreviewTitle.setOnClickListener {
+            if (siblingVariants.size > 1) showVariantPickerSheet()
+        }
 
         val web = binding.webPreview
         // Eliminate white flash on initial load
@@ -223,14 +225,15 @@ class ThemePreviewActivity : AppCompatActivity() {
 
     private fun updateVariantBar() {
         if (siblingVariants.size <= 1) {
-            binding.layoutVariantBar.visibility = View.GONE
+            binding.btnVariantPrev.visibility = View.GONE
+            binding.btnVariantNext.visibility = View.GONE
+            binding.tvPreviewTitle.text = currentTitle
             return
         }
-        binding.layoutVariantBar.visibility = View.VISIBLE
+        binding.btnVariantPrev.visibility = View.VISIBLE
+        binding.btnVariantNext.visibility = View.VISIBLE
         val idx = siblingVariants.indexOfFirst { it.id == currentSourceId }.coerceAtLeast(0)
-        val cur = siblingVariants[idx]
-        val lbl = cur.variantTag.ifBlank { cur.name }
-        binding.btnVariantPicker.text = "$lbl (${idx + 1}/${siblingVariants.size}) ▾"
+        binding.tvPreviewTitle.text = "$currentTitle (${idx + 1}/${siblingVariants.size}) ▾"
     }
 
     private fun stepVariant(delta: Int) {

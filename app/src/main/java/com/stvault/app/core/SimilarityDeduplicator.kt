@@ -57,8 +57,9 @@ object SimilarityDeduplicator {
             DedupCandidate(
                 id = s.id,
                 name = s.name,
-                meta = "图床 ${s.urls.size}",
-                timestamp = s.scannedAt
+                meta = if (s.urls.isEmpty()) "纯样式" else "图床 ${s.urls.size}",
+                timestamp = s.scannedAt,
+                seriesKey = s.seriesKey
             )
         }
         result.addAll(findClusters(ctx, "themes", "美化", themeItems))

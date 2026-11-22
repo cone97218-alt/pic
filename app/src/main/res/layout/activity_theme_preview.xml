@@ -5,26 +5,55 @@
     android:background="@color/bg"
     android:orientation="vertical">
 
-    <!-- Compact Top Bar -->
+    <!-- Unified Compact Top Bar (Title doubles as Variant Switcher when >1 variant exists) -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="48dp"
         android:background="@color/surface"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingHorizontal="12dp">
+        android:paddingHorizontal="8dp">
+
+        <TextView
+            android:id="@+id/btnVariantPrev"
+            android:layout_width="28dp"
+            android:layout_height="34dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="‹"
+            android:textColor="@color/text_primary"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
 
         <TextView
             android:id="@+id/tvPreviewTitle"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:clickable="true"
             android:ellipsize="end"
+            android:focusable="true"
+            android:paddingHorizontal="4dp"
             android:singleLine="true"
             android:text="美化预览"
             android:textColor="@color/text_primary"
-            android:textSize="14.5sp"
+            android:textSize="14sp"
             android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/btnVariantNext"
+            android:layout_width="28dp"
+            android:layout_height="34dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="›"
+            android:textColor="@color/text_primary"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnPreviewInstall"
@@ -34,7 +63,7 @@
             android:insetTop="0dp"
             android:insetBottom="0dp"
             android:minWidth="0dp"
-            android:paddingHorizontal="7dp"
+            android:paddingHorizontal="6dp"
             android:text="装入"
             android:textColor="@color/text_primary"
             android:textSize="12.5sp"
@@ -48,7 +77,7 @@
             android:insetTop="0dp"
             android:insetBottom="0dp"
             android:minWidth="0dp"
-            android:paddingHorizontal="7dp"
+            android:paddingHorizontal="6dp"
             android:text="设置"
             android:textColor="@color/text_muted"
             android:textSize="12.5sp" />
@@ -61,7 +90,7 @@
             android:insetTop="0dp"
             android:insetBottom="0dp"
             android:minWidth="0dp"
-            android:paddingHorizontal="7dp"
+            android:paddingHorizontal="6dp"
             android:text="关闭"
             android:textColor="@color/accent"
             android:textSize="12.5sp" />
@@ -71,60 +100,6 @@
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:background="@color/border" />
-
-    <!-- Slim Variant Switcher Bar (only visible when >1 variant in same series) -->
-    <LinearLayout
-        android:id="@+id/layoutVariantBar"
-        android:layout_width="match_parent"
-        android:layout_height="36dp"
-        android:background="@color/surface"
-        android:gravity="center"
-        android:orientation="horizontal"
-        android:paddingHorizontal="12dp"
-        android:visibility="gone">
-
-        <TextView
-            android:id="@+id/btnVariantPrev"
-            android:layout_width="36dp"
-            android:layout_height="32dp"
-            android:clickable="true"
-            android:focusable="true"
-            android:gravity="center"
-            android:text="‹"
-            android:textColor="@color/text_primary"
-            android:textSize="18sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/btnVariantPicker"
-            android:layout_width="wrap_content"
-            android:layout_height="26dp"
-            android:layout_marginHorizontal="8dp"
-            android:background="@drawable/bg_pill_accent"
-            android:clickable="true"
-            android:ellipsize="end"
-            android:focusable="true"
-            android:gravity="center"
-            android:maxWidth="220dp"
-            android:paddingHorizontal="12dp"
-            android:singleLine="true"
-            android:text="默认 (1/1) ▾"
-            android:textColor="@color/text_primary"
-            android:textSize="12sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/btnVariantNext"
-            android:layout_width="36dp"
-            android:layout_height="32dp"
-            android:clickable="true"
-            android:focusable="true"
-            android:gravity="center"
-            android:text="›"
-            android:textColor="@color/text_primary"
-            android:textSize="18sp"
-            android:textStyle="bold" />
-    </LinearLayout>
 
     <FrameLayout
         android:layout_width="match_parent"
