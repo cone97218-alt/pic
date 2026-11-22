@@ -41,8 +41,25 @@
         connected: false,
         busy: false,
         callMode: null,
-        pollTimer: null
+        pollTimer: null,
+        pollFailCount: 0,
+        pushedCache: {} // kind -> { ts: number, done: Set<string> }
     };
+
+    function getCheckpointSet(kind) {
+        const now = Date.now();
+        let entry = state.pushedCache[kind];
+        if (!entry || now - entry.ts > 30 * 60 * 1000) {
+            entry = { ts: now, done: new Set() };
+            state.pushedCache[kind] = entry;
+        }
+        entry.ts = now;
+        return entry.done;
+    }
+
+    function clearCheckpoint(kind) {
+        delete state.pushedCache[kind];
+    }
 
     function host() {
         const v = mainWin.__TAURITAVERN__;
@@ -180,6 +197,18 @@
         return unwrapToolResult(out);
     }
 
+    async function callToolWithRetry(name, args) {
+        try {
+            return await callTool(name, args);
+        } catch (err) {
+            log('通道短暂波动，正在自动重连...');
+            setStatus('通道波动，正在自动重连...', '');
+            await new Promise((r) => setTimeout(r, 600));
+            await connect();
+            return await callTool(name, args);
+        }
+    }
+
     async function forgetOldServers() {
         try {
             const api = host().api.mcp;
@@ -315,23 +344,23 @@
     async function pushBytesToVault(kind, fileName, bytes) {
         if (bytes.length <= FAST_LIMIT_BYTES) {
             try {
-                return await callTool('stvault_push_fast', { kind, fileName, data: bytesToBase64(bytes) });
+                return await callToolWithRetry('stvault_push_fast', { kind, fileName, data: bytesToBase64(bytes) });
             } catch (_) {}
         }
-        const begin = await callTool('stvault_push_begin', { kind, fileName, bytes: bytes.length });
+        const begin = await callToolWithRetry('stvault_push_begin', { kind, fileName, bytes: bytes.length });
         const opId = begin.opId;
         let idx = 0;
         for (let off = 0; off < bytes.length; off += CHUNK_BYTES) {
             const slice = bytes.subarray(off, Math.min(bytes.length, off + CHUNK_BYTES));
-            await callTool('stvault_push_chunk', { opId, index: idx++, data: bytesToBase64(slice) });
+            await callToolWithRetry('stvault_push_chunk', { opId, index: idx++, data: bytesToBase64(slice) });
         }
-        return callTool('stvault_push_end', { opId });
+        return callToolWithRetry('stvault_push_end', { opId });
     }
 
     async function flushBatch(batch) {
         if (!batch.length) return 0;
         try {
-            const res = await callTool('stvault_push_batch', { items: batch });
+            const res = await callToolWithRetry('stvault_push_batch', { items: batch });
             return (res && typeof res.count === 'number') ? res.count : batch.length;
         } catch (_) {
             let ok = 0;
@@ -346,35 +375,68 @@
     }
 
     async function pushItemsBatched(kind, items, label) {
+        const doneSet = getCheckpointSet(kind);
+        const pending = items.filter((it) => !doneSet.has(it.fileName));
+        const skipped = items.length - pending.length;
+        if (skipped > 0) {
+            log('断点续传：跳过已推 ' + skipped + ' 个，继续推送剩余 ' + pending.length + ' 个' + label);
+        }
+        if (pending.length === 0) {
+            clearCheckpoint(kind);
+            return 0;
+        }
+
         let sent = 0;
         let batch = [];
+        let batchNames = [];
         let batchBytes = 0;
-        for (let i = 0; i < items.length; i++) {
-            const { fileName, bytes } = items[i];
+        let hadError = false;
+
+        async function commitBatch() {
+            if (!batch.length) return;
+            const n = await flushBatch(batch);
+            if (n > 0) {
+                sent += n;
+                for (const fn of batchNames) doneSet.add(fn);
+            } else {
+                hadError = true;
+            }
+            batch = [];
+            batchNames = [];
+            batchBytes = 0;
+        }
+
+        for (let i = 0; i < pending.length; i++) {
+            const { fileName, bytes } = pending[i];
+            const prog = skipped + i + 1;
             if (bytes.length > FAST_LIMIT_BYTES) {
-                if (batch.length) {
-                    sent += await flushBatch(batch);
-                    batch = [];
-                    batchBytes = 0;
+                await commitBatch();
+                setStatus('正在推送' + label + ' ' + prog + '/' + items.length, 'stv-ok');
+                try {
+                    await pushBytesToVault(kind, fileName, bytes);
+                    doneSet.add(fileName);
+                    sent++;
+                } catch (e) {
+                    hadError = true;
+                    log(label + '推送失败（' + fileName + '）：' + (e && e.message ? e.message : String(e)));
                 }
-                setStatus('正在推送' + label + ' ' + (i + 1) + '/' + items.length, 'stv-ok');
-                await pushBytesToVault(kind, fileName, bytes);
-                sent++;
                 continue;
             }
             const b64 = bytesToBase64(bytes);
             if (batch.length >= BATCH_MAX_ITEMS || (batch.length > 0 && batchBytes + b64.length > BATCH_MAX_BYTES)) {
-                setStatus('极速批量推送' + label + ' ' + i + '/' + items.length + '...', 'stv-ok');
-                sent += await flushBatch(batch);
-                batch = [];
-                batchBytes = 0;
+                setStatus('极速批量推送' + label + ' ' + (skipped + i) + '/' + items.length + '...', 'stv-ok');
+                await commitBatch();
             }
             batch.push({ kind, fileName, data: b64 });
+            batchNames.push(fileName);
             batchBytes += b64.length;
         }
         if (batch.length) {
             setStatus('极速批量推送' + label + ' ' + items.length + '/' + items.length + '...', 'stv-ok');
-            sent += await flushBatch(batch);
+            await commitBatch();
+        }
+        if (!hadError && doneSet.size >= items.length) {
+            clearCheckpoint(kind);
         }
         return sent;
     }
@@ -591,13 +653,17 @@
         try {
             await processOutbox();
             const pullRes = await callTool('stvault_pull_poll', {});
+            state.pollFailCount = 0;
             if (pullRes && pullRes.pullKind) {
                 await handlePull(pullRes.pullKind);
             }
         } catch (e) {
-            state.connected = false;
-            setStatus('连接已断开，请重新点「连接酒馆匣」', 'stv-err');
-            if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+            state.pollFailCount++;
+            if (state.pollFailCount >= 2) {
+                state.connected = false;
+                setStatus('连接已断开，请重新点「连接酒馆匣」', 'stv-err');
+                if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+            }
         } finally {
             state.busy = false;
         }

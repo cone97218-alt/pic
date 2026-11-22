@@ -2264,11 +2264,31 @@ class MainActivity : AppCompatActivity() {
 
     private fun enqueueToTavernBridge(kind: String, name: String, fileName: String, bytes: ByteArray) {
         val bridge = com.stvault.app.core.TavernBridgeManager.getInstance(this)
-        if (!bridge.isRunning()) {
-            com.stvault.app.service.TavernBridgeService.start(this)
+        val alreadyInstalled = when (kind) {
+            "theme" -> bridge.isThemeInstalled(name, fileName)
+            "character" -> bridge.isCharacterInstalled(name, fileName)
+            "worldbook" -> bridge.isWorldBookInstalled(name, fileName)
+            "preset" -> bridge.isPresetInstalled(name, fileName)
+            else -> false
         }
-        bridge.enqueueOutbox(kind, name, fileName, bytes)
-        toast("已加入待装入队列，切回 TT 酒馆即可自动装入")
+        fun doEnqueue() {
+            if (!bridge.isRunning()) {
+                try { com.stvault.app.service.TavernBridgeService.start(this) } catch (_: Exception) {}
+                lifecycleScope.launch(Dispatchers.IO) { bridge.startServer() }
+            }
+            bridge.enqueueOutbox(kind, name, fileName, bytes)
+            toast("已加入待装入队列，切回 TT 酒馆即可自动装入")
+        }
+        if (alreadyInstalled) {
+            VaultSheets.confirm(
+                ctx = this,
+                title = "酒馆中已有同名项",
+                message = "「$name」已在酒馆中安装，继续装入将覆盖更新酒馆里的原文件，确定继续吗？",
+                confirmText = "覆盖装入"
+            ) { doEnqueue() }
+        } else {
+            doEnqueue()
+        }
     }
 
     private fun showCharacterActionMenu(c: CharacterRecord) {

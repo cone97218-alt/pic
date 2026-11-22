@@ -264,7 +264,8 @@ class ThemePreviewActivity : AppCompatActivity() {
 
     private fun showInstallToTavernSheet() {
         if (currentSourceId.isBlank() || currentRawText.isBlank()) return
-        fun push(repaired: Boolean) {
+        val bridge = com.stvault.app.core.TavernBridgeManager.getInstance(this)
+        fun doPush(repaired: Boolean) {
             lifecycleScope.launch {
                 try {
                     val (fn, bytes) = withContext(Dispatchers.IO) {
@@ -274,7 +275,6 @@ class ThemePreviewActivity : AppCompatActivity() {
                         val safeName = if (currentFileName.endsWith(".json", ignoreCase = true)) currentFileName else "$currentTitle.json"
                         safeName to outText.toByteArray(Charsets.UTF_8)
                     }
-                    val bridge = com.stvault.app.core.TavernBridgeManager.getInstance(this@ThemePreviewActivity)
                     if (!bridge.isRunning()) {
                         try { com.stvault.app.service.TavernBridgeService.start(this@ThemePreviewActivity) } catch (_: Exception) {}
                         withContext(Dispatchers.IO) { bridge.startServer() }
@@ -286,12 +286,24 @@ class ThemePreviewActivity : AppCompatActivity() {
                 }
             }
         }
+        fun confirmAndPush(repaired: Boolean) {
+            if (bridge.isThemeInstalled(currentTitle, currentFileName)) {
+                VaultSheets.confirm(
+                    ctx = this,
+                    title = "酒馆中已有同名美化",
+                    message = "「$currentTitle」已在酒馆中安装，继续装入将覆盖更新酒馆里的原美化，确定继续吗？",
+                    confirmText = "覆盖装入"
+                ) { doPush(repaired) }
+            } else {
+                doPush(repaired)
+            }
+        }
         VaultSheets.actionList(
             ctx = this,
             title = "装入酒馆 · $currentTitle",
             actions = listOf(
-                SheetAction("推送原版", "保持原始代码直接装入 TT 酒馆") { push(false) },
-                SheetAction("推送图床修复版", "将已缓存图床离线内嵌后再装入") { push(true) }
+                SheetAction("推送原版", "保持原始代码直接装入 TT 酒馆") { confirmAndPush(false) },
+                SheetAction("推送图床修复版", "将已缓存图床离线内嵌后再装入") { confirmAndPush(true) }
             )
         )
     }
