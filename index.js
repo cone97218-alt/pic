@@ -1,13 +1,28 @@
 /**
  * 酒馆匣互联（酒馆匣 <-> TauriTavern）
- * 通过 TT 酒馆自带的本机 MCP 客户端直连 127.0.0.1:8796-8800，
- * 不走云端、无需账号，实现在库状态比对、一键装入与拉取同步。
+ * 同时支持「酒馆助手热更新脚本」与「TT 原生扩展」双模式运行。
+ * 通过 TT 自带本机 MCP 客户端直连 127.0.0.1:8796-8800，不上云、无需账号。
  */
 (function () {
     'use strict';
 
+    function getMainWin() {
+        try { if (window.__TAURITAVERN__ || window.SillyTavern) return window; } catch (_) {}
+        try { if (window.parent && window.parent !== window && (window.parent.__TAURITAVERN__ || window.parent.SillyTavern)) return window.parent; } catch (_) {}
+        try { if (window.top && window.top !== window && (window.top.__TAURITAVERN__ || window.top.SillyTavern)) return window.top; } catch (_) {}
+        return window;
+    }
+
+    const mainWin = getMainWin();
+    const mainDoc = mainWin.document;
+
+    // Prevent double mounting when hot-reloaded or when both extension & helper are active
+    if (mainWin.__STVAULT_BRIDGE_LOADED__ && mainDoc.getElementById('stv_bridge_status')) {
+        return;
+    }
+    mainWin.__STVAULT_BRIDGE_LOADED__ = true;
+
     const DISPLAY_NAME = '酒馆匣互联';
-    const MODULE_NAME = 'stVaultBridge';
     const CANDIDATE_PORTS = [8796, 8797, 8798, 8799, 8800];
     const CHUNK_BYTES = 384 * 1024;
     const FAST_LIMIT_BYTES = 512 * 1024;
@@ -31,7 +46,7 @@
     };
 
     function host() {
-        const v = window.__TAURITAVERN__;
+        const v = mainWin.__TAURITAVERN__;
         if (!v || !v.api || !v.api.mcp) {
             throw new Error('需要 TauriTavern 2.3.0 及以上版本');
         }
@@ -39,27 +54,52 @@
     }
 
     async function hostReady() {
-        const p = (window.__TAURITAVERN__ && window.__TAURITAVERN__.ready) || window.__TAURITAVERN_MAIN_READY__;
+        const p = (mainWin.__TAURITAVERN__ && mainWin.__TAURITAVERN__.ready) || mainWin.__TAURITAVERN_MAIN_READY__;
         if (p && typeof p.then === 'function') {
             try { await p; } catch (_) {}
         }
         return host();
     }
 
+    function contextApi() {
+        try {
+            if (mainWin.SillyTavern && typeof mainWin.SillyTavern.getContext === 'function') {
+                return mainWin.SillyTavern.getContext() || {};
+            }
+        } catch (_) {}
+        return {};
+    }
+
     async function getHeaders() {
-        const mod = await import('../../../../script.js');
-        return mod.getRequestHeaders();
+        const ctx = contextApi();
+        if (typeof ctx.getRequestHeaders === 'function') {
+            return Object.assign({}, ctx.getRequestHeaders());
+        }
+        try {
+            const mod = await import('../../../../script.js');
+            if (typeof mod.getRequestHeaders === 'function') return Object.assign({}, mod.getRequestHeaders());
+        } catch (_) {}
+        return {};
     }
 
     async function saveStSettings() {
+        const ctx = contextApi();
+        if (typeof ctx.saveSettingsDebounced === 'function') {
+            ctx.saveSettingsDebounced();
+            return;
+        }
         try {
             const mod = await import('../../../../script.js');
             if (typeof mod.saveSettingsDebounced === 'function') mod.saveSettingsDebounced();
         } catch (_) {}
     }
 
+    function mainFetch(url, opts) {
+        return mainWin.fetch(url, opts);
+    }
+
     function setStatus(text, cls) {
-        const el = document.getElementById('stv_bridge_status');
+        const el = mainDoc.getElementById('stv_bridge_status');
         if (!el) return;
         el.textContent = text;
         el.classList.remove('stv-ok', 'stv-err');
@@ -67,7 +107,7 @@
     }
 
     function log(msg) {
-        const box = document.getElementById('stv_bridge_log');
+        const box = mainDoc.getElementById('stv_bridge_log');
         if (!box) return;
         const line = '[' + new Date().toLocaleTimeString() + '] ' + msg + '\n';
         box.textContent = (line + box.textContent).slice(0, 6000);
@@ -86,6 +126,32 @@
         const out = new Uint8Array(bin.length);
         for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
         return out;
+    }
+
+    function asObject(v) {
+        if (typeof v === 'string') {
+            try {
+                const p = JSON.parse(v);
+                return (p && typeof p === 'object' && !Array.isArray(p)) ? p : null;
+            } catch (_) { return null; }
+        }
+        return (v && typeof v === 'object' && !Array.isArray(v)) ? v : null;
+    }
+
+    function asArray(v) {
+        if (Array.isArray(v)) return v;
+        if (typeof v === 'string') {
+            try {
+                const p = JSON.parse(v);
+                return Array.isArray(p) ? p : [];
+            } catch (_) { return []; }
+        }
+        return [];
+    }
+
+    function betterArray(a, b) {
+        const pa = asArray(a);
+        return pa.length > 0 ? pa : asArray(b);
     }
 
     function unwrapToolResult(res) {
@@ -116,7 +182,7 @@
                 state.callMode = 'legacy';
             }
         }
-        const executionCallId = crypto.randomUUID();
+        const executionCallId = mainWin.crypto.randomUUID();
         await h.invoke.safeInvoke('start_legacy_mcp_tool_call', { dto: { executionCallId } });
         const out = await h.invoke.safeInvoke('call_legacy_mcp_tool', {
             dto: { executionCallId, toolId: 'mcp/' + state.registrationId + ':' + name, argumentsJson }
@@ -188,41 +254,6 @@
         throw new Error('未找到酒馆匣本机通道');
     }
 
-    function asObject(v) {
-        if (typeof v === 'string') {
-            try {
-                const p = JSON.parse(v);
-                return (p && typeof p === 'object' && !Array.isArray(p)) ? p : null;
-            } catch (_) { return null; }
-        }
-        return (v && typeof v === 'object' && !Array.isArray(v)) ? v : null;
-    }
-
-    function asArray(v) {
-        if (Array.isArray(v)) return v;
-        if (typeof v === 'string') {
-            try {
-                const p = JSON.parse(v);
-                return Array.isArray(p) ? p : [];
-            } catch (_) { return []; }
-        }
-        return [];
-    }
-
-    function betterArray(a, b) {
-        const pa = asArray(a);
-        return pa.length > 0 ? pa : asArray(b);
-    }
-
-    function contextApi() {
-        try {
-            if (window.SillyTavern && typeof window.SillyTavern.getContext === 'function') {
-                return window.SillyTavern.getContext() || {};
-            }
-        } catch (_) {}
-        return {};
-    }
-
     function mergedSettings(raw) {
         const api = asObject(raw) || {};
         const nested = asObject(api.settings) || {};
@@ -240,7 +271,7 @@
         try {
             const headers = await getHeaders();
             headers['Content-Type'] = 'application/json';
-            const resp = await fetch('/api/settings/get', { method: 'POST', headers, body: '{}' });
+            const resp = await mainFetch('/api/settings/get', { method: 'POST', headers, body: '{}' });
             if (resp.ok) data = await resp.json();
         } catch (_) {}
         return mergedSettings(data);
@@ -250,7 +281,7 @@
         try {
             const headers = await getHeaders();
             headers['Content-Type'] = 'application/json';
-            const resp = await fetch('/api/characters/all', { method: 'POST', headers, body: '{}' });
+            const resp = await mainFetch('/api/characters/all', { method: 'POST', headers, body: '{}' });
             if (resp.ok) {
                 const data = await resp.json();
                 if (Array.isArray(data) && data.length > 0) return data;
@@ -294,14 +325,8 @@
     async function pushBytesToVault(kind, fileName, bytes) {
         if (bytes.length <= FAST_LIMIT_BYTES) {
             try {
-                return await callTool('stvault_push_fast', {
-                    kind,
-                    fileName,
-                    data: bytesToBase64(bytes)
-                });
-            } catch (_) {
-                // Fallback to legacy chunked push if server is older
-            }
+                return await callTool('stvault_push_fast', { kind, fileName, data: bytesToBase64(bytes) });
+            } catch (_) {}
         }
         const begin = await callTool('stvault_push_begin', { kind, fileName, bytes: bytes.length });
         const opId = begin.opId;
@@ -319,7 +344,6 @@
             const res = await callTool('stvault_push_batch', { items: batch });
             return (res && typeof res.count === 'number') ? res.count : batch.length;
         } catch (_) {
-            // Fallback one-by-one if older app doesn't have stvault_push_batch
             let ok = 0;
             for (const it of batch) {
                 try {
@@ -397,7 +421,6 @@
             }));
             totalSent += await pushItemsBatched('theme', prepared, '美化');
         }
-        // Pull characters BEFORE worldbooks so embedded worldbooks are deduplicated automatically
         if (kind === 'all' || kind === 'character') {
             const chars = (await fetchStCharacters()).filter(c => c && c.avatar);
             log('读取到角色卡 ' + chars.length + ' 张，3 路并发推送中...');
@@ -406,7 +429,7 @@
             let doneChars = 0;
             await runPool(chars, 3, async (c) => {
                 try {
-                    const r = await fetch('/api/characters/export', {
+                    const r = await mainFetch('/api/characters/export', {
                         method: 'POST', headers,
                         body: JSON.stringify({ format: 'png', avatar_url: c.avatar })
                     });
@@ -431,7 +454,7 @@
             const prepared = [];
             await runPool(names, 4, async (name) => {
                 try {
-                    const r = await fetch('/api/worldinfo/get', { method: 'POST', headers, body: JSON.stringify({ name }) });
+                    const r = await mainFetch('/api/worldinfo/get', { method: 'POST', headers, body: JSON.stringify({ name }) });
                     if (!r.ok) { failCount++; return; }
                     const wb = await r.json();
                     wb.name = wb.name || name;
@@ -497,7 +520,7 @@
             headers['Content-Type'] = 'application/json';
             const themeObj = JSON.parse(text());
             themeObj.name = themeObj.name || stripExt(item.name || item.fileName);
-            const r = await fetch('/api/themes/save', { method: 'POST', headers, body: JSON.stringify(themeObj) });
+            const r = await mainFetch('/api/themes/save', { method: 'POST', headers, body: JSON.stringify(themeObj) });
             if (!r.ok) throw new Error('保存美化失败');
             return;
         }
@@ -508,7 +531,7 @@
             const form = new FormData();
             form.append('avatar', new Blob([bytes], { type: isJson ? 'application/json' : 'image/png' }), item.fileName);
             form.append('file_type', isJson ? 'json' : 'png');
-            const r = await fetch('/api/characters/import', { method: 'POST', headers, body: form });
+            const r = await mainFetch('/api/characters/import', { method: 'POST', headers, body: form });
             if (!r.ok) throw new Error('导入角色卡失败');
             return;
         }
@@ -518,14 +541,14 @@
             const fn = /\.json$/i.test(item.fileName) ? item.fileName : (item.fileName + '.json');
             const form = new FormData();
             form.append('avatar', new Blob([bytes], { type: 'application/json' }), fn);
-            const r = await fetch('/api/worldinfo/import', { method: 'POST', headers, body: form });
+            const r = await mainFetch('/api/worldinfo/import', { method: 'POST', headers, body: form });
             if (!r.ok) throw new Error('导入世界书失败');
             return;
         }
         if (item.kind === 'preset') {
             headers['Content-Type'] = 'application/json';
             const preset = JSON.parse(text());
-            const r = await fetch('/api/presets/save', {
+            const r = await mainFetch('/api/presets/save', {
                 method: 'POST', headers,
                 body: JSON.stringify({ name: stripExt(item.name || item.fileName), apiId: 'openai', preset })
             });
@@ -533,19 +556,21 @@
             return;
         }
         if (item.kind === 'regex') {
-            const extMod = await import('../../../extensions.js');
+            const ctx = contextApi();
+            const settings = ctx.extensionSettings || ctx.extension_settings;
+            if (!settings) throw new Error('无法访问正则设置');
             const parsed = JSON.parse(text());
             const list = Array.isArray(parsed) ? parsed : [parsed];
-            const cur = Array.isArray(extMod.extension_settings.regex) ? extMod.extension_settings.regex.slice() : [];
+            const cur = Array.isArray(settings.regex) ? settings.regex.slice() : [];
             for (const s of list) cur.push(s);
-            extMod.extension_settings.regex = cur;
+            settings.regex = cur;
             await saveStSettings();
             return;
         }
         if (item.kind === 'qr') {
             headers['Content-Type'] = 'application/json';
             const qr = JSON.parse(text());
-            const r = await fetch('/api/quick-replies/save', { method: 'POST', headers, body: JSON.stringify(qr) });
+            const r = await mainFetch('/api/quick-replies/save', { method: 'POST', headers, body: JSON.stringify(qr) });
             if (!r.ok) throw new Error('保存快速回复失败');
         }
     }
@@ -567,13 +592,11 @@
                 log('装入失败（' + item.name + '）：' + e.message);
             }
         }
-        if (okCount > 0) {
-            await syncInventory();
-        }
+        if (okCount > 0) await syncInventory();
     }
 
     async function pollOnce() {
-        if (!state.connected || state.busy || document.visibilityState !== 'visible') return;
+        if (!state.connected || state.busy || mainDoc.visibilityState !== 'visible') return;
         state.busy = true;
         try {
             await processOutbox();
@@ -593,6 +616,22 @@
     function startPolling() {
         if (state.pollTimer) clearInterval(state.pollTimer);
         state.pollTimer = setInterval(pollOnce, 3000);
+    }
+
+    function injectStyles() {
+        if (mainDoc.getElementById('stv_bridge_inline_style')) return;
+        const st = mainDoc.createElement('style');
+        st.id = 'stv_bridge_inline_style';
+        st.textContent = `
+.stv-bridge-box{display:flex;flex-direction:column;gap:8px;padding:6px 2px}
+.stv-bridge-status{font-size:12.5px;padding:6px 10px;border-radius:8px;background:rgba(128,128,128,.12);opacity:.9}
+.stv-bridge-status.stv-ok{background:rgba(22,163,74,.16);color:#22c55e}
+.stv-bridge-status.stv-err{background:rgba(220,38,38,.16);color:#f87171}
+.stv-bridge-row{display:flex;flex-wrap:wrap;gap:6px}
+.stv-bridge-row .menu_button{flex:1 1 42%;justify-content:center;text-align:center;padding:7px 10px;font-size:12.5px}
+.stv-bridge-log{font-size:11px;line-height:1.45;max-height:120px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;padding:8px;border-radius:8px;background:rgba(0,0,0,.18);opacity:.8}
+`;
+        (mainDoc.head || mainDoc.documentElement).appendChild(st);
     }
 
     function buildHtml() {
@@ -621,53 +660,58 @@
     }
 
     function mount() {
-        const container = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
-        if (!container || document.getElementById('stv_bridge_status')) return;
-        const wrap = document.createElement('div');
+        const container = mainDoc.getElementById('extensions_settings2') || mainDoc.getElementById('extensions_settings');
+        if (!container || mainDoc.getElementById('stv_bridge_status')) return;
+        injectStyles();
+        const wrap = mainDoc.createElement('div');
         wrap.innerHTML = buildHtml();
         container.appendChild(wrap);
 
-        document.getElementById('stv_btn_connect').addEventListener('click', async () => {
+        mainDoc.getElementById('stv_btn_connect').addEventListener('click', async () => {
             setStatus('正在连接酒馆匣...', '');
             try { await connect(); } catch (e) { log(e.message); }
         });
-        document.getElementById('stv_btn_sync').addEventListener('click', async () => {
+        mainDoc.getElementById('stv_btn_sync').addEventListener('click', async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await syncInventory();
         });
-        document.getElementById('stv_btn_push_themes').addEventListener('click', async () => {
+        mainDoc.getElementById('stv_btn_push_themes').addEventListener('click', async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await handlePull('theme');
         });
-        document.getElementById('stv_btn_push_chars').addEventListener('click', async () => {
+        mainDoc.getElementById('stv_btn_push_chars').addEventListener('click', async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await handlePull('character');
         });
-        document.getElementById('stv_btn_push_wbs').addEventListener('click', async () => {
+        mainDoc.getElementById('stv_btn_push_wbs').addEventListener('click', async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await handlePull('worldbook');
         });
-        document.getElementById('stv_btn_push_presets').addEventListener('click', async () => {
+        mainDoc.getElementById('stv_btn_push_presets').addEventListener('click', async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await handlePull('preset');
         });
-        document.getElementById('stv_btn_receive').addEventListener('click', async () => {
+        mainDoc.getElementById('stv_btn_receive').addEventListener('click', async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await processOutbox();
         });
     }
 
     function init() {
+        if (mainDoc.getElementById('extensions_settings2') || mainDoc.getElementById('extensions_settings')) {
+            mount();
+            return;
+        }
         const timer = setInterval(() => {
-            if (document.getElementById('extensions_settings2') || document.getElementById('extensions_settings')) {
+            if (mainDoc.getElementById('extensions_settings2') || mainDoc.getElementById('extensions_settings')) {
                 clearInterval(timer);
                 mount();
             }
         }, 600);
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
+    if (mainDoc.readyState === 'loading') {
+        mainDoc.addEventListener('DOMContentLoaded', init);
     } else {
         init();
     }

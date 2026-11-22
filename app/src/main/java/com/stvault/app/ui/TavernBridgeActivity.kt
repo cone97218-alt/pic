@@ -14,6 +14,7 @@ import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -34,6 +35,25 @@ class TavernBridgeActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityTavernBridgeBinding
     private lateinit var bridge: TavernBridgeManager
+    private var guideExpanded = false
+
+    private val exportHelperScriptLauncher =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+            if (uri == null) return@registerForActivityResult
+            lifecycleScope.launch {
+                val ok = withContext(Dispatchers.IO) {
+                    try {
+                        contentResolver.openOutputStream(uri)?.use {
+                            it.write(HELPER_SCRIPT_JSON.toByteArray(Charsets.UTF_8))
+                        }
+                        true
+                    } catch (_: Exception) {
+                        false
+                    }
+                }
+                toast(if (ok) "热更新脚本已导出，可导入 TT 酒馆助手" else "导出失败")
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -59,6 +79,19 @@ class TavernBridgeActivity : AppCompatActivity() {
                     }
                 }
             }
+        }
+        binding.btnToggleGuide.setOnClickListener {
+            guideExpanded = !guideExpanded
+            binding.layoutGuideBody.visibility = if (guideExpanded) View.VISIBLE else View.GONE
+            binding.tvGuideChevron.text = if (guideExpanded) "收起 ▴" else "展开 ▾"
+        }
+        binding.btnExportHelperScript.setOnClickListener {
+            exportHelperScriptLauncher.launch("酒馆匣互联_热更新.json")
+        }
+        binding.btnCopyHelperCode.setOnClickListener {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            cm?.setPrimaryClip(ClipData.newPlainText("helper_code", HELPER_LOADER_JS))
+            toast("已复制热更新代码，可在酒馆助手新建脚本粘贴")
         }
         binding.btnCopyExtUrl.setOnClickListener {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
@@ -308,6 +341,39 @@ class TavernBridgeActivity : AppCompatActivity() {
 
     companion object {
         const val EXT_REPO_URL = "https://github.com/cone97218-alt/pic"
+
+        val HELPER_LOADER_JS = """
+(async () => {
+  const urls = [
+    'https://cdn.jsdelivr.net/gh/cone97218-alt/pic@main/index.js?t=' + Date.now(),
+    'https://raw.githubusercontent.com/cone97218-alt/pic/main/index.js?t=' + Date.now()
+  ];
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) continue;
+      const code = await res.text();
+      if (code && code.includes('stvault_ping')) {
+        new Function(code)();
+        return;
+      }
+    } catch (_) {}
+  }
+})();
+        """.trimIndent()
+
+        val HELPER_SCRIPT_JSON = """
+{
+  "type": "script",
+  "id": "stvault-bridge-hotloader",
+  "name": "酒馆匣互联（热更新）",
+  "enabled": true,
+  "info": "自动加载最新版酒馆匣互联面板，免手动更新扩展。",
+  "content": "(async () => {\n  const urls = [\n    'https://cdn.jsdelivr.net/gh/cone97218-alt/pic@main/index.js?t=' + Date.now(),\n    'https://raw.githubusercontent.com/cone97218-alt/pic/main/index.js?t=' + Date.now()\n  ];\n  for (const url of urls) {\n    try {\n      const res = await fetch(url, { cache: 'no-store' });\n      if (!res.ok) continue;\n      const code = await res.text();\n      if (code && code.includes('stvault_ping')) {\n        new Function(code)();\n        return;\n      }\n    } catch (_) {}\n  }\n})();",
+  "button": { "enabled": false, "buttons": [] },
+  "data": {}
+}
+        """.trimIndent()
 
         fun open(ctx: Context) {
             ctx.startActivity(Intent(ctx, TavernBridgeActivity::class.java))

@@ -1,0 +1,13 @@
+{
+  "type": "script",
+  "id": "stvault-bridge-hotloader",
+  "name": "酒馆匣互联（热更新）",
+  "enabled": true,
+  "info": "自动加载最新版酒馆匣互联面板，免手动更新扩展。",
+  "content": "(async () => {\n  const urls = [\n    'https://cdn.jsdelivr.net/gh/cone97218-alt/pic@main/index.js?t=' + Date.now(),\n    'https://raw.githubusercontent.com/cone97218-alt/pic/main/index.js?t=' + Date.now()\n  ];\n  for (const url of urls) {\n    try {\n      const res = await fetch(url, { cache: 'no-store' });\n      if (!res.ok) continue;\n      const code = await res.text();\n      if (code && code.includes('stvault_ping')) {\n        new Function(code)();\n        return;\n      }\n    } catch (_) {}\n  }\n})();",
+  "button": {
+    "enabled": false,
+    "buttons": []
+  },
+  "data": {}
+}
