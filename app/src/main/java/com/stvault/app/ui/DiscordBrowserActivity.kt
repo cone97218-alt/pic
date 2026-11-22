@@ -290,7 +290,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 ctx = this,
                 title = "确认分类标签",
                 message = "可改名或指定目录（如 作者/某某，多个标签用空格隔开；留空则仅囤入）。",
-                initial = suggested,
+                initialValue = suggested,
                 hint = "例如：作者/某某 古风",
                 confirmText = "确认囤入"
             ) { raw ->

@@ -170,7 +170,7 @@ class SettingsActivity : AppCompatActivity() {
                             ctx = this,
                             title = "重命名 / 移动分类",
                             message = "用斜杠 / 分隔层级（如 作者/某某），输入已有路径可自动合并。",
-                            initial = picked.id,
+                            initialValue = picked.id,
                             hint = "例如：作者/某某",
                             confirmText = "保存"
                         ) { raw ->
