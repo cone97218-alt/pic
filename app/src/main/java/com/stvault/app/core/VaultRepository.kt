@@ -387,11 +387,8 @@ class VaultRepository private constructor(private val appContext: Context) {
         synchronized(lock) {
             val source = sourcesMap.remove(sourceId) ?: return null
 
-            try {
-                resolveSourceFile(sourceId, source.category).delete()
-                File(legacySourcesDir, "$sourceId.txt").delete()
-            } catch (_: Exception) {
-            }
+            removedFilesToDelete.add(resolveSourceFile(sourceId, source.category))
+            removedFilesToDelete.add(File(legacySourcesDir, "$sourceId.txt"))
 
             val orphanUrls = mutableListOf<UrlRecord>()
             val iter = urlsMap.entries.iterator()
@@ -429,13 +426,16 @@ class VaultRepository private constructor(private val appContext: Context) {
             refreshStatsLocked()
         }
 
-        for (f in removedFilesToDelete) {
-            try {
-                f.delete()
-            } catch (_: Exception) {
+        // Perform physical file cleanup + index persistence asynchronously so UI updates instantly
+        com.stvault.app.STVaultApp.appScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            for (f in removedFilesToDelete) {
+                try {
+                    if (f.exists()) f.delete()
+                } catch (_: Exception) {
+                }
             }
+            saveIndex()
         }
-        saveIndex()
         return DeleteSourceResult(removedUrls = removedUrls, freedBytes = freedBytes)
     }
 
@@ -1044,9 +1044,55 @@ class VaultRepository private constructor(private val appContext: Context) {
     }
 
     fun batchDeleteSources(ids: List<String>): Int {
+        if (ids.isEmpty()) return 0
+        val idSet = ids.toHashSet()
+        val removedFilesToDelete = mutableListOf<File>()
         var deleted = 0
-        for (id in ids) {
-            if (deleteSource(id) != null) deleted++
+
+        synchronized(lock) {
+            for (id in idSet) {
+                val source = sourcesMap.remove(id) ?: continue
+                deleted++
+                removedFilesToDelete.add(resolveSourceFile(id, source.category))
+                removedFilesToDelete.add(File(legacySourcesDir, "$id.txt"))
+            }
+            if (deleted == 0) return 0
+
+            val orphanUrls = mutableListOf<UrlRecord>()
+            val iter = urlsMap.entries.iterator()
+            while (iter.hasNext()) {
+                val rec = iter.next().value
+                if (rec.sources.removeAll(idSet) && rec.sources.isEmpty()) {
+                    orphanUrls.add(rec)
+                    iter.remove()
+                }
+            }
+
+            if (orphanUrls.isNotEmpty()) {
+                val stillUsedFiles = HashSet<String>()
+                for (rec in urlsMap.values) {
+                    if (rec.file.isNotEmpty()) stillUsedFiles.add(rec.file)
+                }
+                val scheduledFiles = HashSet<String>()
+                for (orphan in orphanUrls) {
+                    if (orphan.file.isNotEmpty() && orphan.file !in stillUsedFiles && scheduledFiles.add(orphan.file)) {
+                        removedFilesToDelete.add(resolveAssetFile(orphan.file, orphan.mime, orphan.url))
+                        removedFilesToDelete.add(File(legacyImagesDir, orphan.file))
+                    }
+                }
+            }
+
+            refreshStatsLocked()
+        }
+
+        com.stvault.app.STVaultApp.appScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            for (f in removedFilesToDelete) {
+                try {
+                    if (f.exists()) f.delete()
+                } catch (_: Exception) {
+                }
+            }
+            saveIndex()
         }
         return deleted
     }

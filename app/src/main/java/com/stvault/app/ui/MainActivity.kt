@@ -1053,6 +1053,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupListeners() {
         // Day/Night Toggle Button
+        binding.btnQuickHoard.setOnClickListener {
+            startActivity(
+                Intent(this, DiscordBrowserActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                }
+            )
+        }
         binding.btnToggleTheme.setOnClickListener {
             toggleTheme()
         }

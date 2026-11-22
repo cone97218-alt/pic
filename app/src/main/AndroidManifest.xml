@@ -66,6 +66,8 @@
             android:name=".ui.DiscordBrowserActivity"
             android:configChanges="orientation|screenSize|keyboardHidden|keyboard"
             android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.stvault.app.hoard"
             android:windowSoftInputMode="adjustPan" />
 
         <activity

@@ -33,7 +33,11 @@ class InboxActivity : AppCompatActivity() {
 
         binding.btnInboxClose.setOnClickListener { finish() }
         binding.btnOpenHoardBrowser.setOnClickListener {
-            startActivity(Intent(this, DiscordBrowserActivity::class.java))
+            startActivity(
+                Intent(this, DiscordBrowserActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                }
+            )
         }
 
         // Restore saved config
