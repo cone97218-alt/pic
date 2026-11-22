@@ -1116,9 +1116,17 @@ class VaultRepository private constructor(private val appContext: Context) {
                 }
             }
 
+            val postFiltered = if (filter == "multi_version") {
+                grouped.filter { it.variantCount > 1 }
+            } else grouped
+
             return when (filter) {
-                "most_imgs" -> grouped.sortedByDescending { it.source.urls.size }
-                else -> grouped.sortedByDescending { it.source.scannedAt }
+                "most_imgs" -> postFiltered.sortedByDescending { it.source.urls.size }
+                "incomplete" -> postFiltered.sortedWith(
+                    compareByDescending<SourceRowUi> { it.errCount > 0 }
+                        .thenByDescending { it.source.scannedAt }
+                )
+                else -> postFiltered.sortedByDescending { it.source.scannedAt }
             }
         }
     }

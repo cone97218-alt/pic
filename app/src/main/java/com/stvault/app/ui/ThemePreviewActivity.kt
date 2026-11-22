@@ -39,8 +39,11 @@ class ThemePreviewActivity : AppCompatActivity() {
     private lateinit var binding: ActivityThemePreviewBinding
     private lateinit var repo: VaultRepository
 
+    private var currentSourceId: String = ""
     private var currentTitle: String = ""
     private var currentRawText: String = ""
+    private var currentFileName: String = ""
+    private var siblingVariants: List<com.stvault.app.model.SourceRecord> = emptyList()
     private var pickingAvatarType: String = "ai" // "ai" | "user"
 
     private val prefs by lazy { getSharedPreferences("st_preview_prefs", Context.MODE_PRIVATE) }
@@ -80,6 +83,10 @@ class ThemePreviewActivity : AppCompatActivity() {
         repo = VaultRepository.getInstance(this)
         binding.btnClosePreview.setOnClickListener { finish() }
         binding.btnPreviewSettings.setOnClickListener { showPreviewSettingsDialog() }
+        binding.btnPreviewInstall.setOnClickListener { showInstallToTavernSheet() }
+        binding.btnVariantPrev.setOnClickListener { stepVariant(-1) }
+        binding.btnVariantNext.setOnClickListener { stepVariant(1) }
+        binding.btnVariantPicker.setOnClickListener { showVariantPickerSheet() }
 
         val web = binding.webPreview
         // Eliminate white flash on initial load
@@ -182,14 +189,29 @@ class ThemePreviewActivity : AppCompatActivity() {
             return
         }
 
+        loadThemeById(sourceId)
+    }
+
+    private fun loadThemeById(sourceId: String) {
+        currentSourceId = sourceId
+        binding.pbPreviewLoading.visibility = View.VISIBLE
         lifecycleScope.launch {
             try {
-                val (fileName, rawText) = withContext(Dispatchers.IO) {
-                    repo.readSourceRawText(sourceId)
+                val data = withContext(Dispatchers.IO) {
+                    val src = repo.getSourceById(sourceId)
+                    val (fileName, rawText) = repo.readSourceRawText(sourceId)
+                    val variants = if (src != null && src.seriesKey.isNotEmpty()) {
+                        repo.getVariantsForTheme(src.seriesKey)
+                    } else emptyList()
+                    Triple(src, fileName to rawText, variants)
                 }
-                currentTitle = fileName
-                currentRawText = rawText
-                binding.tvPreviewTitle.text = fileName
+                val (src, pair, variants) = data
+                currentFileName = pair.first
+                currentRawText = pair.second
+                currentTitle = src?.name?.ifBlank { pair.first } ?: pair.first
+                siblingVariants = variants
+                binding.tvPreviewTitle.text = currentTitle
+                updateVariantBar()
                 renderPreview()
             } catch (e: Exception) {
                 binding.pbPreviewLoading.visibility = View.GONE
@@ -197,6 +219,78 @@ class ThemePreviewActivity : AppCompatActivity() {
                 finish()
             }
         }
+    }
+
+    private fun updateVariantBar() {
+        if (siblingVariants.size <= 1) {
+            binding.layoutVariantBar.visibility = View.GONE
+            return
+        }
+        binding.layoutVariantBar.visibility = View.VISIBLE
+        val idx = siblingVariants.indexOfFirst { it.id == currentSourceId }.coerceAtLeast(0)
+        val cur = siblingVariants[idx]
+        val lbl = cur.variantTag.ifBlank { cur.name }
+        binding.btnVariantPicker.text = "$lbl (${idx + 1}/${siblingVariants.size}) ▾"
+    }
+
+    private fun stepVariant(delta: Int) {
+        if (siblingVariants.size <= 1) return
+        val curIdx = siblingVariants.indexOfFirst { it.id == currentSourceId }.coerceAtLeast(0)
+        val nextIdx = (curIdx + delta + siblingVariants.size) % siblingVariants.size
+        val next = siblingVariants[nextIdx]
+        com.stvault.app.core.ThemeVariantGrouper.setPreferredVariant(this, next.seriesKey, next.id)
+        loadThemeById(next.id)
+    }
+
+    private fun showVariantPickerSheet() {
+        if (siblingVariants.size <= 1) return
+        val actions = siblingVariants.map { v ->
+            SheetAction(
+                label = v.variantTag.ifBlank { v.name },
+                subtitle = v.name,
+                checked = (v.id == currentSourceId)
+            ) {
+                if (v.id != currentSourceId) {
+                    com.stvault.app.core.ThemeVariantGrouper.setPreferredVariant(this, v.seriesKey, v.id)
+                    loadThemeById(v.id)
+                }
+            }
+        }
+        VaultSheets.actionList(this, title = "切换配色 / 变体 (${siblingVariants.size})", actions = actions)
+    }
+
+    private fun showInstallToTavernSheet() {
+        if (currentSourceId.isBlank() || currentRawText.isBlank()) return
+        fun push(repaired: Boolean) {
+            lifecycleScope.launch {
+                try {
+                    val (fn, bytes) = withContext(Dispatchers.IO) {
+                        val outText = if (repaired) {
+                            repo.repairRawText(currentRawText, currentFileName, "base64_webp").repairedText
+                        } else currentRawText
+                        val safeName = if (currentFileName.endsWith(".json", ignoreCase = true)) currentFileName else "$currentTitle.json"
+                        safeName to outText.toByteArray(Charsets.UTF_8)
+                    }
+                    val bridge = com.stvault.app.core.TavernBridgeManager.getInstance(this@ThemePreviewActivity)
+                    if (!bridge.isRunning()) {
+                        try { com.stvault.app.service.TavernBridgeService.start(this@ThemePreviewActivity) } catch (_: Exception) {}
+                        withContext(Dispatchers.IO) { bridge.startServer() }
+                    }
+                    bridge.enqueueOutbox("theme", currentTitle, fn, bytes)
+                    toast("已加入待装入队列，切回 TT 酒馆自动装入")
+                } catch (e: Exception) {
+                    toast("推送失败：${e.message}")
+                }
+            }
+        }
+        VaultSheets.actionList(
+            ctx = this,
+            title = "装入酒馆 · $currentTitle",
+            actions = listOf(
+                SheetAction("推送原版", "保持原始代码直接装入 TT 酒馆") { push(false) },
+                SheetAction("推送图床修复版", "将已缓存图床离线内嵌后再装入") { push(true) }
+            )
+        )
     }
 
     private fun renderPreview() {

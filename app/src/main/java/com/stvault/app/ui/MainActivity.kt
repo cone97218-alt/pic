@@ -467,7 +467,7 @@ class MainActivity : AppCompatActivity() {
         binding.wsCharacters.rvCharacters.adapter = charactersAdapter
         buildSimpleChips(
             binding.wsCharacters.chipGroupCharFilter,
-            listOf("all" to "最新导入", "has_book" to "带世界书", "has_script" to "带脚本", "has_urls" to "含外链图"),
+            listOf("all" to "最新导入", "multi_version" to "多版本", "has_book" to "带世界书", "has_script" to "带脚本", "has_urls" to "含外链图"),
             activeCharFilter
         ) { key ->
             activeCharFilter = key
@@ -485,7 +485,7 @@ class MainActivity : AppCompatActivity() {
         binding.wsWorldBooks.rvWorldBooks.adapter = worldBooksAdapter
         buildSimpleChips(
             binding.wsWorldBooks.chipGroupWbFilter,
-            listOf("all" to "全部", "standalone" to "独立世界书", "from_card" to "来自角色卡", "has_urls" to "含外链图"),
+            listOf("all" to "全部", "multi_version" to "多版本", "standalone" to "独立世界书", "from_card" to "来自角色卡", "has_urls" to "含外链图"),
             activeWbFilter
         ) { key ->
             activeWbFilter = key
@@ -759,9 +759,9 @@ class MainActivity : AppCompatActivity() {
         val options = if (vaultSearchModeSources) {
             listOf(
                 "all" to "最新扫描",
+                "multi_version" to "多版本",
                 "installed" to "已装",
                 "not_installed" to "未装",
-                "has_error" to "有失败",
                 "incomplete" to "未下完",
                 "completed" to "已全缓存",
                 "most_imgs" to "图最多"
@@ -1944,11 +1944,12 @@ class MainActivity : AppCompatActivity() {
         val groupVersions = prefs.getBoolean("group_versions", true)
         lifecycleScope.launch {
             val (grouped, totalRaw, pendingCount) = withContext(Dispatchers.IO) {
-                val chars = libRepo.searchCharacters(q, activeCharFilter, activeCharCategory)
-                val g = VersionGrouper.groupBySeries(
+                val chars = libRepo.searchCharacters(q, if (activeCharFilter == "multi_version") "all" else activeCharFilter, activeCharCategory)
+                val rawG = VersionGrouper.groupBySeries(
                     chars, groupVersions, { it.seriesKey }, { it.addedAt }, { it.id },
                     { key -> VersionGrouper.getPreferredVersion(this@MainActivity, ResourceDetailActivity.TYPE_CHARACTER, key) }
                 )
+                val g = if (activeCharFilter == "multi_version") rawG.filter { it.versionCount > 1 } else rawG
                 val urls = libRepo.getAllCharacterUrls()
                 val counts = repo.getCountsForUrls(urls)
                 Triple(g, chars.size, counts.third)
@@ -1986,11 +1987,12 @@ class MainActivity : AppCompatActivity() {
         val groupVersions = prefs.getBoolean("group_versions", true)
         lifecycleScope.launch {
             val (grouped, totalRaw, pendingCount) = withContext(Dispatchers.IO) {
-                val books = libRepo.searchWorldBooks(q, activeWbFilter)
-                val g = VersionGrouper.groupBySeries(
+                val books = libRepo.searchWorldBooks(q, if (activeWbFilter == "multi_version") "all" else activeWbFilter)
+                val rawG = VersionGrouper.groupBySeries(
                     books, groupVersions, { it.seriesKey }, { it.addedAt }, { it.id },
                     { key -> VersionGrouper.getPreferredVersion(this@MainActivity, ResourceDetailActivity.TYPE_WORLDBOOK, key) }
                 )
+                val g = if (activeWbFilter == "multi_version") rawG.filter { it.versionCount > 1 } else rawG
                 val urls = libRepo.getAllWorldBookUrls()
                 val counts = repo.getCountsForUrls(urls)
                 Triple(g, books.size, counts.third)
