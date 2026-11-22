@@ -227,17 +227,37 @@ class VaultRepository private constructor(private val appContext: Context) {
                                 if (c.isNotEmpty()) cats.add(c)
                             }
                         }
+                        val storedName = o.optString("name", id)
+                        var storedFileName = o.optString("fileName", "")
+                        val isJsonRec = o.optBoolean("isJson", false)
+                        var resolvedName = storedName
+                        if (storedFileName.isEmpty() && isJsonRec) {
+                            val cachedSrc = resolveSourceFile(id, cat)
+                            if (cachedSrc.exists() && cachedSrc.length() in 1L..(20L * 1024L * 1024L)) {
+                                try {
+                                    val raw = cachedSrc.readText(Charsets.UTF_8)
+                                    val extracted = extractThemeDisplayName(raw, true, storedName)
+                                    if (extracted.isNotBlank() && extracted != storedName) {
+                                        resolvedName = extracted
+                                        storedFileName = storedName
+                                        purgedNonImages = true
+                                    }
+                                } catch (_: Exception) {
+                                }
+                            }
+                        }
                         sourcesMap[id] = SourceRecord(
                             id = id,
-                            name = o.optString("name", id),
+                            name = resolvedName,
                             docUri = o.optString("docUri", ""),
-                            isJson = o.optBoolean("isJson", false),
+                            isJson = isJsonRec,
                             urls = urlList,
                             scannedAt = o.optLong("scannedAt", 0L),
                             contentHash = o.optString("contentHash", ""),
                             category = cat,
                             folderName = o.optString("folderName", ""),
-                            categories = cats
+                            categories = cats,
+                            fileName = storedFileName
                         )
                     }
                 }
@@ -283,6 +303,7 @@ class VaultRepository private constructor(private val appContext: Context) {
                 o.put("category", s.category)
                 o.put("folderName", s.folderName)
                 o.put("categories", JSONArray(s.categories))
+                if (s.fileName.isNotEmpty()) o.put("fileName", s.fileName)
                 srcObj.put(id, o)
             }
             root.put("sources", srcObj)
@@ -589,6 +610,30 @@ class VaultRepository private constructor(private val appContext: Context) {
     }
 
     /**
+     * Extracts the internal theme name from SillyTavern theme JSON (`name` / `theme_name` / `title`),
+     * falling back to the cleaned filename if not present.
+     */
+    private fun extractThemeDisplayName(rawContent: String, isJson: Boolean, fallbackFileName: String): String {
+        val trimmed = rawContent.trimStart()
+        if (trimmed.isNotEmpty() && (isJson || trimmed.startsWith("{"))) {
+            try {
+                val obj = JSONObject(trimmed)
+                val candidates = listOf("name", "theme_name", "title")
+                for (key in candidates) {
+                    val v = obj.optString(key, "").trim()
+                    if (v.isNotEmpty() && !v.equals("null", ignoreCase = true)) {
+                        return v.replace(Regex("[\\r\\n]+"), " ").take(100)
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+        val base = fallbackFileName.substringAfterLast('/')
+        val stem = base.replace(Regex("\\.(json|css|html|htm|txt)$", RegexOption.IGNORE_CASE), "").trim()
+        return stem.ifEmpty { base }
+    }
+
+    /**
      * Returns Pair(addedUrls, skippedDuplicateSource)
      */
     private fun registerSourceLocked(
@@ -603,6 +648,7 @@ class VaultRepository private constructor(private val appContext: Context) {
         if (urls.isEmpty()) return 0 to false
         val sourceId = sha1Short(if (docUri.isNotBlank()) docUri else name)
         val category = "ui"
+        val displayName = extractThemeDisplayName(rawContent, isJson, name)
 
         // Check if an existing record already represents this exact file (by contentHash)
         val existingDup = if (contentHash.isNotEmpty()) {
@@ -620,13 +666,15 @@ class VaultRepository private constructor(private val appContext: Context) {
                 }
             }
             sourcesMap[existingDup.id] = existingDup.copy(
+                name = displayName.ifBlank { existingDup.name },
+                fileName = name.ifBlank { existingDup.fileName },
                 docUri = docUri,
                 folderName = folderName.ifBlank { existingDup.folderName }
             )
             return 0 to true
         }
 
-        val legacySameName = sourcesMap.values.firstOrNull { it.id != sourceId && it.name == name && it.contentHash.isEmpty() }
+        val legacySameName = sourcesMap.values.firstOrNull { it.id != sourceId && (it.name == name || it.fileName == name) && it.contentHash.isEmpty() }
         val targetId = legacySameName?.id ?: sourceId
 
         if (rawContent.isNotEmpty() && rawContent.length <= 20 * 1024 * 1024) {
@@ -638,14 +686,15 @@ class VaultRepository private constructor(private val appContext: Context) {
 
         sourcesMap[targetId] = SourceRecord(
             id = targetId,
-            name = name,
+            name = displayName,
             docUri = docUri,
             isJson = isJson,
             urls = urls,
             scannedAt = System.currentTimeMillis(),
             contentHash = contentHash,
             category = category,
-            folderName = folderName
+            folderName = folderName,
+            fileName = name
         )
         var addedUrls = 0
         for (u in urls) {
@@ -922,6 +971,7 @@ class VaultRepository private constructor(private val appContext: Context) {
             if (q.isNotEmpty()) {
                 list = list.filter { s ->
                     s.name.lowercase().contains(q) ||
+                        s.fileName.lowercase().contains(q) ||
                         s.categories.any { it.lowercase().contains(q) } ||
                         s.urls.any { it.lowercase().contains(q) }
                 }
@@ -961,7 +1011,9 @@ class VaultRepository private constructor(private val appContext: Context) {
                 sourcesMap.values.toList()
             } else {
                 sourcesMap.values.filter { s ->
-                    s.name.lowercase().contains(q) || s.urls.any { it.lowercase().contains(q) }
+                    s.name.lowercase().contains(q) ||
+                        s.fileName.lowercase().contains(q) ||
+                        s.urls.any { it.lowercase().contains(q) }
                 }
             }
             list = when (filter) {
@@ -1049,7 +1101,7 @@ class VaultRepository private constructor(private val appContext: Context) {
 
     fun readSourceRawText(sourceId: String): Pair<String, String> {
         val source = getSourceById(sourceId) ?: throw IllegalArgumentException("找不到该美化记录")
-        val baseName = source.name.substringAfterLast('/')
+        val baseName = source.fileName.ifBlank { source.name }.substringAfterLast('/')
 
         // 1. Prefer local cached copy (categorized under themes/<category>/)
         val cachedFile = resolveSourceFile(sourceId, source.category)

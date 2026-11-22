@@ -38,7 +38,8 @@ data class SourceRecord(
     val contentHash: String = "",
     val category: String = "ui",
     val folderName: String = "",
-    val categories: List<String> = emptyList()
+    val categories: List<String> = emptyList(),
+    val fileName: String = ""
 )
 
 data class SourceRowUi(
