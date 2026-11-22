@@ -2281,8 +2281,7 @@ class MainActivity : AppCompatActivity() {
         })
         actions.add(SheetAction("设置分类标签", "多选 1~3 级分类") { showThemeCategoryAssignDialog(source) })
         actions.add(SheetAction("删除美化", destructive = true) { confirmDeleteSource(source) })
-        val sheetTitle = if (variants.size > 1) source.seriesName.ifBlank { source.name } else source.name
-        VaultSheets.actionList(ctx = this, title = sheetTitle, actions = actions)
+        VaultSheets.actionList(ctx = this, title = source.name, actions = actions)
     }
 
     private fun pushThemeToTavern(source: SourceRecord) {
