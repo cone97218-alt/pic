@@ -34,7 +34,14 @@ jobs:
           echo "tag=v$VER" >> $GITHUB_OUTPUT
 
       - name: Build Debug APK
-        run: gradle assembleDebug --no-daemon
+        run: |
+          set -o pipefail
+          gradle assembleDebug --no-daemon 2>&1 | tee build.log || {
+            grep -E "e: |error:|FAILURE:|Execution failed|Unresolved|Mismatch|Conflicting|cannot find|duplicate" build.log | head -n 25 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            exit 1
+          }
 
       - name: Rename APK
         run: cp app/build/outputs/apk/debug/app-debug.apk STThemeVault-v${{ steps.ver.outputs.version }}.apk
