@@ -26,8 +26,8 @@
     const CANDIDATE_PORTS = [8796, 8797, 8798, 8799, 8800];
     const CHUNK_BYTES = 384 * 1024;
     const FAST_LIMIT_BYTES = 512 * 1024;
-    const BATCH_MAX_ITEMS = 10;
-    const BATCH_MAX_BYTES = 1200 * 1024;
+    const BATCH_MAX_ITEMS = 6;
+    const BATCH_MAX_BYTES = 520 * 1024;
     const TOOL_NAMES = [
         'stvault_ping', 'stvault_sync_inventory',
         'stvault_outbox_list', 'stvault_outbox_fetch', 'stvault_outbox_ack',

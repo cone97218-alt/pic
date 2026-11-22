@@ -125,6 +125,9 @@ object SimilarityDeduplicator {
         val n = items.size
         val stems = Array(n) { normalizeStem(items[it].name) }
         val bigrams = Array(n) { buildBigrams(stems[it]) }
+        val themeVarPairs = if (module == "themes") {
+            Array(n) { ThemeVariantGrouper.extractSeriesAndVariant(items[it].name) }
+        } else null
 
         // Union-Find to group pairwise similar items
         val parent = IntArray(n) { it }
@@ -153,8 +156,14 @@ object SimilarityDeduplicator {
                 if (stems[j].length < 2) continue
                 // Skip if already grouped into the same version series
                 if (items[i].seriesKey.isNotEmpty() && items[i].seriesKey == items[j].seriesKey) continue
-                // Skip color/form sibling variants for Themes (e.g. 黑/蓝/绿, 日间/夜间, 手机端/电脑端)
-                if (module == "themes" && ThemeVariantGrouper.areSiblingVariants(items[i].name, items[j].name)) continue
+                // Skip color/form sibling variants for Themes (O(1) precomputed lookup!)
+                if (themeVarPairs != null) {
+                    val (sA, vA) = themeVarPairs[i]
+                    val (sB, vB) = themeVarPairs[j]
+                    if (sA.length >= 2 && sA == sB && vA != vB && (vA.isNotEmpty() || vB.isNotEmpty())) {
+                        continue
+                    }
+                }
 
                 val exactName = items[i].name.trim().equals(items[j].name.trim(), ignoreCase = true)
                 val sameStem = stems[i] == stems[j]

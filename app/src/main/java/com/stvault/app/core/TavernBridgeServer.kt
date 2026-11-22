@@ -69,7 +69,7 @@ class TavernBridgeServer(private val manager: TavernBridgeManager) {
 
     private fun handleClient(socket: Socket) {
         try {
-            socket.soTimeout = 15_000
+            socket.soTimeout = 60_000
             val inp = BufferedInputStream(socket.getInputStream())
             val out = socket.getOutputStream()
 

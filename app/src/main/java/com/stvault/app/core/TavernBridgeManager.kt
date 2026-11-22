@@ -441,7 +441,16 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
 
             "stvault_push_batch" -> {
                 val arr = args.optJSONArray("items") ?: JSONArray()
-                val embeddedWbKeys = buildEmbeddedWorldBookKeys(ResourceLibraryRepository.getInstance(appContext))
+                var hasWorldBook = false
+                for (i in 0 until arr.length()) {
+                    if (arr.optJSONObject(i)?.optString("kind", "") == "worldbook") {
+                        hasWorldBook = true
+                        break
+                    }
+                }
+                val embeddedWbKeys = if (hasWorldBook) {
+                    buildEmbeddedWorldBookKeys(ResourceLibraryRepository.getInstance(appContext))
+                } else emptySet()
                 var imported = 0
                 var overwritten = 0
                 var conflicts = 0
