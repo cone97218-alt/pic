@@ -1,0 +1,133 @@
+package com.stvault.app.core
+
+import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+
+/**
+ * Manages 1-level / 2-level / 3-level custom categories (e.g. "古风", "古风/仙侠", "古风/仙侠/师尊")
+ * for Themes and Characters, supporting multi-select assignment and hierarchical prefix filtering.
+ */
+class CategoryManager private constructor(context: Context) {
+
+    private val lock = Any()
+    private val file = File(VaultRepository.getInstance(context).getVaultRootDir(), "categories.json")
+    private val scopeMap = LinkedHashMap<String, MutableList<String>>()
+
+    init {
+        load()
+    }
+
+    private fun load() {
+        synchronized(lock) {
+            scopeMap.clear()
+            if (!file.exists()) return
+            try {
+                val root = JSONObject(file.readText(Charsets.UTF_8))
+                val keys = root.keys()
+                while (keys.hasNext()) {
+                    val scope = keys.next()
+                    val arr = root.optJSONArray(scope) ?: continue
+                    val list = mutableListOf<String>()
+                    for (i in 0 until arr.length()) {
+                        val p = normalizePath(arr.optString(i, ""))
+                        if (p.isNotEmpty() && p !in list) list.add(p)
+                    }
+                    scopeMap[scope] = list
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun save() {
+        val json = synchronized(lock) {
+            val root = JSONObject()
+            for ((scope, list) in scopeMap) {
+                root.put(scope, JSONArray(list.sorted()))
+            }
+            root.toString(2)
+        }
+        try {
+            file.parentFile?.mkdirs()
+            val tmp = File(file.parentFile, "categories.json.tmp")
+            tmp.writeText(json, Charsets.UTF_8)
+            tmp.renameTo(file)
+        } catch (_: Exception) {
+        }
+    }
+
+    fun normalizePath(raw: String): String {
+        val parts = raw.split("/", "／", "\\", ">")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .take(3) // max 3 levels: 一级 / 二级 / 三级
+        return parts.joinToString("/")
+    }
+
+    fun getCategories(scope: String): List<String> = synchronized(lock) {
+        scopeMap[scope]?.sorted() ?: emptyList()
+    }
+
+    /**
+     * Adds a category path (up to 3 levels) and automatically ensures its parent levels exist.
+     */
+    fun addCategory(scope: String, rawPath: String): String? {
+        val normalized = normalizePath(rawPath)
+        if (normalized.isEmpty()) return null
+        val parts = normalized.split("/")
+        synchronized(lock) {
+            val list = scopeMap.getOrPut(scope) { mutableListOf() }
+            var prefix = ""
+            for (part in parts) {
+                prefix = if (prefix.isEmpty()) part else "$prefix/$part"
+                if (prefix !in list) list.add(prefix)
+            }
+        }
+        save()
+        return normalized
+    }
+
+    fun deleteCategory(scope: String, path: String) {
+        synchronized(lock) {
+            val list = scopeMap[scope] ?: return
+            list.removeAll { it == path || it.startsWith("$path/") }
+        }
+        save()
+    }
+
+    /**
+     * Hierarchical match: selecting "古风" matches items tagged with "古风", "古风/仙侠", "古风/仙侠/师尊".
+     */
+    fun matchesFilter(itemCategories: List<String>, selectedFilter: String): Boolean {
+        if (selectedFilter.isBlank()) return true
+        return itemCategories.any { cat ->
+            cat == selectedFilter || cat.startsWith("$selectedFilter/")
+        }
+    }
+
+    fun formatIndentedLabel(path: String): String {
+        val depth = path.count { it == '/' }
+        val leaf = path.substringAfterLast('/')
+        return when (depth) {
+            0 -> leaf
+            1 -> "   └ $leaf"
+            else -> "      └ $leaf"
+        }
+    }
+
+    companion object {
+        const val SCOPE_THEMES = "themes"
+        const val SCOPE_CHARACTERS = "characters"
+
+        @Volatile
+        private var INSTANCE: CategoryManager? = null
+
+        fun getInstance(context: Context): CategoryManager {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: CategoryManager(context.applicationContext).also { INSTANCE = it }
+            }
+        }
+    }
+}

@@ -3,20 +3,20 @@ package com.stvault.app.ui
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
-import com.stvault.app.core.VaultRepository
 import com.stvault.app.databinding.ItemSourceBinding
 import com.stvault.app.model.SourceRecord
+import com.stvault.app.model.SourceRowUi
 
 class SourcesAdapter(
-    private val repo: VaultRepository,
     private val onClick: (SourceRecord) -> Unit,
     private val onPreviewClick: (SourceRecord) -> Unit,
-    private val onDeleteClick: (SourceRecord) -> Unit
+    private val onDeleteClick: (SourceRecord) -> Unit,
+    private val onLongClick: (SourceRecord) -> Unit
 ) : RecyclerView.Adapter<SourcesAdapter.VH>() {
 
-    private var items: List<SourceRecord> = emptyList()
+    private var items: List<SourceRowUi> = emptyList()
 
-    fun submitList(list: List<SourceRecord>) {
+    fun submitList(list: List<SourceRowUi>) {
         items = list
         notifyDataSetChanged()
     }
@@ -27,21 +27,27 @@ class SourcesAdapter(
     }
 
     override fun onBindViewHolder(holder: VH, position: Int) {
-        val s = items[position]
-        val (ok, err, pending) = repo.getSourceCounts(s)
+        val row = items[position]
+        val s = row.source
         val cleanName = s.name.substringAfterLast('/')
         holder.binding.tvSourceName.text = cleanName
-        val parentFolder = s.folderName.ifBlank {
-            if (s.name.contains('/')) s.name.substringBeforeLast('/').substringAfterLast('/') else ""
-        }
+
+        val catLabel = if (s.categories.isNotEmpty()) {
+            s.categories.joinToString(" · ") { it.substringAfterLast('/') }
+        } else ""
+
         val meta = buildString {
-            append("已缓存 $ok/${s.urls.size}")
-            if (err > 0) append(" · 失败 $err")
-            if (pending > 0) append(" · 待缓存 $pending")
-            if (parentFolder.isNotEmpty()) append(" · $parentFolder")
+            append("已缓存 ${row.okCount}/${s.urls.size}")
+            if (row.errCount > 0) append(" · 失败 ${row.errCount}")
+            if (row.pendingCount > 0) append(" · 待缓存 ${row.pendingCount}")
+            if (catLabel.isNotEmpty()) append(" · $catLabel")
         }
         holder.binding.tvSourceMeta.text = meta
         holder.binding.root.setOnClickListener { onClick(s) }
+        holder.binding.root.setOnLongClickListener {
+            onLongClick(s)
+            true
+        }
         holder.binding.btnPreviewSource.setOnClickListener { onPreviewClick(s) }
         holder.binding.btnDeleteSource.setOnClickListener { onDeleteClick(s) }
     }

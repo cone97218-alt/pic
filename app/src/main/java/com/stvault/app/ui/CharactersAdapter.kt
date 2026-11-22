@@ -1,12 +1,14 @@
 package com.stvault.app.ui
 
 import android.view.LayoutInflater
+import android.view.View
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
 import com.stvault.app.core.ResourceLibraryRepository
 import com.stvault.app.databinding.ItemCharacterBinding
 import com.stvault.app.model.CharacterRecord
+import com.stvault.app.model.GroupedItem
 
 class CharactersAdapter(
     private val libRepo: ResourceLibraryRepository,
@@ -14,9 +16,9 @@ class CharactersAdapter(
     private val onLongClick: (CharacterRecord) -> Unit
 ) : RecyclerView.Adapter<CharactersAdapter.VH>() {
 
-    private var items: List<CharacterRecord> = emptyList()
+    private var items: List<GroupedItem<CharacterRecord>> = emptyList()
 
-    fun submitList(list: List<CharacterRecord>) {
+    fun submitList(list: List<GroupedItem<CharacterRecord>>) {
         items = list
         notifyDataSetChanged()
     }
@@ -27,18 +29,30 @@ class CharactersAdapter(
     }
 
     override fun onBindViewHolder(holder: VH, position: Int) {
-        val c = items[position]
+        val grouped = items[position]
+        val c = grouped.primary
         val b = holder.binding
         b.tvCharName.text = c.name
-        b.tvCharSpecBadge.text = c.spec.uppercase()
+
+        if (grouped.versionCount > 1) {
+            b.tvCharSpecBadge.visibility = View.VISIBLE
+            b.tvCharSpecBadge.text = "${grouped.versionCount} 版本"
+        } else if (c.versionTag.isNotEmpty()) {
+            b.tvCharSpecBadge.visibility = View.VISIBLE
+            b.tvCharSpecBadge.text = c.versionTag
+        } else {
+            b.tvCharSpecBadge.visibility = View.GONE
+        }
 
         val metaParts = mutableListOf<String>()
-        if (c.creator.isNotEmpty()) metaParts.add(c.creator)
+        if (c.categories.isNotEmpty()) {
+            metaParts.add(c.categories.first().substringAfterLast('/'))
+        }
         if (c.hasEmbeddedBook) metaParts.add("世界书 ${c.embeddedBookEntryCount}")
         val scripts = c.embeddedRegexCount + c.embeddedHelperCount
         if (scripts > 0) metaParts.add("脚本 $scripts")
         if (c.urls.isNotEmpty()) metaParts.add("图 ${c.urls.size}")
-        b.tvCharMeta.text = metaParts.joinToString(" · ").ifBlank { c.fileName }
+        b.tvCharMeta.text = metaParts.joinToString(" · ").ifBlank { c.spec.uppercase() }
 
         val thumb = libRepo.getCharacterThumbFile(c) ?: libRepo.getCharacterFile(c).takeIf { c.isPng && it.exists() }
         if (thumb != null) {

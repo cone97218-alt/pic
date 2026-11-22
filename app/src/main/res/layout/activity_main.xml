@@ -722,6 +722,20 @@
                     android:textColor="@color/text_muted"
                     android:textSize="12sp" />
 
+                <TextView
+                    android:id="@+id/btnThemeCatFilter"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="6dp"
+                    android:background="@drawable/bg_pill_accent"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:paddingHorizontal="9dp"
+                    android:paddingVertical="3dp"
+                    android:text="分类 ▾"
+                    android:textColor="@color/text_muted"
+                    android:textSize="11.5sp" />
+
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnImportInVault"
                     style="@style/Widget.Material3.Button.TextButton"

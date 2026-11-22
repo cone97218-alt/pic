@@ -37,7 +37,15 @@ data class SourceRecord(
     val scannedAt: Long = System.currentTimeMillis(),
     val contentHash: String = "",
     val category: String = "ui",
-    val folderName: String = ""
+    val folderName: String = "",
+    val categories: List<String> = emptyList()
+)
+
+data class SourceRowUi(
+    val source: SourceRecord,
+    val okCount: Int,
+    val errCount: Int,
+    val pendingCount: Int
 )
 
 data class VaultStats(
@@ -83,6 +91,7 @@ data class CharacterRecord(
     val fileName: String,
     val creator: String = "",
     val tags: List<String> = emptyList(),
+    val categories: List<String> = emptyList(),
     val spec: String = "v2",
     val isPng: Boolean = true,
     val cardFile: String = "",
@@ -94,8 +103,10 @@ data class CharacterRecord(
     val embeddedHelperCount: Int = 0,
     val urls: List<String> = emptyList(),
     val contentHash: String = "",
-    val sourceType: String = "local", // "local" | "url"
+    val sourceType: String = "local",
     val sourceRef: String = "",
+    val seriesKey: String = "",
+    val versionTag: String = "",
     val addedAt: Long = System.currentTimeMillis()
 )
 
@@ -112,6 +123,8 @@ data class WorldBookRecord(
     val contentHash: String = "",
     val originCardId: String = "",
     val originCardName: String = "",
+    val seriesKey: String = "",
+    val versionTag: String = "",
     val addedAt: Long = System.currentTimeMillis()
 )
 
@@ -121,12 +134,16 @@ data class PresetRecord(
     val fileName: String,
     val promptCount: Int = 0,
     val enabledPromptCount: Int = 0,
+    val embeddedRegexCount: Int = 0,
+    val embeddedHelperCount: Int = 0,
     val temperature: Double? = null,
     val topP: Double? = null,
     val maxTokens: Int? = null,
     val presetFile: String = "",
     val fileSize: Long = 0L,
     val contentHash: String = "",
+    val seriesKey: String = "",
+    val versionTag: String = "",
     val addedAt: Long = System.currentTimeMillis()
 )
 
@@ -137,13 +154,20 @@ data class ComponentRecord(
     val type: String = "regex", // "regex" | "helper" | "qr"
     val summary: String = "",
     val urls: List<String> = emptyList(),
-    val linkedTargetType: String = "", // "" | "character" | "preset" | "worldbook" | "theme"
+    val linkedTargetType: String = "",
     val linkedTargetId: String = "",
     val linkedTargetName: String = "",
     val compFile: String = "",
     val fileSize: Long = 0L,
     val contentHash: String = "",
+    val seriesKey: String = "",
+    val versionTag: String = "",
     val addedAt: Long = System.currentTimeMillis()
+)
+
+data class GroupedItem<T>(
+    val primary: T,
+    val versionCount: Int
 )
 
 data class LibraryCounts(

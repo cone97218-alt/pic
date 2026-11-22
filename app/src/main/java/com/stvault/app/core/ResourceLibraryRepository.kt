@@ -114,12 +114,16 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
             val arr = JSONArray(charsIndexFile.readText(Charsets.UTF_8))
             for (i in 0 until arr.length()) {
                 val o = arr.optJSONObject(i) ?: continue
+                val cName = o.optString("name", "未命名角色")
+                val cFileName = o.optString("fileName", "")
+                val (autoSeries, autoVer) = VersionGrouper.extractSeriesAndVersion(cName.ifBlank { cFileName })
                 val rec = CharacterRecord(
                     id = o.optString("id"),
-                    name = o.optString("name", "未命名角色"),
-                    fileName = o.optString("fileName", ""),
+                    name = cName,
+                    fileName = cFileName,
                     creator = o.optString("creator", ""),
                     tags = readJsonStringList(o.optJSONArray("tags")),
+                    categories = readJsonStringList(o.optJSONArray("categories")),
                     spec = o.optString("spec", "v2"),
                     isPng = o.optBoolean("isPng", true),
                     cardFile = o.optString("cardFile", ""),
@@ -133,6 +137,8 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     contentHash = o.optString("contentHash", ""),
                     sourceType = o.optString("sourceType", "local"),
                     sourceRef = o.optString("sourceRef", ""),
+                    seriesKey = o.optString("seriesKey", "").ifBlank { autoSeries },
+                    versionTag = o.optString("versionTag", "").ifBlank { autoVer },
                     addedAt = o.optLong("addedAt", 0L)
                 )
                 if (rec.id.isNotEmpty()) charactersMap[rec.id] = rec
@@ -151,6 +157,7 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     put("fileName", c.fileName)
                     put("creator", c.creator)
                     put("tags", JSONArray(c.tags))
+                    put("categories", JSONArray(c.categories))
                     put("spec", c.spec)
                     put("isPng", c.isPng)
                     put("cardFile", c.cardFile)
@@ -164,6 +171,8 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     put("contentHash", c.contentHash)
                     put("sourceType", c.sourceType)
                     put("sourceRef", c.sourceRef)
+                    put("seriesKey", c.seriesKey)
+                    put("versionTag", c.versionTag)
                     put("addedAt", c.addedAt)
                 })
             }
@@ -197,16 +206,38 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         }
     }
 
-    fun searchCharacters(query: String, filter: String = "all"): List<CharacterRecord> {
+    fun setCharacterCategories(charId: String, categories: List<String>) {
+        synchronized(lock) {
+            val cur = charactersMap[charId] ?: return
+            charactersMap[charId] = cur.copy(categories = categories.distinct())
+        }
+        saveCharactersIndex()
+    }
+
+    fun getVersionsForCharacter(seriesKey: String): List<CharacterRecord> = synchronized(lock) {
+        if (seriesKey.isBlank()) return emptyList()
+        charactersMap.values.filter { it.seriesKey == seriesKey }.sortedByDescending { it.addedAt }
+    }
+
+    fun searchCharacters(
+        query: String,
+        filter: String = "all",
+        categoryFilter: String = ""
+    ): List<CharacterRecord> {
         val q = query.trim().lowercase()
         synchronized(lock) {
             var list = charactersMap.values.toList()
+            if (categoryFilter.isNotBlank()) {
+                list = list.filter { c ->
+                    c.categories.any { cat -> cat == categoryFilter || cat.startsWith("$categoryFilter/") }
+                }
+            }
             if (q.isNotEmpty()) {
                 list = list.filter { c ->
                     c.name.lowercase().contains(q) ||
-                        c.creator.lowercase().contains(q) ||
                         c.fileName.lowercase().contains(q) ||
-                        c.tags.any { it.lowercase().contains(q) }
+                        c.tags.any { it.lowercase().contains(q) } ||
+                        c.categories.any { it.lowercase().contains(q) }
                 }
             }
             list = when (filter) {
@@ -365,6 +396,10 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         val (urls, _) = UrlExtractor.extract(rawJson)
         val newUrls = vaultRepo.registerExternalUrls("char:$id", urls)
 
+        val (seriesKey, versionTag) = VersionGrouper.extractSeriesAndVersion(
+            rawName = parsed.name.ifBlank { fileName },
+            explicitVersion = parsed.characterVersion
+        )
         val rec = CharacterRecord(
             id = id,
             name = parsed.name,
@@ -384,6 +419,8 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
             contentHash = contentHash,
             sourceType = sourceType,
             sourceRef = sourceRef,
+            seriesKey = seriesKey,
+            versionTag = versionTag,
             addedAt = System.currentTimeMillis()
         )
         synchronized(lock) {
@@ -479,10 +516,13 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
             val arr = JSONArray(booksIndexFile.readText(Charsets.UTF_8))
             for (i in 0 until arr.length()) {
                 val o = arr.optJSONObject(i) ?: continue
+                val wName = o.optString("name", "未命名世界书")
+                val wFileName = o.optString("fileName", "")
+                val (autoSeries, autoVer) = VersionGrouper.extractSeriesAndVersion(wName.ifBlank { wFileName })
                 val rec = WorldBookRecord(
                     id = o.optString("id"),
-                    name = o.optString("name", "未命名世界书"),
-                    fileName = o.optString("fileName", ""),
+                    name = wName,
+                    fileName = wFileName,
                     entryCount = o.optInt("entryCount", 0),
                     constantCount = o.optInt("constantCount", 0),
                     totalChars = o.optInt("totalChars", 0),
@@ -492,6 +532,8 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     contentHash = o.optString("contentHash", ""),
                     originCardId = o.optString("originCardId", ""),
                     originCardName = o.optString("originCardName", ""),
+                    seriesKey = o.optString("seriesKey", "").ifBlank { autoSeries },
+                    versionTag = o.optString("versionTag", "").ifBlank { autoVer },
                     addedAt = o.optLong("addedAt", 0L)
                 )
                 if (rec.id.isNotEmpty()) worldBooksMap[rec.id] = rec
@@ -517,6 +559,8 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     put("contentHash", b.contentHash)
                     put("originCardId", b.originCardId)
                     put("originCardName", b.originCardName)
+                    put("seriesKey", b.seriesKey)
+                    put("versionTag", b.versionTag)
                     put("addedAt", b.addedAt)
                 })
             }
@@ -528,6 +572,10 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
 
     fun getWorldBookFile(rec: WorldBookRecord): File = File(worldBooksDir, rec.bookFile)
     fun getWorldBookById(id: String): WorldBookRecord? = synchronized(lock) { worldBooksMap[id] }
+    fun getVersionsForWorldBook(seriesKey: String): List<WorldBookRecord> = synchronized(lock) {
+        if (seriesKey.isBlank()) return emptyList()
+        worldBooksMap.values.filter { it.seriesKey == seriesKey }.sortedByDescending { it.addedAt }
+    }
 
     fun parseWorldBookDetail(rec: WorldBookRecord): ParsedWorldBook? {
         val f = getWorldBookFile(rec)
@@ -655,6 +703,7 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         val (urls, _) = UrlExtractor.extract(rawText)
         val newUrls = vaultRepo.registerExternalUrls("wb:$id", urls)
 
+        val (seriesKey, versionTag) = VersionGrouper.extractSeriesAndVersion(parsed.name.ifBlank { fileName })
         val rec = WorldBookRecord(
             id = id,
             name = parsed.name,
@@ -668,6 +717,8 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
             contentHash = contentHash,
             originCardId = originCardId,
             originCardName = originCardName,
+            seriesKey = seriesKey,
+            versionTag = versionTag,
             addedAt = System.currentTimeMillis()
         )
         synchronized(lock) { worldBooksMap[id] = rec }
@@ -691,18 +742,25 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
             val arr = JSONArray(presetsIndexFile.readText(Charsets.UTF_8))
             for (i in 0 until arr.length()) {
                 val o = arr.optJSONObject(i) ?: continue
+                val pName = o.optString("name", "未命名预设")
+                val pFileName = o.optString("fileName", "")
+                val (autoSeries, autoVer) = VersionGrouper.extractSeriesAndVersion(pName.ifBlank { pFileName })
                 val rec = PresetRecord(
                     id = o.optString("id"),
-                    name = o.optString("name", "未命名预设"),
-                    fileName = o.optString("fileName", ""),
+                    name = pName,
+                    fileName = pFileName,
                     promptCount = o.optInt("promptCount", 0),
                     enabledPromptCount = o.optInt("enabledPromptCount", 0),
+                    embeddedRegexCount = o.optInt("embeddedRegexCount", 0),
+                    embeddedHelperCount = o.optInt("embeddedHelperCount", 0),
                     temperature = if (o.has("temperature") && !o.isNull("temperature")) o.optDouble("temperature") else null,
                     topP = if (o.has("topP") && !o.isNull("topP")) o.optDouble("topP") else null,
                     maxTokens = if (o.has("maxTokens") && !o.isNull("maxTokens")) o.optInt("maxTokens") else null,
                     presetFile = o.optString("presetFile", ""),
                     fileSize = o.optLong("fileSize", 0L),
                     contentHash = o.optString("contentHash", ""),
+                    seriesKey = o.optString("seriesKey", "").ifBlank { autoSeries },
+                    versionTag = o.optString("versionTag", "").ifBlank { autoVer },
                     addedAt = o.optLong("addedAt", 0L)
                 )
                 if (rec.id.isNotEmpty()) presetsMap[rec.id] = rec
@@ -721,12 +779,16 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     put("fileName", p.fileName)
                     put("promptCount", p.promptCount)
                     put("enabledPromptCount", p.enabledPromptCount)
+                    put("embeddedRegexCount", p.embeddedRegexCount)
+                    put("embeddedHelperCount", p.embeddedHelperCount)
                     put("temperature", p.temperature ?: JSONObject.NULL)
                     put("topP", p.topP ?: JSONObject.NULL)
                     put("maxTokens", p.maxTokens ?: JSONObject.NULL)
                     put("presetFile", p.presetFile)
                     put("fileSize", p.fileSize)
                     put("contentHash", p.contentHash)
+                    put("seriesKey", p.seriesKey)
+                    put("versionTag", p.versionTag)
                     put("addedAt", p.addedAt)
                 })
             }
@@ -738,6 +800,10 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
 
     fun getPresetFile(rec: PresetRecord): File = File(presetsDir, rec.presetFile)
     fun getPresetById(id: String): PresetRecord? = synchronized(lock) { presetsMap[id] }
+    fun getVersionsForPreset(seriesKey: String): List<PresetRecord> = synchronized(lock) {
+        if (seriesKey.isBlank()) return emptyList()
+        presetsMap.values.filter { it.seriesKey == seriesKey }.sortedByDescending { it.addedAt }
+    }
 
     fun parsePresetDetail(rec: PresetRecord): ParsedPreset? {
         val f = getPresetFile(rec)
@@ -833,18 +899,23 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         file.parentFile?.mkdirs()
         file.writeBytes(bytes)
 
+        val (seriesKey, versionTag) = VersionGrouper.extractSeriesAndVersion(parsed.name.ifBlank { fileName })
         val rec = PresetRecord(
             id = id,
             name = parsed.name,
             fileName = fileName,
             promptCount = parsed.prompts.size,
             enabledPromptCount = parsed.prompts.count { it.enabled },
+            embeddedRegexCount = parsed.embeddedRegexScripts.size,
+            embeddedHelperCount = parsed.embeddedHelperScripts.size,
             temperature = parsed.temperature,
             topP = parsed.topP,
             maxTokens = parsed.maxTokens,
             presetFile = presetFileName,
             fileSize = file.length(),
             contentHash = contentHash,
+            seriesKey = seriesKey,
+            versionTag = versionTag,
             addedAt = System.currentTimeMillis()
         )
         synchronized(lock) { presetsMap[id] = rec }
@@ -867,10 +938,13 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
             val arr = JSONArray(compsIndexFile.readText(Charsets.UTF_8))
             for (i in 0 until arr.length()) {
                 val o = arr.optJSONObject(i) ?: continue
+                val compName = o.optString("name", "未命名组件")
+                val compFileName = o.optString("fileName", "")
+                val (autoSeries, autoVer) = VersionGrouper.extractSeriesAndVersion(compName.ifBlank { compFileName })
                 val rec = ComponentRecord(
                     id = o.optString("id"),
-                    name = o.optString("name", "未命名组件"),
-                    fileName = o.optString("fileName", ""),
+                    name = compName,
+                    fileName = compFileName,
                     type = o.optString("type", "regex"),
                     summary = o.optString("summary", ""),
                     urls = readJsonStringList(o.optJSONArray("urls")),
@@ -880,6 +954,8 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     compFile = o.optString("compFile", ""),
                     fileSize = o.optLong("fileSize", 0L),
                     contentHash = o.optString("contentHash", ""),
+                    seriesKey = o.optString("seriesKey", "").ifBlank { autoSeries },
+                    versionTag = o.optString("versionTag", "").ifBlank { autoVer },
                     addedAt = o.optLong("addedAt", 0L)
                 )
                 if (rec.id.isNotEmpty()) componentsMap[rec.id] = rec
@@ -905,6 +981,8 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     put("compFile", c.compFile)
                     put("fileSize", c.fileSize)
                     put("contentHash", c.contentHash)
+                    put("seriesKey", c.seriesKey)
+                    put("versionTag", c.versionTag)
                     put("addedAt", c.addedAt)
                 })
             }
@@ -915,6 +993,10 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
     }
 
     fun getComponentFile(rec: ComponentRecord): File = File(componentsDir, rec.compFile)
+    fun getVersionsForComponent(seriesKey: String): List<ComponentRecord> = synchronized(lock) {
+        if (seriesKey.isBlank()) return emptyList()
+        componentsMap.values.filter { it.seriesKey == seriesKey }.sortedByDescending { it.addedAt }
+    }
 
     fun readComponentText(rec: ComponentRecord): String {
         val f = getComponentFile(rec)
@@ -1050,6 +1132,7 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         val (urls, _) = UrlExtractor.extract(rawText)
         val newUrls = vaultRepo.registerExternalUrls("comp:$id", urls)
 
+        val (seriesKey, versionTag) = VersionGrouper.extractSeriesAndVersion(parsed.name.ifBlank { fileName })
         val rec = ComponentRecord(
             id = id,
             name = parsed.name,
@@ -1060,6 +1143,8 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
             compFile = compFileName,
             fileSize = file.length(),
             contentHash = contentHash,
+            seriesKey = seriesKey,
+            versionTag = versionTag,
             addedAt = System.currentTimeMillis()
         )
         synchronized(lock) { componentsMap[id] = rec }

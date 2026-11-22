@@ -33,11 +33,13 @@ import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.chip.Chip
 import com.stvault.app.BuildConfig
 import com.stvault.app.R
+import com.stvault.app.core.CategoryManager
 import com.stvault.app.core.HostConfig
 import com.stvault.app.core.ReleaseInfo
 import com.stvault.app.core.ResourceLibraryRepository
 import com.stvault.app.core.UpdateManager
 import com.stvault.app.core.VaultRepository
+import com.stvault.app.core.VersionGrouper
 import com.stvault.app.databinding.ActivityMainBinding
 import com.stvault.app.databinding.DialogImportCharUrlsBinding
 import com.stvault.app.databinding.DialogSourceDetailBinding
@@ -50,6 +52,8 @@ import com.stvault.app.model.UrlRecord
 import com.stvault.app.model.WorldBookRecord
 import com.stvault.app.service.VaultDownloadService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -63,6 +67,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var repo: VaultRepository
     private lateinit var libRepo: ResourceLibraryRepository
+    private lateinit var catManager: CategoryManager
     private lateinit var sourcesAdapter: SourcesAdapter
     private lateinit var urlsAdapter: UrlsAdapter
     private lateinit var charactersAdapter: CharactersAdapter
@@ -75,6 +80,9 @@ class MainActivity : AppCompatActivity() {
     private var activeCharFilter = "all"
     private var activeWbFilter = "all"
     private var activeCompFilter = "all"
+    private var activeThemeCategory = ""
+    private var activeCharCategory = ""
+    private var searchDebounceJob: Job? = null
 
     private var savedTreeUri: Uri? = null
     private var savedLocalDirPath: String? = null
@@ -343,6 +351,7 @@ class MainActivity : AppCompatActivity() {
 
         repo = VaultRepository.getInstance(this)
         libRepo = ResourceLibraryRepository.getInstance(this)
+        catManager = CategoryManager.getInstance(this)
         savedTreeUri = prefs.getString("tree_uri", null)?.let { Uri.parse(it) }
         savedLocalDirPath = prefs.getString("local_dir_path", null)
         updateFolderLabel()
@@ -378,10 +387,10 @@ class MainActivity : AppCompatActivity() {
         // 1. Themes
         binding.rvVault.layoutManager = LinearLayoutManager(this)
         sourcesAdapter = SourcesAdapter(
-            repo = repo,
             onClick = { source -> showSourceDetailDialog(source) },
             onPreviewClick = { source -> ThemePreviewActivity.open(this, source.id) },
-            onDeleteClick = { source -> confirmDeleteSource(source) }
+            onDeleteClick = { source -> confirmDeleteSource(source) },
+            onLongClick = { source -> showThemeCategoryAssignDialog(source) }
         )
         urlsAdapter = UrlsAdapter(
             repo = repo,
@@ -403,7 +412,7 @@ class MainActivity : AppCompatActivity() {
         charactersAdapter = CharactersAdapter(
             libRepo = libRepo,
             onClick = { c -> ResourceDetailActivity.open(this, ResourceDetailActivity.TYPE_CHARACTER, c.id) },
-            onLongClick = { c -> confirmDeleteCharacter(c) }
+            onLongClick = { c -> showCharacterActionMenu(c) }
         )
         binding.wsCharacters.rvCharacters.adapter = charactersAdapter
         buildSimpleChips(
@@ -507,6 +516,10 @@ class MainActivity : AppCompatActivity() {
         binding.drawer.drawerItemWorldBooks.setOnClickListener { switchWorkspace("worldbooks") }
         binding.drawer.drawerItemPresets.setOnClickListener { switchWorkspace("presets") }
         binding.drawer.drawerItemComponents.setOnClickListener { switchWorkspace("components") }
+        binding.drawer.drawerItemSettings.setOnClickListener {
+            binding.drawerLayout.closeDrawer(GravityCompat.START)
+            SettingsActivity.open(this)
+        }
     }
 
     private fun switchWorkspace(workspace: String) {
@@ -716,12 +729,14 @@ class MainActivity : AppCompatActivity() {
             binding.btnModeUrls.backgroundTintList = ColorStateList.valueOf(transparent)
             binding.btnModeUrls.setTextColor(muted)
             binding.btnImportInVault.visibility = View.VISIBLE
+            binding.btnThemeCatFilter.visibility = View.VISIBLE
         } else {
             binding.btnModeUrls.backgroundTintList = ColorStateList.valueOf(accent)
             binding.btnModeUrls.setTextColor(onAccent)
             binding.btnModeSources.backgroundTintList = ColorStateList.valueOf(transparent)
             binding.btnModeSources.setTextColor(muted)
             binding.btnImportInVault.visibility = View.GONE
+            binding.btnThemeCatFilter.visibility = View.GONE
         }
     }
 
@@ -742,6 +757,26 @@ class MainActivity : AppCompatActivity() {
         binding.dockTabRepair.setOnClickListener { selectThemeDockTab("repair") }
 
         // Workspace 2: Characters Listeners
+        binding.wsCharacters.btnCharCatFilter.setOnClickListener {
+            showCategoryFilterPicker(CategoryManager.SCOPE_CHARACTERS, activeCharCategory) { picked ->
+                activeCharCategory = picked
+                binding.wsCharacters.btnCharCatFilter.text = if (picked.isEmpty()) "分类 ▾" else "${picked.substringAfterLast('/')} ▾"
+                refreshCharactersList()
+            }
+        }
+        binding.btnThemeCatFilter.setOnClickListener {
+            showCategoryFilterPicker(CategoryManager.SCOPE_THEMES, activeThemeCategory) { picked ->
+                activeThemeCategory = picked
+                binding.btnThemeCatFilter.text = if (picked.isEmpty()) "分类 ▾" else "${picked.substringAfterLast('/')} ▾"
+                refreshVaultList()
+            }
+        }
+        bindDebouncedSearch(binding.etSearch) { refreshVaultList() }
+        bindDebouncedSearch(binding.wsCharacters.etCharSearch) { refreshCharactersList() }
+        bindDebouncedSearch(binding.wsWorldBooks.etWbSearch) { refreshWorldBooksList() }
+        bindDebouncedSearch(binding.wsPresets.etPresetSearch) { refreshPresetsList() }
+        bindDebouncedSearch(binding.wsComponents.etCompSearch) { refreshComponentsList() }
+
         binding.wsCharacters.btnCharSearch.setOnClickListener { refreshCharactersList() }
         binding.wsCharacters.etCharSearch.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEARCH) { refreshCharactersList(); true } else false
@@ -1277,13 +1312,15 @@ class MainActivity : AppCompatActivity() {
         val q = binding.etSearch.text?.toString().orEmpty()
         lifecycleScope.launch {
             if (vaultSearchModeSources) {
-                val list = withContext(Dispatchers.IO) { repo.searchSources(q, activeSourceFilter) }
+                val list = withContext(Dispatchers.IO) {
+                    repo.searchSourceRows(q, activeSourceFilter, activeThemeCategory)
+                }
                 sourcesAdapter.submitList(list)
-                binding.tvVaultCount.text = "共 ${list.size} 个美化文件"
+                binding.tvVaultCount.text = "共 ${list.size} 个美化"
             } else {
                 val list = withContext(Dispatchers.IO) { repo.searchUrls(q, activeUrlFilter) }
                 urlsAdapter.submitList(list)
-                binding.tvVaultCount.text = "共 ${list.size} 张图床记录"
+                binding.tvVaultCount.text = "共 ${list.size} 张图床"
             }
         }
     }
@@ -1710,15 +1747,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshCharactersList() {
         val q = binding.wsCharacters.etCharSearch.text?.toString().orEmpty()
+        val groupVersions = prefs.getBoolean("group_versions", true)
         lifecycleScope.launch {
-            val (list, pendingCount) = withContext(Dispatchers.IO) {
-                val chars = libRepo.searchCharacters(q, activeCharFilter)
+            val (grouped, totalRaw, pendingCount) = withContext(Dispatchers.IO) {
+                val chars = libRepo.searchCharacters(q, activeCharFilter, activeCharCategory)
+                val g = VersionGrouper.groupBySeries(chars, groupVersions, { it.seriesKey }, { it.addedAt })
                 val urls = libRepo.getAllCharacterUrls()
                 val counts = repo.getCountsForUrls(urls)
-                chars to counts.third
+                Triple(g, chars.size, counts.third)
             }
-            charactersAdapter.submitList(list)
-            binding.wsCharacters.tvCharCount.text = "共 ${list.size} 张"
+            charactersAdapter.submitList(grouped)
+            binding.wsCharacters.tvCharCount.text =
+                if (groupVersions && grouped.size < totalRaw) "共 ${grouped.size} 作品 ($totalRaw 版)" else "共 ${grouped.size} 张"
             if (pendingCount > 0) {
                 binding.wsCharacters.btnCharStartCache.visibility = View.VISIBLE
                 binding.wsCharacters.btnCharStartCache.text = "缓存图床 ($pendingCount)"
@@ -1745,15 +1785,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshWorldBooksList() {
         val q = binding.wsWorldBooks.etWbSearch.text?.toString().orEmpty()
+        val groupVersions = prefs.getBoolean("group_versions", true)
         lifecycleScope.launch {
-            val (list, pendingCount) = withContext(Dispatchers.IO) {
+            val (grouped, totalRaw, pendingCount) = withContext(Dispatchers.IO) {
                 val books = libRepo.searchWorldBooks(q, activeWbFilter)
+                val g = VersionGrouper.groupBySeries(books, groupVersions, { it.seriesKey }, { it.addedAt })
                 val urls = libRepo.getAllWorldBookUrls()
                 val counts = repo.getCountsForUrls(urls)
-                books to counts.third
+                Triple(g, books.size, counts.third)
             }
-            worldBooksAdapter.submitList(list)
-            binding.wsWorldBooks.tvWbCount.text = "共 ${list.size} 本"
+            worldBooksAdapter.submitList(grouped)
+            binding.wsWorldBooks.tvWbCount.text =
+                if (groupVersions && grouped.size < totalRaw) "共 ${grouped.size} 部 ($totalRaw 版)" else "共 ${grouped.size} 本"
             if (pendingCount > 0) {
                 binding.wsWorldBooks.btnWbStartCache.visibility = View.VISIBLE
                 binding.wsWorldBooks.btnWbStartCache.text = "缓存图床 ($pendingCount)"
@@ -1780,15 +1823,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshPresetsList() {
         val q = binding.wsPresets.etPresetSearch.text?.toString().orEmpty()
+        val groupVersions = prefs.getBoolean("group_versions", true)
         lifecycleScope.launch {
-            val (presets, linkedComps) = withContext(Dispatchers.IO) {
+            val (groupedPresets, totalRaw, groupedComps) = withContext(Dispatchers.IO) {
                 val p = libRepo.searchPresets(q)
+                val gp = VersionGrouper.groupBySeries(p, groupVersions, { it.seriesKey }, { it.addedAt })
                 val c = libRepo.searchComponents("", "linked").filter { it.linkedTargetType == "preset" }
-                p to c
+                val gc = VersionGrouper.groupBySeries(c, groupVersions, { it.seriesKey }, { it.addedAt })
+                Triple(gp, p.size, gc)
             }
-            presetsAdapter.submitList(presets)
-            binding.wsPresets.tvPresetCount.text = "共 ${presets.size} 个预设"
-            presetComponentsAdapter.submitList(linkedComps)
+            presetsAdapter.submitList(groupedPresets)
+            binding.wsPresets.tvPresetCount.text =
+                if (groupVersions && groupedPresets.size < totalRaw) "共 ${groupedPresets.size} 套 ($totalRaw 版)" else "共 ${groupedPresets.size} 个"
+            presetComponentsAdapter.submitList(groupedComps)
         }
     }
 
@@ -1809,11 +1856,154 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshComponentsList() {
         val q = binding.wsComponents.etCompSearch.text?.toString().orEmpty()
+        val groupVersions = prefs.getBoolean("group_versions", true)
         lifecycleScope.launch {
-            val list = withContext(Dispatchers.IO) { libRepo.searchComponents(q, activeCompFilter) }
-            componentsAdapter.submitList(list)
-            binding.wsComponents.tvCompCount.text = "共 ${list.size} 个组件"
+            val (grouped, totalRaw) = withContext(Dispatchers.IO) {
+                val list = libRepo.searchComponents(q, activeCompFilter)
+                val g = VersionGrouper.groupBySeries(list, groupVersions, { it.seriesKey }, { it.addedAt })
+                g to list.size
+            }
+            componentsAdapter.submitList(grouped)
+            binding.wsComponents.tvCompCount.text =
+                if (groupVersions && grouped.size < totalRaw) "共 ${grouped.size} 项 ($totalRaw 版)" else "共 ${grouped.size} 个"
         }
+    }
+
+    private fun bindDebouncedSearch(et: android.widget.EditText, onTrigger: () -> Unit) {
+        et.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                searchDebounceJob?.cancel()
+                searchDebounceJob = lifecycleScope.launch {
+                    delay(180L)
+                    onTrigger()
+                }
+            }
+        })
+    }
+
+    private fun showCategoryFilterPicker(scope: String, current: String, onPicked: (String) -> Unit) {
+        val cats = catManager.getCategories(scope)
+        val labels = mutableListOf(if (current.isEmpty()) "✓ 全部分类" else "全部分类")
+        for (c in cats) {
+            val mark = if (c == current) "✓ " else ""
+            labels.add("$mark${catManager.formatIndentedLabel(c)}")
+        }
+        AlertDialog.Builder(this)
+            .setTitle("按分类筛选")
+            .setItems(labels.toTypedArray()) { _, idx ->
+                if (idx == 0) onPicked("")
+                else onPicked(cats[idx - 1])
+            }
+            .setPositiveButton("新建分类") { _, _ ->
+                showQuickAddCategoryDialog(scope) {
+                    showCategoryFilterPicker(scope, current, onPicked)
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun showQuickAddCategoryDialog(scope: String, onAdded: () -> Unit) {
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(48, 24, 48, 8)
+        }
+        val et = android.widget.EditText(this).apply {
+            hint = "如：古风  或  古风/仙侠  或  古风/仙侠/师尊"
+            isSingleLine = true
+            textSize = 13.5f
+        }
+        box.addView(et)
+        AlertDialog.Builder(this)
+            .setTitle("新建分类（1~3级）")
+            .setMessage("用斜杠 / 分隔层级，父级会自动创建。")
+            .setView(box)
+            .setPositiveButton("添加") { _, _ ->
+                val added = catManager.addCategory(scope, et.text?.toString().orEmpty())
+                if (added != null) {
+                    toast("已添加：$added")
+                    onAdded()
+                } else {
+                    toast("请输入有效名称")
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun showThemeCategoryAssignDialog(source: SourceRecord) {
+        val allCats = catManager.getCategories(CategoryManager.SCOPE_THEMES)
+        if (allCats.isEmpty()) {
+            showQuickAddCategoryDialog(CategoryManager.SCOPE_THEMES) {
+                showThemeCategoryAssignDialog(source)
+            }
+            return
+        }
+        val labels = allCats.map { catManager.formatIndentedLabel(it) }.toTypedArray()
+        val checked = BooleanArray(allCats.size) { allCats[it] in source.categories }
+        AlertDialog.Builder(this)
+            .setTitle("设置美化分类（多选）")
+            .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                checked[which] = isChecked
+            }
+            .setPositiveButton("保存") { _, _ ->
+                val picked = allCats.filterIndexed { i, _ -> checked[i] }
+                repo.setSourceCategories(source.id, picked)
+                toast("分类已更新")
+                refreshVaultList()
+            }
+            .setNeutralButton("新建分类") { _, _ ->
+                showQuickAddCategoryDialog(CategoryManager.SCOPE_THEMES) {
+                    showThemeCategoryAssignDialog(source)
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun showCharacterActionMenu(c: CharacterRecord) {
+        val opts = arrayOf("设置分类标签（多选）", "删除角色卡")
+        AlertDialog.Builder(this)
+            .setTitle(c.name)
+            .setItems(opts) { _, which ->
+                when (which) {
+                    0 -> showCharacterCategoryAssignDialog(c)
+                    1 -> confirmDeleteCharacter(c)
+                }
+            }
+            .show()
+    }
+
+    private fun showCharacterCategoryAssignDialog(c: CharacterRecord) {
+        val allCats = catManager.getCategories(CategoryManager.SCOPE_CHARACTERS)
+        if (allCats.isEmpty()) {
+            showQuickAddCategoryDialog(CategoryManager.SCOPE_CHARACTERS) {
+                showCharacterCategoryAssignDialog(c)
+            }
+            return
+        }
+        val labels = allCats.map { catManager.formatIndentedLabel(it) }.toTypedArray()
+        val checked = BooleanArray(allCats.size) { allCats[it] in c.categories }
+        AlertDialog.Builder(this)
+            .setTitle("设置角色卡分类（多选）")
+            .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                checked[which] = isChecked
+            }
+            .setPositiveButton("保存") { _, _ ->
+                val picked = allCats.filterIndexed { i, _ -> checked[i] }
+                libRepo.setCharacterCategories(c.id, picked)
+                toast("分类已更新")
+                refreshCharactersList()
+            }
+            .setNeutralButton("新建分类") { _, _ ->
+                showQuickAddCategoryDialog(CategoryManager.SCOPE_CHARACTERS) {
+                    showCharacterCategoryAssignDialog(c)
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     private fun showComponentDetailDialog(comp: ComponentRecord) {

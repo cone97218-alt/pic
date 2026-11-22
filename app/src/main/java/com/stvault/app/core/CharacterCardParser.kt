@@ -300,31 +300,44 @@ object CharacterCardParser {
         return ParsedWorldBook(name = bookName, entries = entries, rawJson = standaloneJson)
     }
 
-    private fun parseEmbeddedRegex(extensions: JSONObject?): List<ParsedRegexScript> {
+    fun parseEmbeddedRegex(extensions: JSONObject?): List<ParsedRegexScript> {
         if (extensions == null) return emptyList()
-        val arr = extensions.optJSONArray("regex_scripts") ?: return emptyList()
         val list = mutableListOf<ParsedRegexScript>()
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            list.add(
-                ParsedRegexScript(
-                    name = o.optString("scriptName", "未命名正则 #${i + 1}").ifBlank { "未命名正则 #${i + 1}" },
-                    findRegex = o.optString("findRegex", ""),
-                    replaceString = o.optString("replaceString", ""),
-                    disabled = o.optBoolean("disabled", false),
-                    rawJson = o.toString(2)
+
+        fun collectRegexArray(arr: JSONArray?) {
+            if (arr == null) return
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                if (!o.has("findRegex") && !o.has("scriptName")) continue
+                list.add(
+                    ParsedRegexScript(
+                        name = o.optString("scriptName", "未命名正则 #${list.size + 1}").ifBlank { "未命名正则 #${list.size + 1}" },
+                        findRegex = o.optString("findRegex", ""),
+                        replaceString = o.optString("replaceString", ""),
+                        disabled = o.optBoolean("disabled", false),
+                        rawJson = o.toString(2)
+                    )
                 )
-            )
+            }
         }
+
+        collectRegexArray(extensions.optJSONArray("regex_scripts"))
+        // Support SPreset / preset-bundled regexes
+        extensions.optJSONObject("SPreset")
+            ?.optJSONObject("RegexBinding")
+            ?.let { collectRegexArray(it.optJSONArray("regexes")) }
+
         return list
     }
 
-    private fun parseEmbeddedHelper(extensions: JSONObject?): List<ParsedHelperScript> {
+    fun parseEmbeddedHelper(extensions: JSONObject?): List<ParsedHelperScript> {
         if (extensions == null) return emptyList()
         val list = mutableListOf<ParsedHelperScript>()
 
-        // Tavern Helper / JS-Slash-Runner stores scripts under `tavern_helper` (often array of [key, value] or object with `scripts`)
-        val thAny = extensions.opt("tavern_helper") ?: extensions.opt("JS-Slash-Runner")
+        // Tavern Helper / JS-Slash-Runner stores scripts under `tavern_helper` or `JS-Slash-Runner`
+        val thAny = extensions.opt("tavern_helper")
+            ?: extensions.opt("JS-Slash-Runner")
+            ?: extensions.opt("tavern_helper_scripts")
         if (thAny is JSONArray) {
             for (i in 0 until thAny.length()) {
                 val item = thAny.opt(i)

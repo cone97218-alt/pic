@@ -219,6 +219,14 @@ class VaultRepository private constructor(private val appContext: Context) {
                                 }
                             }
                         }
+                        val cats = mutableListOf<String>()
+                        val cArr = o.optJSONArray("categories")
+                        if (cArr != null) {
+                            for (i in 0 until cArr.length()) {
+                                val c = cArr.optString(i, "").trim()
+                                if (c.isNotEmpty()) cats.add(c)
+                            }
+                        }
                         sourcesMap[id] = SourceRecord(
                             id = id,
                             name = o.optString("name", id),
@@ -228,7 +236,8 @@ class VaultRepository private constructor(private val appContext: Context) {
                             scannedAt = o.optLong("scannedAt", 0L),
                             contentHash = o.optString("contentHash", ""),
                             category = cat,
-                            folderName = o.optString("folderName", "")
+                            folderName = o.optString("folderName", ""),
+                            categories = cats
                         )
                     }
                 }
@@ -273,6 +282,7 @@ class VaultRepository private constructor(private val appContext: Context) {
                 o.put("contentHash", s.contentHash)
                 o.put("category", s.category)
                 o.put("folderName", s.folderName)
+                o.put("categories", JSONArray(s.categories))
                 srcObj.put(id, o)
             }
             root.put("sources", srcObj)
@@ -838,6 +848,62 @@ class VaultRepository private constructor(private val appContext: Context) {
         markDownloadSuccess(url, bytes, mime)
         saveIndex()
         return true
+    }
+
+    fun setSourceCategories(sourceId: String, categories: List<String>) {
+        synchronized(lock) {
+            val cur = sourcesMap[sourceId] ?: return
+            sourcesMap[sourceId] = cur.copy(categories = categories.distinct())
+        }
+        saveIndex()
+    }
+
+    fun searchSourceRows(
+        query: String,
+        filter: String = "all",
+        categoryFilter: String = ""
+    ): List<SourceRowUi> {
+        val q = query.trim().lowercase()
+        synchronized(lock) {
+            var list = sourcesMap.values.asSequence()
+            if (categoryFilter.isNotBlank()) {
+                list = list.filter { s ->
+                    s.categories.any { c -> c == categoryFilter || c.startsWith("$categoryFilter/") }
+                }
+            }
+            if (q.isNotEmpty()) {
+                list = list.filter { s ->
+                    s.name.lowercase().contains(q) ||
+                        s.categories.any { it.lowercase().contains(q) } ||
+                        s.urls.any { it.lowercase().contains(q) }
+                }
+            }
+            val rows = list.map { s ->
+                var ok = 0
+                var err = 0
+                var pending = 0
+                for (u in s.urls) {
+                    when (urlsMap[u]?.status) {
+                        CacheStatus.OK -> ok++
+                        CacheStatus.ERROR -> err++
+                        else -> pending++
+                    }
+                }
+                SourceRowUi(s, ok, err, pending)
+            }.filter { r ->
+                when (filter) {
+                    "has_error" -> r.errCount > 0
+                    "incomplete" -> r.okCount < r.source.urls.size
+                    "completed" -> r.source.urls.isNotEmpty() && r.okCount == r.source.urls.size
+                    else -> true
+                }
+            }.toList()
+
+            return when (filter) {
+                "most_imgs" -> rows.sortedByDescending { it.source.urls.size }
+                else -> rows.sortedByDescending { it.source.scannedAt }
+            }
+        }
     }
 
     fun searchSources(query: String, filter: String = "all"): List<SourceRecord> {

@@ -132,6 +132,8 @@ data class ParsedPreset(
     val maxTokens: Int?,
     val maxContext: Int?,
     val prompts: List<ParsedPresetPrompt>,
+    val embeddedRegexScripts: List<ParsedRegexScript> = emptyList(),
+    val embeddedHelperScripts: List<ParsedHelperScript> = emptyList(),
     val rawJson: String
 )
 
@@ -205,6 +207,19 @@ object PresetParser {
         val maxTokens = if (root.has("openai_max_tokens")) root.optInt("openai_max_tokens") else null
         val maxContext = if (root.has("openai_max_context")) root.optInt("openai_max_context") else null
 
+        // Parse embedded regex & Tavern Helper scripts inside preset extensions (or top-level)
+        val extObj = root.optJSONObject("extensions")
+        val regexList = mutableListOf<ParsedRegexScript>()
+        regexList.addAll(CharacterCardParser.parseEmbeddedRegex(extObj))
+        if (root.has("regex_scripts")) {
+            regexList.addAll(CharacterCardParser.parseEmbeddedRegex(root))
+        }
+        val helperList = mutableListOf<ParsedHelperScript>()
+        helperList.addAll(CharacterCardParser.parseEmbeddedHelper(extObj))
+        if (root.has("tavern_helper") || root.has("JS-Slash-Runner")) {
+            helperList.addAll(CharacterCardParser.parseEmbeddedHelper(root))
+        }
+
         return ParsedPreset(
             name = fallbackName.substringBeforeLast('.'),
             temperature = temp,
@@ -212,6 +227,8 @@ object PresetParser {
             maxTokens = maxTokens,
             maxContext = maxContext,
             prompts = ordered,
+            embeddedRegexScripts = regexList.distinctBy { it.name + it.findRegex },
+            embeddedHelperScripts = helperList.distinctBy { it.name + it.content.take(40) },
             rawJson = trimmed
         )
     }
