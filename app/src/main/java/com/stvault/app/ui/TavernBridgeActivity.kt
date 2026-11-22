@@ -343,28 +343,35 @@ class TavernBridgeActivity : AppCompatActivity() {
         const val EXT_REPO_URL = "https://github.com/cone97218-alt/pic"
 
         val HELPER_LOADER_JS = """
+const REPO = 'cone97218-alt/pic';
+const BRANCH = 'main';
+const FILE = 'index.js';
+
 (async () => {
-  const w = (() => {
-    try { if (window.__TAURITAVERN__ || window.SillyTavern) return window; } catch (_) {}
-    try { if (window.parent && (window.parent.__TAURITAVERN__ || window.parent.SillyTavern)) return window.parent; } catch (_) {}
-    try { if (window.top && (window.top.__TAURITAVERN__ || window.top.SillyTavern)) return window.top; } catch (_) {}
-    return window;
-  })();
-  const urls = [
-    'https://raw.githubusercontent.com/cone97218-alt/pic/main/index.js?t=' + Date.now(),
-    'https://cdn.jsdelivr.net/gh/cone97218-alt/pic@main/index.js?t=' + Date.now()
-  ];
-  for (const url of urls) {
-    try {
-      const res = await (w.fetch || fetch)(url, { cache: 'no-store' });
-      if (!res.ok) continue;
-      const code = await res.text();
-      if (code && code.includes('getMainWin')) {
-        (new w.Function(code))();
+  const tryLoad = async (url) => {
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${'$'}{res.status}`);
+    const code = await res.text();
+    (0, eval)(code);
+  };
+
+  try {
+    await tryLoad(`https://raw.githubusercontent.com/${'$'}{REPO}/${'$'}{BRANCH}/${'$'}{FILE}?t=${'$'}{Date.now()}`);
+    return;
+  } catch (_) {}
+
+  try {
+    const meta = await fetch(`https://api.github.com/repos/${'$'}{REPO}/commits/${'$'}{BRANCH}`, {
+      cache: 'no-store',
+    }).then((r) => r.json());
+    const ref = meta?.sha || BRANCH;
+    for (const host of ['cdn.jsdelivr.net', 'fastly.jsdelivr.net']) {
+      try {
+        await tryLoad(`https://${'$'}{host}/gh/${'$'}{REPO}@${'$'}{ref}/${'$'}{FILE}`);
         return;
-      }
-    } catch (_) {}
-  }
+      } catch (_) {}
+    }
+  } catch (_) {}
 })();
         """.trimIndent()
 
