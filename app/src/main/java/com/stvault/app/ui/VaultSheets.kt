@@ -474,6 +474,7 @@ object VaultSheets {
         secondaryConfirm: Pair<String, (List<String>) -> Unit>? = null,
         showSelectionTools: Boolean = false,
         searchHint: String = "搜索分类...",
+        filterChips: List<Pair<String, (PickerItem) -> Boolean>> = emptyList(),
         onConfirm: (List<String>) -> Unit
     ) {
         val (sheet, root) = createSheet(ctx)
@@ -500,6 +501,8 @@ object VaultSheets {
 
         val selected = preselectedIds.toMutableSet()
         val filtered = items.toMutableList()
+        var activeChipIdx = 0
+        var searchQuery = ""
         var rangeMode = false
         var rangeAnchorPos = -1
         var tvSelCount: TextView? = null
@@ -588,6 +591,61 @@ object VaultSheets {
             override fun getItemCount(): Int = filtered.size
         }
 
+        fun rebuildFiltered() {
+            val pred = filterChips.getOrNull(activeChipIdx)?.second
+            filtered.clear()
+            for (it in items) {
+                if (pred != null && !pred(it)) continue
+                if (searchQuery.isNotEmpty() && !it.title.lowercase().contains(searchQuery)) continue
+                filtered.add(it)
+            }
+            rangeAnchorPos = -1
+            adapter.notifyDataSetChanged()
+            refreshToolStatus()
+        }
+
+        if (filterChips.isNotEmpty()) {
+            val chipScroll = android.widget.HorizontalScrollView(ctx).apply {
+                isHorizontalScrollBarEnabled = false
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = dp(ctx, 10)
+                }
+            }
+            val chipRow = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val chipViews = mutableListOf<TextView>()
+            fun styleChips() {
+                chipViews.forEachIndexed { idx, tv ->
+                    val on = idx == activeChipIdx
+                    tv.setTextColor(col(ctx, if (on) R.color.on_accent else R.color.text_primary))
+                    tv.setBackgroundResource(if (on) R.drawable.bg_dock_item_active else R.drawable.bg_input)
+                }
+            }
+            filterChips.forEachIndexed { idx, (label, _) ->
+                val chip = TextView(ctx).apply {
+                    text = label
+                    textSize = 11.5f
+                    setTypeface(null, Typeface.BOLD)
+                    setPadding(dp(ctx, 11), dp(ctx, 5), dp(ctx, 11), dp(ctx, 5))
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        if (idx > 0) marginStart = dp(ctx, 6)
+                    }
+                    setOnClickListener {
+                        activeChipIdx = idx
+                        styleChips()
+                        rebuildFiltered()
+                    }
+                }
+                chipViews.add(chip)
+                chipRow.addView(chip)
+            }
+            styleChips()
+            chipScroll.addView(chipRow)
+            root.addView(chipScroll)
+        }
+
         if (showSelectionTools) {
             val toolsRow = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -664,11 +722,8 @@ object VaultSheets {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
                 override fun afterTextChanged(s: Editable?) {
-                    val q = s?.toString()?.trim()?.lowercase().orEmpty()
-                    filtered.clear()
-                    if (q.isEmpty()) filtered.addAll(items)
-                    else filtered.addAll(items.filter { it.title.lowercase().contains(q) })
-                    adapter.notifyDataSetChanged()
+                    searchQuery = s?.toString()?.trim()?.lowercase().orEmpty()
+                    rebuildFiltered()
                 }
             })
             root.addView(etSearch)

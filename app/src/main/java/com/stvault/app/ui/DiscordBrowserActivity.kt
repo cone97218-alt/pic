@@ -319,7 +319,10 @@ class DiscordBrowserActivity : AppCompatActivity() {
 
     private fun injectMobileLayoutHelper() {
         // Never overwrite current DOM sidebar state on sub-frame / message onPageFinished!
-        binding.webDiscord.evaluateJavascript(MOBILE_LAYOUT_JS, null)
+        binding.webDiscord.evaluateJavascript(MOBILE_LAYOUT_JS) {
+            // Prime the scroll-accumulation collector immediately so scrolling from the very top is captured
+            binding.webDiscord.evaluateJavascript(DOM_SCAN_JS, null)
+        }
     }
 
     private fun applyZoom() {
@@ -371,6 +374,18 @@ class DiscordBrowserActivity : AppCompatActivity() {
         val allIds = found.map { it.id }.toSet()
         val firstWithAuthor = found.firstOrNull { it.author.isNotBlank() || it.authorUid.isNotBlank() }
 
+        val extChips = listOf<Pair<String, (PickerItem) -> Boolean>>(
+            "全部" to { true },
+            "PNG" to { it.title.endsWith(".png", ignoreCase = true) },
+            "JSON" to { it.title.endsWith(".json", ignoreCase = true) },
+            "ZIP" to { it.title.endsWith(".zip", ignoreCase = true) },
+            "其他" to {
+                !it.title.endsWith(".png", ignoreCase = true) &&
+                    !it.title.endsWith(".json", ignoreCase = true) &&
+                    !it.title.endsWith(".zip", ignoreCase = true)
+            }
+        )
+
         VaultSheets.multiSelect(
             ctx = this,
             title = "发现 ${found.size} 个附件",
@@ -386,7 +401,8 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 }
             },
             showSelectionTools = true,
-            searchHint = "搜索文件名..."
+            searchHint = "搜索文件名...",
+            filterChips = extChips
         ) { picked ->
             val chosen = picked.mapNotNull { byId[it] }
             if (chosen.isEmpty()) {
@@ -717,10 +733,10 @@ class DiscordBrowserActivity : AppCompatActivity() {
                       document.execCommand('delete', false, null);
                     }
                     function tryAppLauncherFlow() {
-                      clearBoxText();
                       var scope = document.querySelector('div[class*="chatLayerWrapper_"]') || document;
-                      var appBtn = scope.querySelector('button[aria-label="应用"], button[aria-label="Apps"], button[class*="appLauncher"], button[class*="entryPointButton"], div[class*="appLauncher"] button');
+                      var appBtn = scope.querySelector('[aria-label*="应用"], [aria-label*="App"], [class*="appLauncher"] button, button[class*="appLauncher"], [class*="entryPointButton"]');
                       if (!appBtn) return;
+                      clearBoxText();
                       appBtn.click();
                       var appTries = 0;
                       var appTimer = setInterval(function() {
@@ -976,6 +992,10 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 }
                 lockChatKeyboard();
                 setInterval(lockChatKeyboard, 1200);
+                // Scroll-accumulation pool: remembers all attachments scrolled past in the current channel/thread
+                setInterval(function() {
+                  if (window.__stCollectIntoPool) window.__stCollectIntoPool();
+                }, 900);
                 document.addEventListener('click', function(e) {
                   var a = e.target && e.target.closest ? e.target.closest('a[href*="/channels/"]') : null;
                   if (!a) return;
@@ -999,151 +1019,170 @@ class DiscordBrowserActivity : AppCompatActivity() {
         private val DOM_SCAN_JS = """
             (function() {
               try {
-                var exts = /\.(png|json|zip|css|js|html|htm|txt)(\?|$)/i;
-                var seen = {};
-                var results = [];
-                function cleanCdnUrl(raw) {
-                  if (!raw) return '';
-                  var u = raw.trim();
-                  if (u.indexOf('media.discordapp.net/attachments/') !== -1) {
-                    try {
-                      var parsed = new URL(u);
-                      parsed.hostname = 'cdn.discordapp.com';
-                      parsed.searchParams.delete('format');
-                      parsed.searchParams.delete('quality');
-                      parsed.searchParams.delete('width');
-                      parsed.searchParams.delete('height');
-                      u = parsed.toString();
-                    } catch (e) {}
-                  }
-                  return u;
-                }
-                function readMsgMeta(msgEl) {
-                  if (!msgEl) return { name: '', uid: '', isBot: false };
-                  var cur = msgEl;
-                  for (var steps = 0; steps < 10 && cur; steps++) {
-                    var u = cur.querySelector('[id^="message-username-"], span[class*="username_"], h3 [class*="username"]');
-                    if (u && u.textContent && u.textContent.trim()) {
-                      var name = u.textContent.trim().slice(0, 28);
-                      var isBot = !!cur.querySelector('span[class*="botTag"], [class*="botText"]');
-                      var uid = '';
-                      var av = cur.querySelector('img[class*="avatar_"], img[src*="/avatars/"]');
-                      if (av && av.src) {
-                        var m = av.src.match(/\/avatars\/(\d+)\//);
-                        if (m && m[1]) uid = m[1];
-                      }
-                      return { name: name, uid: uid, isBot: isBot };
-                    }
-                    cur = cur.previousElementSibling;
-                  }
-                  return { name: '', uid: '', isBot: false };
-                }
-                function findThreadOp() {
+                function runCollector() {
+                  var exts = /\.(png|json|zip|css|js|html|htm|txt)(\?|$)/i;
                   var layer = document.querySelector('div[class*="chatLayerWrapper_"]');
-                  var root = layer || document;
-                  // 1. Prefer any message explicitly badged as OP / 楼主 by Discord
-                  var msgs = root.querySelectorAll('li[id^="chat-messages-"], div[id^="chat-messages-"]');
-                  for (var i = 0; i < msgs.length; i++) {
-                    var opBadge = msgs[i].querySelector('[class*="opTag"], [class*="ownerIcon"]');
-                    if (!opBadge) {
-                      var tags = msgs[i].querySelectorAll('span[class*="botText"], span[class*="tagText"]');
-                      for (var t = 0; t < tags.length; t++) {
-                        var tt = (tags[t].textContent || '').trim().toUpperCase();
-                        if (tt === 'OP' || tt === '楼主') { opBadge = tags[t]; break; }
+                  var layerTitle = '';
+                  if (layer) {
+                    var h = layer.querySelector('section[class*="title_"] h1, section[class*="title_"] [class*="title_"]');
+                    if (h && h.textContent) layerTitle = h.textContent.trim();
+                  }
+                  var ctxKey = location.pathname + '|' + layerTitle;
+                  if (!window.__stHoardPool || window.__stHoardPool.ctxKey !== ctxKey) {
+                    window.__stHoardPool = { ctxKey: ctxKey, order: [], map: {} };
+                  }
+                  var pool = window.__stHoardPool;
+                  function cleanCdnUrl(raw) {
+                    if (!raw) return '';
+                    var u = raw.trim();
+                    if (u.indexOf('media.discordapp.net/attachments/') !== -1) {
+                      try {
+                        var parsed = new URL(u);
+                        parsed.hostname = 'cdn.discordapp.com';
+                        parsed.searchParams.delete('format');
+                        parsed.searchParams.delete('quality');
+                        parsed.searchParams.delete('width');
+                        parsed.searchParams.delete('height');
+                        u = parsed.toString();
+                      } catch (e) {}
+                    }
+                    return u;
+                  }
+                  function readMsgMeta(msgEl) {
+                    if (!msgEl) return { name: '', uid: '', isBot: false };
+                    var cur = msgEl;
+                    for (var steps = 0; steps < 10 && cur; steps++) {
+                      var u = cur.querySelector('[id^="message-username-"], span[class*="username_"], h3 [class*="username"]');
+                      if (u && u.textContent && u.textContent.trim()) {
+                        var name = u.textContent.trim().slice(0, 28);
+                        var isBot = !!cur.querySelector('span[class*="botTag"], [class*="botText"]');
+                        var uid = '';
+                        var av = cur.querySelector('img[class*="avatar_"], img[src*="/avatars/"]');
+                        if (av && av.src) {
+                          var m = av.src.match(/\/avatars\/(\d+)\//);
+                          if (m && m[1]) uid = m[1];
+                        }
+                        return { name: name, uid: uid, isBot: isBot };
                       }
+                      cur = cur.previousElementSibling;
                     }
-                    if (opBadge) {
-                      var opMeta = readMsgMeta(msgs[i]);
-                      if (opMeta.name && !opMeta.isBot) return opMeta;
-                    }
+                    return { name: '', uid: '', isBot: false };
                   }
-                  // 2. Check Discord's active Forum Post card in the background forum list (always holds the real OP even when scrolled down!)
-                  var activeCard = document.querySelector('li[class*="card_"][class*="isOpen_"], div[class*="mainCard_"][class*="isOpen_"], [class*="card_"][aria-selected="true"]');
-                  if (activeCard) {
-                    var cardAuthor = activeCard.querySelector('[class*="author_"] [class*="username"], [class*="userName"], span[class*="username_"]');
-                    if (cardAuthor && cardAuthor.textContent && cardAuthor.textContent.trim()) {
-                      var cUid = '';
-                      var cAv = activeCard.querySelector('img[src*="/avatars/"]');
-                      if (cAv && cAv.src) {
-                        var cm = cAv.src.match(/\/avatars\/(\d+)\//);
-                        if (cm && cm[1]) cUid = cm[1];
-                      }
-                      return { name: cardAuthor.textContent.trim().slice(0, 28), uid: cUid, isBot: false };
-                    }
-                  }
-                  // 3. Only use the first message in the scroller if we are near the very top (scrollTop < 350) so we never mistake a reply for the OP
-                  var scroller = root.querySelector('div[class*="scroller_"][class*="managedReactiveScroller_"], div[class*="scroller_"]');
-                  var nearTop = !scroller || scroller.scrollTop < 350;
-                  if (nearTop && msgs.length > 0) {
-                    var firstMeta = readMsgMeta(msgs[0]);
-                    if (firstMeta.name && !firstMeta.isBot) return firstMeta;
-                  }
-                  return { name: '', uid: '', isBot: false };
-                }
-                var threadOp = findThreadOp();
-                function findAuthorInfo(el) {
-                  var msg = el.closest('li[id^="chat-messages-"], div[id^="chat-messages-"], [class*="messageListItem"]');
-                  var meta = readMsgMeta(msg);
-                  // If attachment came from a Bot (e.g. card-claim bot ephemeral reply), use the Forum Thread OP (楼主) instead!
-                  if ((meta.isBot || !meta.name) && threadOp.name) {
-                    return threadOp;
-                  }
-                  return meta;
-                }
-                function extractDomFileName(el, urlFallback) {
-                  try {
-                    var candidates = [];
-                    if (el) {
-                      var txt = (el.textContent || '').trim();
-                      if (txt && exts.test(txt) && txt.length <= 140) candidates.push(txt);
-                      var ttl = (el.getAttribute('title') || '').trim();
-                      if (ttl && exts.test(ttl) && ttl.length <= 140) candidates.push(ttl);
-                      var alt = (el.getAttribute('alt') || '').trim();
-                      if (alt && exts.test(alt) && alt.length <= 140) candidates.push(alt);
-                      var box = el.closest('[class*="attachment_"], [class*="nonMediaAttachment_"], [class*="file_"], [class*="mosaicItem_"]');
-                      if (box) {
-                        var fnEl = box.querySelector('a[class*="fileNameLink_"], div[class*="filename_"], span[class*="filename_"], [class*="fileName_"]');
-                        if (fnEl && fnEl.textContent) {
-                          var btxt = fnEl.textContent.trim();
-                          if (btxt && exts.test(btxt) && btxt.length <= 140) candidates.push(btxt);
+                  function findThreadOp() {
+                    var root = layer || document;
+                    var msgs = root.querySelectorAll('li[id^="chat-messages-"], div[id^="chat-messages-"]');
+                    for (var i = 0; i < msgs.length; i++) {
+                      var opBadge = msgs[i].querySelector('[class*="opTag"], [class*="ownerIcon"]');
+                      if (!opBadge) {
+                        var tags = msgs[i].querySelectorAll('span[class*="botText"], span[class*="tagText"]');
+                        for (var t = 0; t < tags.length; t++) {
+                          var tt = (tags[t].textContent || '').trim().toUpperCase();
+                          if (tt === 'OP' || tt === '楼主') { opBadge = tags[t]; break; }
                         }
                       }
+                      if (opBadge) {
+                        var opMeta = readMsgMeta(msgs[i]);
+                        if (opMeta.name && !opMeta.isBot) return opMeta;
+                      }
                     }
-                    for (var k = 0; k < candidates.length; k++) {
-                      var c = candidates[k].replace(/[\r\n]+/g, ' ').trim();
-                      if (c) return c;
+                    var activeCard = document.querySelector('li[class*="card_"][class*="isOpen_"], div[class*="mainCard_"][class*="isOpen_"], [class*="card_"][aria-selected="true"]');
+                    if (activeCard) {
+                      var cardAuthor = activeCard.querySelector('[class*="author_"] [class*="username"], [class*="userName"], span[class*="username_"]');
+                      if (cardAuthor && cardAuthor.textContent && cardAuthor.textContent.trim()) {
+                        var cUid = '';
+                        var cAv = activeCard.querySelector('img[src*="/avatars/"]');
+                        if (cAv && cAv.src) {
+                          var cm = cAv.src.match(/\/avatars\/(\d+)\//);
+                          if (cm && cm[1]) cUid = cm[1];
+                        }
+                        return { name: cardAuthor.textContent.trim().slice(0, 28), uid: cUid, isBot: false };
+                      }
                     }
-                  } catch (e) {}
-                  return urlFallback;
-                }
-                function pushUrl(rawUrl, el) {
-                  var u = cleanCdnUrl(rawUrl);
-                  if (!u) return;
-                  var isDcAtt = u.indexOf('cdn.discordapp.com/attachments/') !== -1;
-                  if (!isDcAtt && !exts.test(u)) return;
-                  var path = u.split('?')[0].split('#')[0];
-                  if (!exts.test(path)) return;
-                  var key = path.toLowerCase();
-                  if (seen[key]) return;
-                  seen[key] = true;
-                  var urlFn = path.substring(path.lastIndexOf('/') + 1);
-                  try { urlFn = decodeURIComponent(urlFn); } catch (e) {}
-                  var fn = extractDomFileName(el, urlFn);
-                  var aInfo = findAuthorInfo(el);
-                  results.push({ url: u, fileName: fn, author: aInfo.name, authorUid: aInfo.uid });
-                }
-                var anchors = document.querySelectorAll('a[href]');
-                for (var i = 0; i < anchors.length; i++) {
-                  pushUrl(anchors[i].href, anchors[i]);
-                }
-                var imgs = document.querySelectorAll('img[src]');
-                for (var j = 0; j < imgs.length; j++) {
-                  var src = imgs[j].src || '';
-                  if (src.indexOf('/attachments/') !== -1) {
-                    pushUrl(src, imgs[j]);
+                    var scroller = root.querySelector('div[class*="scroller_"][class*="managedReactiveScroller_"], div[class*="scroller_"]');
+                    var nearTop = !scroller || scroller.scrollTop < 350;
+                    if (nearTop && msgs.length > 0) {
+                      var firstMeta = readMsgMeta(msgs[0]);
+                      if (firstMeta.name && !firstMeta.isBot) return firstMeta;
+                    }
+                    return { name: '', uid: '', isBot: false };
                   }
+                  var threadOp = findThreadOp();
+                  if (threadOp.name) pool.op = threadOp;
+                  else if (pool.op) threadOp = pool.op;
+                  function findAuthorInfo(el) {
+                    var msg = el.closest('li[id^="chat-messages-"], div[id^="chat-messages-"], [class*="messageListItem"]');
+                    var meta = readMsgMeta(msg);
+                    if ((meta.isBot || !meta.name) && threadOp.name) {
+                      return threadOp;
+                    }
+                    return meta;
+                  }
+                  function extractDomFileName(el, urlFallback) {
+                    try {
+                      var candidates = [];
+                      if (el) {
+                        var txt = (el.textContent || '').trim();
+                        if (txt && exts.test(txt) && txt.length <= 140) candidates.push(txt);
+                        var ttl = (el.getAttribute('title') || '').trim();
+                        if (ttl && exts.test(ttl) && ttl.length <= 140) candidates.push(ttl);
+                        var alt = (el.getAttribute('alt') || '').trim();
+                        if (alt && exts.test(alt) && alt.length <= 140) candidates.push(alt);
+                        var box = el.closest('[class*="attachment_"], [class*="nonMediaAttachment_"], [class*="file_"], [class*="mosaicItem_"]');
+                        if (box) {
+                          var fnEl = box.querySelector('a[class*="fileNameLink_"], div[class*="filename_"], span[class*="filename_"], [class*="fileName_"]');
+                          if (fnEl && fnEl.textContent) {
+                            var btxt = fnEl.textContent.trim();
+                            if (btxt && exts.test(btxt) && btxt.length <= 140) candidates.push(btxt);
+                          }
+                        }
+                      }
+                      for (var k = 0; k < candidates.length; k++) {
+                        var c = candidates[k].replace(/[\r\n]+/g, ' ').trim();
+                        if (c) return c;
+                      }
+                    } catch (e) {}
+                    return urlFallback;
+                  }
+                  function pushUrl(rawUrl, el) {
+                    var u = cleanCdnUrl(rawUrl);
+                    if (!u) return;
+                    var isDcAtt = u.indexOf('cdn.discordapp.com/attachments/') !== -1;
+                    if (!isDcAtt && !exts.test(u)) return;
+                    var path = u.split('?')[0].split('#')[0];
+                    if (!exts.test(path)) return;
+                    var key = path.toLowerCase();
+                    var urlFn = path.substring(path.lastIndexOf('/') + 1);
+                    try { urlFn = decodeURIComponent(urlFn); } catch (e) {}
+                    var fn = extractDomFileName(el, urlFn);
+                    var aInfo = findAuthorInfo(el);
+                    if (!pool.map[key]) {
+                      pool.order.push(key);
+                      pool.map[key] = { url: u, fileName: fn, author: aInfo.name, authorUid: aInfo.uid };
+                    } else {
+                      // Refresh signed URL / better author if newly discovered
+                      pool.map[key].url = u;
+                      if (!pool.map[key].author && aInfo.name) {
+                        pool.map[key].author = aInfo.name;
+                        pool.map[key].authorUid = aInfo.uid;
+                      }
+                    }
+                  }
+                  var scanRoot = layer || document;
+                  var anchors = scanRoot.querySelectorAll('a[href]');
+                  for (var i = 0; i < anchors.length; i++) {
+                    pushUrl(anchors[i].href, anchors[i]);
+                  }
+                  var imgs = scanRoot.querySelectorAll('img[src]');
+                  for (var j = 0; j < imgs.length; j++) {
+                    var src = imgs[j].src || '';
+                    if (src.indexOf('/attachments/') !== -1) {
+                      pushUrl(src, imgs[j]);
+                    }
+                  }
+                  return pool.order.map(function(k) { return pool.map[k]; });
                 }
-                return JSON.stringify(results);
+                window.__stCollectIntoPool = runCollector;
+                return JSON.stringify(runCollector());
               } catch (e) {
                 return '[]';
               }

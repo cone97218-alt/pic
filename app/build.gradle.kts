@@ -11,8 +11,8 @@ android {
         applicationId = "com.stvault.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 89
-        versionName = "1.11.16"
+        versionCode = 90
+        versionName = "1.11.17"
 
         buildConfigField("String", "GITHUB_REPO", "\"cone97218-alt/pic\"")
     }
