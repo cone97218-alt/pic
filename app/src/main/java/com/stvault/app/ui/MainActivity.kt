@@ -37,6 +37,7 @@ import com.stvault.app.core.CategoryManager
 import com.stvault.app.core.HostConfig
 import com.stvault.app.core.ReleaseInfo
 import com.stvault.app.core.ResourceLibraryRepository
+import com.stvault.app.core.SmartImporter
 import com.stvault.app.core.UpdateManager
 import com.stvault.app.core.VaultRepository
 import com.stvault.app.core.VersionGrouper
@@ -323,6 +324,42 @@ class MainActivity : AppCompatActivity() {
         }
 
     private var pendingExportCompFile: File? = null
+    private var pendingBrowserTarget: String = "themes"
+    private var pendingBrowserMode: String = FileBrowserActivity.MODE_FILES
+
+    // 13. Built-in Minimalist File Browser Launcher (with 1-tap SAF fallback)
+    private val fileBrowserLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == FileBrowserActivity.RESULT_USE_SYSTEM_PICKER) {
+                launchSystemSafPicker(pendingBrowserTarget, pendingBrowserMode)
+                return@registerForActivityResult
+            }
+            if (result.resultCode != RESULT_OK || result.data == null) return@registerForActivityResult
+
+            if (pendingBrowserMode == FileBrowserActivity.MODE_FOLDER) {
+                val folderPath = result.data?.getStringExtra(FileBrowserActivity.EXTRA_RESULT_FOLDER)
+                    ?: return@registerForActivityResult
+                val dir = File(folderPath)
+                if (!dir.exists() || !dir.isDirectory) return@registerForActivityResult
+                if (pendingBrowserTarget == "themes") {
+                    savedLocalDirPath = dir.absolutePath
+                    savedTreeUri = null
+                    prefs.edit().putString("local_dir_path", dir.absolutePath).remove("tree_uri").apply()
+                    updateFolderLabel()
+                    runLocalDirScan(dir)
+                } else {
+                    runModuleLocalFolderScan(pendingBrowserTarget, dir)
+                }
+            } else {
+                val paths = result.data?.getStringArrayListExtra(FileBrowserActivity.EXTRA_RESULT_FILES)
+                    ?: return@registerForActivityResult
+                val files = paths.map { File(it) }.filter { it.exists() && it.isFile }
+                if (files.isNotEmpty()) {
+                    importLocalFilesWithSmartRouter(files, pendingBrowserTarget)
+                }
+            }
+        }
+
     private val exportCompFileLauncher =
         registerForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
             val f = pendingExportCompFile ?: return@registerForActivityResult
@@ -368,6 +405,13 @@ class MainActivity : AppCompatActivity() {
 
         val lastWs = prefs.getString("active_workspace", "themes") ?: "themes"
         switchWorkspace(lastWs)
+        handleIncomingShareIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingShareIntent(intent)
     }
 
     override fun onResume() {
@@ -807,9 +851,13 @@ class MainActivity : AppCompatActivity() {
         binding.wsCharacters.etCharSearch.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEARCH) { refreshCharactersList(); true } else false
         }
-        binding.wsCharacters.btnCharQuickImport.setOnClickListener { importCharFilesLauncher.launch(arrayOf("*/*")) }
+        binding.wsCharacters.btnCharQuickImport.setOnClickListener {
+            openFileBrowser("characters", FileBrowserActivity.MODE_FILES, "导入角色卡")
+        }
         binding.wsCharacters.btnCharQuickUrl.setOnClickListener { showImportCharacterUrlDialog() }
-        binding.wsCharacters.btnCharScanFolder.setOnClickListener { scanCharFolderLauncher.launch(null) }
+        binding.wsCharacters.btnCharScanFolder.setOnClickListener {
+            openFileBrowser("characters", FileBrowserActivity.MODE_FOLDER, "扫描角色卡目录")
+        }
         binding.wsCharacters.btnCharStartCache.setOnClickListener {
             VaultDownloadService.start(this, mode = "pending", concurrency = downloadConcurrency)
             toast("开始后台缓存")
@@ -820,8 +868,12 @@ class MainActivity : AppCompatActivity() {
         binding.wsWorldBooks.etWbSearch.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEARCH) { refreshWorldBooksList(); true } else false
         }
-        binding.wsWorldBooks.btnWbQuickImport.setOnClickListener { importWbFilesLauncher.launch(arrayOf("*/*")) }
-        binding.wsWorldBooks.btnWbScanFolder.setOnClickListener { scanWbFolderLauncher.launch(null) }
+        binding.wsWorldBooks.btnWbQuickImport.setOnClickListener {
+            openFileBrowser("worldbooks", FileBrowserActivity.MODE_FILES, "导入世界书")
+        }
+        binding.wsWorldBooks.btnWbScanFolder.setOnClickListener {
+            openFileBrowser("worldbooks", FileBrowserActivity.MODE_FOLDER, "扫描世界书目录")
+        }
         binding.wsWorldBooks.btnWbStartCache.setOnClickListener {
             VaultDownloadService.start(this, mode = "pending", concurrency = downloadConcurrency)
             toast("开始后台缓存")
@@ -832,21 +884,35 @@ class MainActivity : AppCompatActivity() {
         binding.wsPresets.etPresetSearch.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEARCH) { refreshPresetsList(); true } else false
         }
-        binding.wsPresets.btnPresetImportFile.setOnClickListener { importPresetFilesLauncher.launch(arrayOf("*/*")) }
-        binding.wsPresets.btnPresetScanFolder.setOnClickListener { scanPresetFolderLauncher.launch(null) }
+        binding.wsPresets.btnPresetImportFile.setOnClickListener {
+            openFileBrowser("presets", FileBrowserActivity.MODE_FILES, "导入预设")
+        }
+        binding.wsPresets.btnPresetScanFolder.setOnClickListener {
+            openFileBrowser("presets", FileBrowserActivity.MODE_FOLDER, "扫描预设目录")
+        }
 
         // Workspace 5: Components Listeners
         binding.wsComponents.btnCompSearch.setOnClickListener { refreshComponentsList() }
         binding.wsComponents.etCompSearch.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEARCH) { refreshComponentsList(); true } else false
         }
-        binding.wsComponents.btnCompImportFile.setOnClickListener { importCompFilesLauncher.launch(arrayOf("*/*")) }
-        binding.wsComponents.btnCompScanFolder.setOnClickListener { scanCompFolderLauncher.launch(null) }
+        binding.wsComponents.btnCompImportFile.setOnClickListener {
+            openFileBrowser("components", FileBrowserActivity.MODE_FILES, "导入组件")
+        }
+        binding.wsComponents.btnCompScanFolder.setOnClickListener {
+            openFileBrowser("components", FileBrowserActivity.MODE_FOLDER, "扫描组件目录")
+        }
 
         // Tab 1: Folder Pick, Single File Import & Scan
-        binding.btnPickFolder.setOnClickListener { pickFolderLauncher.launch(savedTreeUri) }
-        binding.btnImportSingleFile.setOnClickListener { importSingleFilesLauncher.launch(arrayOf("*/*")) }
-        binding.btnImportInVault.setOnClickListener { importSingleFilesLauncher.launch(arrayOf("*/*")) }
+        binding.btnPickFolder.setOnClickListener {
+            openFileBrowser("themes", FileBrowserActivity.MODE_FOLDER, "选择美化目录")
+        }
+        binding.btnImportSingleFile.setOnClickListener {
+            openFileBrowser("themes", FileBrowserActivity.MODE_FILES, "导入美化文件")
+        }
+        binding.btnImportInVault.setOnClickListener {
+            openFileBrowser("themes", FileBrowserActivity.MODE_FILES, "导入美化文件")
+        }
         binding.btnOpenTTFolder.setOnClickListener { openTauriTavernThemesFolder() }
         binding.btnScanFolder.setOnClickListener {
             val localPath = savedLocalDirPath
@@ -857,7 +923,7 @@ class MainActivity : AppCompatActivity() {
                 runFolderScan(uri)
             } else {
                 toast("请先选择美化目录或点一键直达 TT 酒馆")
-                pickFolderLauncher.launch(null)
+                openFileBrowser("themes", FileBrowserActivity.MODE_FOLDER, "选择美化目录")
             }
         }
 
@@ -1256,7 +1322,7 @@ class MainActivity : AppCompatActivity() {
         binding.btnOpenTTFolder.isEnabled = false
         binding.btnScanFolder.isEnabled = false
         binding.tvScanProgress.visibility = View.VISIBLE
-        binding.tvScanProgress.text = "正在扫描 TT 酒馆目录..."
+        binding.tvScanProgress.text = "正在扫描本地目录..."
 
         lifecycleScope.launch {
             try {
@@ -1284,7 +1350,7 @@ class MainActivity : AppCompatActivity() {
     private fun updateFolderLabel() {
         val localPath = savedLocalDirPath
         if (!localPath.isNullOrBlank()) {
-            binding.tvSelectedFolder.text = "已绑定 TT 目录：$localPath"
+            binding.tvSelectedFolder.text = "已绑定目录：$localPath"
             return
         }
         val uri = savedTreeUri
@@ -2371,6 +2437,178 @@ class MainActivity : AppCompatActivity() {
                 toast("已批量删除 ${ids.size} 项")
                 exitBatchMode()
                 refreshActiveWorkspace()
+            }
+        }
+    }
+
+    // ================== Built-in File Browser & Cross-App Share Import ==================
+
+    private fun openFileBrowser(target: String, mode: String, title: String) {
+        pendingBrowserTarget = target
+        pendingBrowserMode = mode
+        fileBrowserLauncher.launch(FileBrowserActivity.buildIntent(this, mode, title))
+    }
+
+    private fun launchSystemSafPicker(target: String, mode: String) {
+        if (mode == FileBrowserActivity.MODE_FOLDER) {
+            when (target) {
+                "themes" -> pickFolderLauncher.launch(savedTreeUri)
+                "characters" -> scanCharFolderLauncher.launch(null)
+                "worldbooks" -> scanWbFolderLauncher.launch(null)
+                "presets" -> scanPresetFolderLauncher.launch(null)
+                "components" -> scanCompFolderLauncher.launch(null)
+            }
+        } else {
+            when (target) {
+                "themes" -> importSingleFilesLauncher.launch(arrayOf("*/*"))
+                "characters" -> importCharFilesLauncher.launch(arrayOf("*/*"))
+                "worldbooks" -> importWbFilesLauncher.launch(arrayOf("*/*"))
+                "presets" -> importPresetFilesLauncher.launch(arrayOf("*/*"))
+                "components" -> importCompFilesLauncher.launch(arrayOf("*/*"))
+            }
+        }
+    }
+
+    private fun importLocalFilesWithSmartRouter(files: List<File>, preferredModule: String) {
+        showIsland("正在导入 ${files.size} 个文件...")
+        lifecycleScope.launch {
+            try {
+                val summary = withContext(Dispatchers.IO) {
+                    SmartImporter.importLocalFiles(
+                        context = this@MainActivity,
+                        files = files,
+                        preferredModule = preferredModule
+                    ) { processed, label ->
+                        runOnUiThread { updateIsland("导入中 ($processed) $label") }
+                    }
+                }
+                val msg = summary.formatMessage()
+                finishIsland(msg)
+                toast(msg)
+                libRepo.refreshCounts()
+                refreshActiveWorkspace()
+            } catch (e: Exception) {
+                finishIsland("导入失败")
+                toast("导入失败：${e.message}")
+            }
+        }
+    }
+
+    private fun runModuleLocalFolderScan(target: String, dir: File) {
+        val label = when (target) {
+            "characters" -> "角色卡"
+            "worldbooks" -> "世界书"
+            "presets" -> "预设"
+            "components" -> "组件"
+            else -> "资源"
+        }
+        showIsland("正在扫描${label}目录...")
+        lifecycleScope.launch {
+            try {
+                val res = withContext(Dispatchers.IO) {
+                    val cb: (Int, Int) -> Unit = { scanned, matched ->
+                        runOnUiThread { updateIsland("已扫 $scanned 个 · 命中 $matched 个$label") }
+                    }
+                    when (target) {
+                        "characters" -> libRepo.scanCharactersLocalDir(dir, cb)
+                        "worldbooks" -> libRepo.scanWorldBooksLocalDir(dir, cb)
+                        "presets" -> libRepo.scanPresetsLocalDir(dir, cb)
+                        "components" -> libRepo.scanComponentsLocalDir(dir, cb)
+                        else -> com.stvault.app.model.ScanResult(0, 0, 0, 0)
+                    }
+                }
+                val dupTip = if (res.duplicateFiles > 0) "（重复 ${res.duplicateFiles}）" else ""
+                val urlTip = if (res.newUrls > 0) "，提取 ${res.newUrls} 图床" else ""
+                val msg = "扫描完成：新增 ${res.matchedFiles} 个$label$dupTip$urlTip"
+                finishIsland(msg)
+                toast(msg)
+                libRepo.refreshCounts()
+                refreshActiveWorkspace()
+            } catch (e: Exception) {
+                finishIsland("扫描失败")
+                toast("扫描失败：${e.message}")
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun handleIncomingShareIntent(incoming: Intent?) {
+        val intent = incoming ?: return
+        val action = intent.action ?: return
+        if (action != Intent.ACTION_SEND &&
+            action != Intent.ACTION_SEND_MULTIPLE &&
+            action != Intent.ACTION_VIEW
+        ) return
+
+        val uris = LinkedHashSet<Uri>()
+        when (action) {
+            Intent.ACTION_SEND -> {
+                val single: Uri? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM)
+                }
+                if (single != null) uris.add(single)
+            }
+            Intent.ACTION_SEND_MULTIPLE -> {
+                val list: ArrayList<Uri>? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)
+                }
+                if (!list.isNullOrEmpty()) uris.addAll(list)
+            }
+            Intent.ACTION_VIEW -> {
+                intent.data?.let { uris.add(it) }
+            }
+        }
+
+        // Also inspect clipData in case the sender (e.g., cloned file manager / QQ / WeChat) passed URIs there
+        intent.clipData?.let { clip ->
+            for (i in 0 until clip.itemCount) {
+                clip.getItemAt(i)?.uri?.let { uris.add(it) }
+            }
+        }
+
+        // Clear action so configuration changes (e.g. dark mode / rotation) do not re-trigger import
+        intent.action = null
+        if (uris.isEmpty()) return
+
+        val uriList = uris.toList()
+        showIsland("正在智能识别并导入 ${uriList.size} 个文件...")
+        lifecycleScope.launch {
+            try {
+                val summary = withContext(Dispatchers.IO) {
+                    SmartImporter.importUris(
+                        context = this@MainActivity,
+                        uris = uriList,
+                        preferredModule = ""
+                    ) { processed, label ->
+                        runOnUiThread { updateIsland("正在导入 ($processed) $label") }
+                    }
+                }
+                val msg = summary.formatMessage()
+                finishIsland(msg)
+                toast(msg)
+                libRepo.refreshCounts()
+
+                // Auto-navigate if all imported items belong to a single module
+                val targetWs = when {
+                    summary.characters > 0 && summary.themes == 0 && summary.worldBooks == 0 && summary.presets == 0 && summary.components == 0 -> "characters"
+                    summary.worldBooks > 0 && summary.themes == 0 && summary.characters == 0 && summary.presets == 0 && summary.components == 0 -> "worldbooks"
+                    summary.presets > 0 && summary.themes == 0 && summary.characters == 0 && summary.worldBooks == 0 && summary.components == 0 -> "presets"
+                    summary.components > 0 && summary.themes == 0 && summary.characters == 0 && summary.worldBooks == 0 && summary.presets == 0 -> "components"
+                    summary.themes > 0 && summary.characters == 0 && summary.worldBooks == 0 && summary.presets == 0 && summary.components == 0 -> "themes"
+                    else -> null
+                }
+                if (targetWs != null && targetWs != activeWorkspace) {
+                    switchWorkspace(targetWs)
+                } else {
+                    refreshActiveWorkspace()
+                }
+            } catch (e: Exception) {
+                finishIsland("分享导入失败")
+                toast("分享导入失败：${e.message}")
             }
         }
     }

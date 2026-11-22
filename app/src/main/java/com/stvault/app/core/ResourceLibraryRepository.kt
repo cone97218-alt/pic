@@ -417,6 +417,50 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         return ScanResult(scanned, matched, newUrls, dups)
     }
 
+    fun importCharacterFromBytes(
+        bytes: ByteArray,
+        fileName: String,
+        sourceRef: String = ""
+    ): Triple<CharacterRecord?, Boolean, Int> = importCharacterBytes(bytes, fileName, "local", sourceRef)
+
+    fun scanCharactersLocalDir(
+        rootDir: File,
+        onProgress: (scanned: Int, matched: Int) -> Unit = { _, _ -> }
+    ): ScanResult {
+        var scanned = 0
+        var matched = 0
+        var newUrls = 0
+        var dups = 0
+        fun walk(dir: File) {
+            val children = dir.listFiles() ?: return
+            for (child in children) {
+                val name = child.name
+                if (child.isDirectory) {
+                    if (name != "vault" && name != ".git" && name != "thumbs") walk(child)
+                    continue
+                }
+                if (!child.isFile) continue
+                val ext = name.substringAfterLast('.', "").lowercase()
+                if (ext != "png" && ext != "json") continue
+                if (child.length() <= 0L || child.length() > 40L * 1024L * 1024L) continue
+                scanned++
+                if (scanned % 5 == 0) onProgress(scanned, matched)
+                try {
+                    val (rec, isDup, addedUrls) = importCharacterBytes(child.readBytes(), name, "local", "file://${child.absolutePath}")
+                    if (isDup) dups++
+                    else if (rec != null) {
+                        matched++
+                        newUrls += addedUrls
+                    }
+                } catch (_: Exception) {
+                }
+            }
+        }
+        walk(rootDir)
+        onProgress(scanned, matched)
+        return ScanResult(scanned, matched, newUrls, dups)
+    }
+
     private fun importCharacterBytes(
         bytes: ByteArray,
         fileName: String,
@@ -738,6 +782,44 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         return ScanResult(scanned, matched, newUrls, dups)
     }
 
+    fun importWorldBookFromText(rawText: String, fileName: String): Triple<WorldBookRecord?, Boolean, Int> =
+        importWorldBookText(rawText, fileName)
+
+    fun scanWorldBooksLocalDir(
+        rootDir: File,
+        onProgress: (scanned: Int, matched: Int) -> Unit = { _, _ -> }
+    ): ScanResult {
+        var scanned = 0
+        var matched = 0
+        var newUrls = 0
+        var dups = 0
+        fun walk(dir: File) {
+            val children = dir.listFiles() ?: return
+            for (child in children) {
+                val name = child.name
+                if (child.isDirectory) {
+                    if (name != "vault" && name != ".git") walk(child)
+                    continue
+                }
+                if (!child.isFile || !name.endsWith(".json", ignoreCase = true)) continue
+                scanned++
+                if (scanned % 10 == 0) onProgress(scanned, matched)
+                try {
+                    val (rec, isDup, addedUrls) = importWorldBookText(child.readText(Charsets.UTF_8), name)
+                    if (isDup) dups++
+                    else if (rec != null) {
+                        matched++
+                        newUrls += addedUrls
+                    }
+                } catch (_: Exception) {
+                }
+            }
+        }
+        walk(rootDir)
+        onProgress(scanned, matched)
+        return ScanResult(scanned, matched, newUrls, dups)
+    }
+
     private fun importWorldBookText(
         rawText: String,
         fileName: String,
@@ -940,6 +1022,40 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
             }
         }
         walk(root)
+        onProgress(scanned, matched)
+        return ScanResult(scanned, matched, 0, dups)
+    }
+
+    fun importPresetFromText(rawText: String, fileName: String): Pair<PresetRecord?, Boolean> =
+        importPresetText(rawText, fileName)
+
+    fun scanPresetsLocalDir(
+        rootDir: File,
+        onProgress: (scanned: Int, matched: Int) -> Unit = { _, _ -> }
+    ): ScanResult {
+        var scanned = 0
+        var matched = 0
+        var dups = 0
+        fun walk(dir: File) {
+            val children = dir.listFiles() ?: return
+            for (child in children) {
+                val name = child.name
+                if (child.isDirectory) {
+                    if (name != "vault" && name != ".git") walk(child)
+                    continue
+                }
+                if (!child.isFile || !name.endsWith(".json", ignoreCase = true)) continue
+                scanned++
+                if (scanned % 10 == 0) onProgress(scanned, matched)
+                try {
+                    val (rec, isDup) = importPresetText(child.readText(Charsets.UTF_8), name)
+                    if (isDup) dups++
+                    else if (rec != null) matched++
+                } catch (_: Exception) {
+                }
+            }
+        }
+        walk(rootDir)
         onProgress(scanned, matched)
         return ScanResult(scanned, matched, 0, dups)
     }
@@ -1170,6 +1286,46 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
             }
         }
         walk(root)
+        onProgress(scanned, matched)
+        return ScanResult(scanned, matched, newUrls, dups)
+    }
+
+    fun importComponentFromText(rawText: String, fileName: String): Triple<ComponentRecord?, Boolean, Int> =
+        importComponentText(rawText, fileName)
+
+    fun scanComponentsLocalDir(
+        rootDir: File,
+        onProgress: (scanned: Int, matched: Int) -> Unit = { _, _ -> }
+    ): ScanResult {
+        var scanned = 0
+        var matched = 0
+        var newUrls = 0
+        var dups = 0
+        fun walk(dir: File) {
+            val children = dir.listFiles() ?: return
+            for (child in children) {
+                val name = child.name
+                if (child.isDirectory) {
+                    if (name != "vault" && name != ".git") walk(child)
+                    continue
+                }
+                if (!child.isFile) continue
+                val ext = name.substringAfterLast('.', "").lowercase()
+                if (ext != "json" && ext != "js") continue
+                scanned++
+                if (scanned % 10 == 0) onProgress(scanned, matched)
+                try {
+                    val (rec, isDup, addedUrls) = importComponentText(child.readText(Charsets.UTF_8), name)
+                    if (isDup) dups++
+                    else if (rec != null) {
+                        matched++
+                        newUrls += addedUrls
+                    }
+                } catch (_: Exception) {
+                }
+            }
+        }
+        walk(rootDir)
         onProgress(scanned, matched)
         return ScanResult(scanned, matched, newUrls, dups)
     }

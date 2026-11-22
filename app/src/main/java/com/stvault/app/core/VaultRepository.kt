@@ -507,6 +507,34 @@ class VaultRepository private constructor(private val appContext: Context) {
     }
 
     /**
+     * Imports a single theme directly from raw text (used by SmartImporter, Share Intent & ZIP import).
+     * Returns Pair(addedUrls, isDuplicate) or null if no external URLs found.
+     */
+    fun importRawThemeText(
+        rawText: String,
+        fileName: String,
+        folderName: String = "导入"
+    ): Pair<Int, Boolean>? {
+        if (rawText.isBlank()) return null
+        val (urls, isJson) = UrlExtractor.extract(rawText)
+        if (urls.isEmpty()) return null
+        val contentHash = sha256Short(rawText.trim().toByteArray(Charsets.UTF_8))
+        val res = synchronized(lock) {
+            registerSourceLocked(
+                name = fileName,
+                docUri = "",
+                urls = urls,
+                isJson = isJson,
+                contentHash = contentHash,
+                rawContent = rawText,
+                folderName = folderName
+            )
+        }
+        saveIndex()
+        return res
+    }
+
+    /**
      * Imports one or more user-selected theme files (JSON / CSS / TXT / HTML) directly via SAF.
      */
     fun importFileUris(uris: List<Uri>): ScanResult {
