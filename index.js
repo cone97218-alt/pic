@@ -9,12 +9,16 @@
     const DISPLAY_NAME = '酒馆匣互联';
     const MODULE_NAME = 'stVaultBridge';
     const CANDIDATE_PORTS = [8796, 8797, 8798, 8799, 8800];
-    const CHUNK_BYTES = 48 * 1024;
+    const CHUNK_BYTES = 384 * 1024;
+    const FAST_LIMIT_BYTES = 512 * 1024;
+    const BATCH_MAX_ITEMS = 10;
+    const BATCH_MAX_BYTES = 1200 * 1024;
     const TOOL_NAMES = [
         'stvault_ping', 'stvault_sync_inventory',
         'stvault_outbox_list', 'stvault_outbox_fetch', 'stvault_outbox_ack',
         'stvault_pull_poll', 'stvault_pull_done',
-        'stvault_push_begin', 'stvault_push_chunk', 'stvault_push_end'
+        'stvault_push_begin', 'stvault_push_chunk', 'stvault_push_end',
+        'stvault_push_fast', 'stvault_push_batch'
     ];
 
     const state = {
@@ -288,6 +292,17 @@
     }
 
     async function pushBytesToVault(kind, fileName, bytes) {
+        if (bytes.length <= FAST_LIMIT_BYTES) {
+            try {
+                return await callTool('stvault_push_fast', {
+                    kind,
+                    fileName,
+                    data: bytesToBase64(bytes)
+                });
+            } catch (_) {
+                // Fallback to legacy chunked push if server is older
+            }
+        }
         const begin = await callTool('stvault_push_begin', { kind, fileName, bytes: bytes.length });
         const opId = begin.opId;
         let idx = 0;
@@ -298,8 +313,75 @@
         return callTool('stvault_push_end', { opId });
     }
 
+    async function flushBatch(batch) {
+        if (!batch.length) return 0;
+        try {
+            const res = await callTool('stvault_push_batch', { items: batch });
+            return (res && typeof res.count === 'number') ? res.count : batch.length;
+        } catch (_) {
+            // Fallback one-by-one if older app doesn't have stvault_push_batch
+            let ok = 0;
+            for (const it of batch) {
+                try {
+                    await pushBytesToVault(it.kind, it.fileName, base64ToBytes(it.data));
+                    ok++;
+                } catch (_2) {}
+            }
+            return ok;
+        }
+    }
+
+    async function pushItemsBatched(kind, items, label) {
+        let sent = 0;
+        let batch = [];
+        let batchBytes = 0;
+        for (let i = 0; i < items.length; i++) {
+            const { fileName, bytes } = items[i];
+            if (bytes.length > FAST_LIMIT_BYTES) {
+                if (batch.length) {
+                    sent += await flushBatch(batch);
+                    batch = [];
+                    batchBytes = 0;
+                }
+                setStatus('正在推送' + label + ' ' + (i + 1) + '/' + items.length, 'stv-ok');
+                await pushBytesToVault(kind, fileName, bytes);
+                sent++;
+                continue;
+            }
+            const b64 = bytesToBase64(bytes);
+            if (batch.length >= BATCH_MAX_ITEMS || (batch.length > 0 && batchBytes + b64.length > BATCH_MAX_BYTES)) {
+                setStatus('极速批量推送' + label + ' ' + i + '/' + items.length + '...', 'stv-ok');
+                sent += await flushBatch(batch);
+                batch = [];
+                batchBytes = 0;
+            }
+            batch.push({ kind, fileName, data: b64 });
+            batchBytes += b64.length;
+        }
+        if (batch.length) {
+            setStatus('极速批量推送' + label + ' ' + items.length + '/' + items.length + '...', 'stv-ok');
+            sent += await flushBatch(batch);
+        }
+        return sent;
+    }
+
+    async function runPool(list, concurrency, worker) {
+        let idx = 0;
+        const runners = [];
+        const n = Math.min(concurrency, list.length);
+        for (let w = 0; w < n; w++) {
+            runners.push((async () => {
+                while (idx < list.length) {
+                    const cur = idx++;
+                    await worker(list[cur], cur);
+                }
+            })());
+        }
+        await Promise.all(runners);
+    }
+
     async function handlePull(kind) {
-        log('开始拉取：' + kind);
+        log('开始极速同步：' + kind);
         setStatus('正在同步 ' + kind + ' 到酒馆匣...', 'stv-ok');
         const enc = new TextEncoder();
         let totalSent = 0;
@@ -308,94 +390,78 @@
 
         if (kind === 'all' || kind === 'theme') {
             const themes = asArray(src.themes).map(asObject).filter(Boolean);
-            log('读取到美化 ' + themes.length + ' 个，开始推送...');
-            for (let i = 0; i < themes.length; i++) {
-                const t = themes[i];
-                const tName = String(t.name || t.theme_name || ('theme_' + (i + 1)));
-                try {
-                    setStatus('正在推送美化 ' + (i + 1) + '/' + themes.length + '：' + tName, 'stv-ok');
-                    const bytes = enc.encode(JSON.stringify(t, null, 2));
-                    await pushBytesToVault('theme', tName + '.json', bytes);
-                    totalSent++;
-                } catch (e) {
-                    failCount++;
-                    log('美化推送失败（' + tName + '）：' + (e && e.message ? e.message : String(e)));
-                }
-            }
+            log('读取到美化 ' + themes.length + ' 个，极速批量推送中...');
+            const prepared = themes.map((t, i) => ({
+                fileName: String(t.name || t.theme_name || ('theme_' + (i + 1))) + '.json',
+                bytes: enc.encode(JSON.stringify(t, null, 2))
+            }));
+            totalSent += await pushItemsBatched('theme', prepared, '美化');
         }
         // Pull characters BEFORE worldbooks so embedded worldbooks are deduplicated automatically
         if (kind === 'all' || kind === 'character') {
-            const chars = await fetchStCharacters();
-            log('读取到角色卡 ' + chars.length + ' 张，开始推送...');
+            const chars = (await fetchStCharacters()).filter(c => c && c.avatar);
+            log('读取到角色卡 ' + chars.length + ' 张，3 路并发推送中...');
             const headers = await getHeaders();
             headers['Content-Type'] = 'application/json';
-            for (let i = 0; i < chars.length; i++) {
-                const c = chars[i];
-                if (!c || !c.avatar) continue;
+            let doneChars = 0;
+            await runPool(chars, 3, async (c) => {
                 try {
-                    setStatus('正在推送角色卡 ' + (i + 1) + '/' + chars.length + '：' + (c.name || c.avatar), 'stv-ok');
                     const r = await fetch('/api/characters/export', {
                         method: 'POST', headers,
                         body: JSON.stringify({ format: 'png', avatar_url: c.avatar })
                     });
-                    if (!r.ok) { failCount++; continue; }
+                    if (!r.ok) { failCount++; return; }
                     const buf = new Uint8Array(await r.arrayBuffer());
                     await pushBytesToVault('character', c.avatar, buf);
                     totalSent++;
                 } catch (e) {
                     failCount++;
                     log('角色卡推送失败（' + (c.name || c.avatar) + '）：' + (e && e.message ? e.message : String(e)));
+                } finally {
+                    doneChars++;
+                    setStatus('并发推送角色卡 ' + doneChars + '/' + chars.length, 'stv-ok');
                 }
-            }
+            });
         }
         if (kind === 'all' || kind === 'worldbook') {
             const names = asArray(src.world_names).map(w => String(w || '').trim()).filter(Boolean);
-            log('读取到世界书 ' + names.length + ' 本，开始推送...');
+            log('读取到世界书 ' + names.length + ' 本，并发拉取并批量推送中...');
             const headers = await getHeaders();
             headers['Content-Type'] = 'application/json';
-            for (let i = 0; i < names.length; i++) {
-                const name = names[i];
+            const prepared = [];
+            await runPool(names, 4, async (name) => {
                 try {
-                    setStatus('正在推送世界书 ' + (i + 1) + '/' + names.length + '：' + name, 'stv-ok');
                     const r = await fetch('/api/worldinfo/get', { method: 'POST', headers, body: JSON.stringify({ name }) });
-                    if (!r.ok) { failCount++; continue; }
+                    if (!r.ok) { failCount++; return; }
                     const wb = await r.json();
                     wb.name = wb.name || name;
-                    await pushBytesToVault('worldbook', name + '.json', enc.encode(JSON.stringify(wb, null, 2)));
-                    totalSent++;
-                } catch (e) {
+                    prepared.push({ fileName: name + '.json', bytes: enc.encode(JSON.stringify(wb, null, 2)) });
+                } catch (_) {
                     failCount++;
-                    log('世界书推送失败（' + name + '）：' + (e && e.message ? e.message : String(e)));
                 }
-            }
+            });
+            totalSent += await pushItemsBatched('worldbook', prepared, '世界书');
         }
         if (kind === 'all' || kind === 'preset') {
             const presetsArr = asArray(src.openai_settings);
             const rawNames = src.openai_setting_names;
-            const pairs = [];
+            const prepared = [];
             if (Array.isArray(rawNames)) {
                 presetsArr.forEach((raw, idx) => {
                     const obj = asObject(raw);
-                    if (obj) pairs.push([String(rawNames[idx] || obj.name || ('preset_' + (idx + 1))), obj]);
+                    if (obj) {
+                        const pName = String(rawNames[idx] || obj.name || ('preset_' + (idx + 1)));
+                        prepared.push({ fileName: pName + '.json', bytes: enc.encode(JSON.stringify(obj, null, 2)) });
+                    }
                 });
             } else if (rawNames && typeof rawNames === 'object') {
                 for (const [pName, pIdx] of Object.entries(rawNames)) {
                     const obj = asObject(presetsArr[pIdx]);
-                    if (obj) pairs.push([pName, obj]);
+                    if (obj) prepared.push({ fileName: pName + '.json', bytes: enc.encode(JSON.stringify(obj, null, 2)) });
                 }
             }
-            log('读取到预设 ' + pairs.length + ' 个，开始推送...');
-            for (let i = 0; i < pairs.length; i++) {
-                const [pName, obj] = pairs[i];
-                try {
-                    setStatus('正在推送预设 ' + (i + 1) + '/' + pairs.length + '：' + pName, 'stv-ok');
-                    await pushBytesToVault('preset', pName + '.json', enc.encode(JSON.stringify(obj, null, 2)));
-                    totalSent++;
-                } catch (e) {
-                    failCount++;
-                    log('预设推送失败（' + pName + '）：' + (e && e.message ? e.message : String(e)));
-                }
-            }
+            log('读取到预设 ' + prepared.length + ' 个，极速批量推送中...');
+            totalSent += await pushItemsBatched('preset', prepared, '预设');
         }
 
         const summary = '同步完成：推送 ' + totalSent + ' 项' + (failCount > 0 ? '（失败 ' + failCount + '）' : '');

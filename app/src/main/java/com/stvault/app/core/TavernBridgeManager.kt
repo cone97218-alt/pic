@@ -318,7 +318,7 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
             "stvault_outbox_fetch" -> {
                 val id = args.optString("id", "")
                 val offset = args.optInt("offset", 0).coerceAtLeast(0)
-                val length = args.optInt("length", 48 * 1024).coerceIn(1024, 256 * 1024)
+                val length = args.optInt("length", 384 * 1024).coerceIn(1024, 1024 * 1024)
                 val f = File(outboxDir, id)
                 if (!f.exists()) {
                     JSONObject().apply { put("ok", false); put("error", "item_not_found") }
@@ -416,6 +416,43 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                 }
             }
 
+            "stvault_push_fast" -> {
+                val kind = args.optString("kind", "")
+                val fileName = args.optString("fileName", "item.json")
+                val b64 = args.optString("data", "")
+                val bytes = Base64.decode(b64, Base64.DEFAULT)
+                val status = ingestIncomingFromTavern(kind, fileName, bytes)
+                lastDiagLog = "已接收：$fileName"
+                JSONObject().apply {
+                    put("ok", true)
+                    put("status", status)
+                }
+            }
+
+            "stvault_push_batch" -> {
+                val arr = args.optJSONArray("items") ?: JSONArray()
+                val embeddedWbKeys = buildEmbeddedWorldBookKeys(ResourceLibraryRepository.getInstance(appContext))
+                var okCount = 0
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val kind = o.optString("kind", "")
+                    val fileName = o.optString("fileName", "item.json")
+                    val b64 = o.optString("data", "")
+                    if (b64.isEmpty()) continue
+                    try {
+                        val bytes = Base64.decode(b64, Base64.DEFAULT)
+                        ingestIncomingFromTavern(kind, fileName, bytes, embeddedWbKeys)
+                        okCount++
+                    } catch (_: Exception) {
+                    }
+                }
+                lastDiagLog = "批量接收完成：$okCount 项"
+                JSONObject().apply {
+                    put("ok", true)
+                    put("count", okCount)
+                }
+            }
+
             else -> JSONObject().apply {
                 put("ok", false)
                 put("error", "unknown_tool: $toolName")
@@ -427,7 +464,23 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
 
     // ==================== SMART INGEST WITH OVERWRITE & SIMILARITY CONFLICT ====================
 
-    private fun ingestIncomingFromTavern(kind: String, fileName: String, bytes: ByteArray): String {
+    private fun buildEmbeddedWorldBookKeys(libRepo: ResourceLibraryRepository): Set<String> {
+        val keys = HashSet<String>()
+        for (ch in libRepo.getAllCharacters()) {
+            if (!ch.hasEmbeddedBook) continue
+            keys.add(normKey(ch.name))
+            val bookName = libRepo.parseCharacterDetail(ch)?.embeddedWorldBook?.name.orEmpty()
+            if (bookName.isNotEmpty()) keys.add(normKey(bookName))
+        }
+        return keys
+    }
+
+    private fun ingestIncomingFromTavern(
+        kind: String,
+        fileName: String,
+        bytes: ByteArray,
+        precomputedEmbeddedWbKeys: Set<String>? = null
+    ): String {
         if (bytes.isEmpty()) return "empty"
         val vaultRepo = VaultRepository.getInstance(appContext)
         val libRepo = ResourceLibraryRepository.getInstance(appContext)
@@ -446,14 +499,8 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
         // Avoid duplicate standalone worldbook if already embedded inside an existing Character Card
         if (module == "worldbooks") {
             val incKey = normKey(incomingDisplayName)
-            val embeddedHit = libRepo.getAllCharacters().any { ch ->
-                if (!ch.hasEmbeddedBook) false
-                else {
-                    val bookName = libRepo.parseCharacterDetail(ch)?.embeddedWorldBook?.name.orEmpty()
-                    (bookName.isNotEmpty() && normKey(bookName) == incKey) || normKey(ch.name) == incKey
-                }
-            }
-            if (embeddedHit) return "skipped_embedded"
+            val embeddedKeys = precomputedEmbeddedWbKeys ?: buildEmbeddedWorldBookKeys(libRepo)
+            if (incKey in embeddedKeys) return "skipped_embedded"
         }
         val existingList: List<Pair<String, String>> = when (module) {
             "themes" -> vaultRepo.getAllSources().map { it.id to it.name }

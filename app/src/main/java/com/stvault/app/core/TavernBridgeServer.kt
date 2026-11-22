@@ -114,7 +114,7 @@ class TavernBridgeServer(private val manager: TavernBridgeManager) {
             val contentLength = headers["content-length"]?.toIntOrNull() ?: 0
             val bodyBytes = when {
                 isChunked -> readChunkedBody(inp)
-                contentLength > 0 && contentLength <= 8 * 1024 * 1024 -> readExact(inp, contentLength)
+                contentLength > 0 && contentLength <= 16 * 1024 * 1024 -> readExact(inp, contentLength)
                 else -> ByteArray(0)
             }
 
@@ -232,6 +232,10 @@ class TavernBridgeServer(private val manager: TavernBridgeManager) {
         addTool("stvault_push_chunk", "Send chunk of upload",
             "opId" to "string", "index" to "integer", "data" to "string")
         addTool("stvault_push_end", "Finish upload and ingest", "opId" to "string")
+        addTool("stvault_push_fast", "Single-shot fast upload for items <= 512KB",
+            "kind" to "string", "fileName" to "string", "data" to "string")
+        addTool("stvault_push_batch", "Batch upload multiple small items in one round-trip",
+            "items" to "array")
         return arr
     }
 
@@ -278,7 +282,7 @@ class TavernBridgeServer(private val manager: TavernBridgeManager) {
     private fun readChunkedBody(inp: BufferedInputStream): ByteArray {
         val baos = ByteArrayOutputStream()
         var total = 0
-        while (total < 8 * 1024 * 1024) {
+        while (total < 16 * 1024 * 1024) {
             val sizeLine = readLine(inp)?.trim()?.substringBefore(';') ?: break
             val chunkSize = sizeLine.toIntOrNull(16) ?: break
             if (chunkSize <= 0) {
