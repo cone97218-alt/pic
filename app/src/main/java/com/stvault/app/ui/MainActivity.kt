@@ -692,6 +692,14 @@ class MainActivity : AppCompatActivity() {
         binding.drawer.drawerItemWorldBooks.setOnClickListener { switchWorkspace("worldbooks") }
         binding.drawer.drawerItemPresets.setOnClickListener { switchWorkspace("presets") }
         binding.drawer.drawerItemComponents.setOnClickListener { switchWorkspace("components") }
+        binding.drawer.drawerItemHoard.setOnClickListener {
+            binding.drawerLayout.closeDrawer(GravityCompat.START)
+            startActivity(
+                Intent(this, DiscordBrowserActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                }
+            )
+        }
         binding.drawer.drawerItemInbox.setOnClickListener {
             binding.drawerLayout.closeDrawer(GravityCompat.START)
             startActivity(Intent(this, InboxActivity::class.java))
@@ -1053,13 +1061,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupListeners() {
         // Day/Night Toggle Button
-        binding.btnQuickHoard.setOnClickListener {
-            startActivity(
-                Intent(this, DiscordBrowserActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                }
-            )
-        }
         binding.btnToggleTheme.setOnClickListener {
             toggleTheme()
         }

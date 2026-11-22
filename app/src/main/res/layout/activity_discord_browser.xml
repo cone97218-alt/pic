@@ -34,7 +34,7 @@
             android:layout_weight="1"
             android:ellipsize="end"
             android:singleLine="true"
-            android:text="囤囤 · Discord"
+            android:text="囤囤"
             android:textColor="@color/text_primary"
             android:textSize="14.5sp"
             android:textStyle="bold" />
@@ -98,21 +98,6 @@
             android:textSize="12sp" />
 
         <TextView
-            android:id="@+id/btnWebOrganize"
-            android:layout_width="wrap_content"
-            android:layout_height="28dp"
-            android:layout_marginEnd="4dp"
-            android:background="@drawable/bg_input"
-            android:clickable="true"
-            android:focusable="true"
-            android:gravity="center"
-            android:paddingHorizontal="9dp"
-            android:text="整理"
-            android:textColor="@color/text_primary"
-            android:textSize="11.5sp"
-            android:textStyle="bold" />
-
-        <TextView
             android:id="@+id/btnWebClose"
             android:layout_width="wrap_content"
             android:layout_height="32dp"
@@ -120,7 +105,7 @@
             android:focusable="true"
             android:gravity="center"
             android:paddingHorizontal="8dp"
-            android:text="关闭"
+            android:text="回库"
             android:textColor="@color/text_primary"
             android:textSize="12.5sp"
             android:textStyle="bold" />
