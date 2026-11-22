@@ -171,7 +171,8 @@
                 await syncInventory();
                 startPolling();
                 return true;
-            } catch (_) {
+            } catch (err) {
+                log('端口 ' + port + ' 未连上：' + (err && err.message ? err.message : String(err)));
                 state.registrationId = null;
                 state.connected = false;
                 if (created) {
@@ -245,6 +246,25 @@
                 totalSent++;
             }
         }
+        // Pull characters BEFORE worldbooks so embedded worldbooks are deduplicated automatically
+        if (kind === 'all' || kind === 'character') {
+            const chars = await fetchStCharacters();
+            const headers = await getHeaders();
+            headers['Content-Type'] = 'application/json';
+            for (const c of chars) {
+                if (!c || !c.avatar) continue;
+                try {
+                    const r = await fetch('/api/characters/export', {
+                        method: 'POST', headers,
+                        body: JSON.stringify({ format: 'png', avatar_url: c.avatar })
+                    });
+                    if (!r.ok) continue;
+                    const buf = new Uint8Array(await r.arrayBuffer());
+                    await pushBytesToVault('character', c.avatar, buf);
+                    totalSent++;
+                } catch (_) {}
+            }
+        }
         if (kind === 'all' || kind === 'worldbook') {
             const names = Array.isArray(settingsData.world_names) ? settingsData.world_names : [];
             const headers = await getHeaders();
@@ -269,24 +289,6 @@
                 const text = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
                 await pushBytesToVault('preset', pName + '.json', enc.encode(text));
                 totalSent++;
-            }
-        }
-        if (kind === 'all' || kind === 'character') {
-            const chars = await fetchStCharacters();
-            const headers = await getHeaders();
-            headers['Content-Type'] = 'application/json';
-            for (const c of chars) {
-                if (!c || !c.avatar) continue;
-                try {
-                    const r = await fetch('/api/characters/export', {
-                        method: 'POST', headers,
-                        body: JSON.stringify({ format: 'png', avatar_url: c.avatar })
-                    });
-                    if (!r.ok) continue;
-                    const buf = new Uint8Array(await r.arrayBuffer());
-                    await pushBytesToVault('character', c.avatar, buf);
-                    totalSent++;
-                } catch (_) {}
             }
         }
 
@@ -433,8 +435,11 @@
       <div class="stv-bridge-row">
         <div class="menu_button" id="stv_btn_connect">连接酒馆匣</div>
         <div class="menu_button" id="stv_btn_sync">同步清单</div>
-        <div class="menu_button" id="stv_btn_push_themes">推送全部美化</div>
-        <div class="menu_button" id="stv_btn_receive">检查待装入</div>
+        <div class="menu_button" id="stv_btn_push_themes">推美化</div>
+        <div class="menu_button" id="stv_btn_push_chars">推角色卡</div>
+        <div class="menu_button" id="stv_btn_push_wbs">推世界书</div>
+        <div class="menu_button" id="stv_btn_push_presets">推预设</div>
+        <div class="menu_button" id="stv_btn_receive">接收待装入</div>
       </div>
       <div class="stv-bridge-log" id="stv_bridge_log"></div>
     </div>
@@ -460,6 +465,18 @@
         document.getElementById('stv_btn_push_themes').addEventListener('click', async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await handlePull('theme');
+        });
+        document.getElementById('stv_btn_push_chars').addEventListener('click', async () => {
+            if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
+            await handlePull('character');
+        });
+        document.getElementById('stv_btn_push_wbs').addEventListener('click', async () => {
+            if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
+            await handlePull('worldbook');
+        });
+        document.getElementById('stv_btn_push_presets').addEventListener('click', async () => {
+            if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
+            await handlePull('preset');
         });
         document.getElementById('stv_btn_receive').addEventListener('click', async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }

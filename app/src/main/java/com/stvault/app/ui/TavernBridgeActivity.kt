@@ -46,10 +46,18 @@ class TavernBridgeActivity : AppCompatActivity() {
         binding.btnBridgeToggle.setOnClickListener {
             if (bridge.isRunning()) {
                 TavernBridgeService.stop(this)
+                bridge.stopServer()
                 toast("已断开本机通道")
             } else {
-                TavernBridgeService.start(this)
-                toast("正在开启本机通道...")
+                lifecycleScope.launch {
+                    val port = withContext(Dispatchers.IO) { bridge.startServer() }
+                    try { TavernBridgeService.start(this@TavernBridgeActivity) } catch (_: Exception) {}
+                    if (port > 0) {
+                        toast("通道已开启（端口 $port），请切回 TT 酒馆点击「连接酒馆匣」")
+                    } else {
+                        toast("端口 8796-8800 均被占用，开启失败")
+                    }
+                }
             }
         }
         binding.btnCopyExtUrl.setOnClickListener {
@@ -119,9 +127,10 @@ class TavernBridgeActivity : AppCompatActivity() {
             else -> "通道未开启"
         }
         binding.btnBridgeToggle.text = if (st.running) "断开连接" else "开启连接"
+        val diagSuffix = if (st.lastDiagLog.isNotEmpty()) "\n最近通讯：${st.lastDiagLog}" else ""
         binding.tvBridgeSub.text = when {
-            st.connected -> "TT 酒馆扩展在线，支持即时装入与双向同步。"
-            st.running -> "本机通道 127.0.0.1:${st.port} 就绪，切回 TT 酒馆点「连接」即可。"
+            st.connected -> "TT 酒馆扩展在线，支持即时装入与双向同步。$diagSuffix"
+            st.running -> "本机通道 127.0.0.1:${st.port} 就绪，切回 TT 酒馆点「连接酒馆匣」即可。$diagSuffix"
             else -> "仅在手机本机回环通信，不上云、无需账号。"
         }
 

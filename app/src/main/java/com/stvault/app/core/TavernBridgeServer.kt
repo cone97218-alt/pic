@@ -13,8 +13,10 @@ import java.util.concurrent.Executors
 
 /**
  * Lightweight local loopback Streamable HTTP MCP server (127.0.0.1 only).
- * Speaks JSON-RPC 2.0 on POST /mcp so TauriTavern's native Rust MCP client can communicate
- * directly with 酒馆匣 without cleartext WebView restrictions or Android/data permissions.
+ * Fully compliant with MCP Streamable HTTP (2025-03-26) for TauriTavern's Rust rmcp client:
+ * - Supports both Content-Length and Transfer-Encoding: chunked request bodies
+ * - Returns 405 Method Not Allowed on GET /mcp (no server-initiated SSE stream)
+ * - Echoes client protocolVersion on initialize
  */
 class TavernBridgeServer(private val manager: TavernBridgeManager) {
 
@@ -35,7 +37,7 @@ class TavernBridgeServer(private val manager: TavernBridgeManager) {
         val loopback = InetAddress.getByName("127.0.0.1")
         for (port in CANDIDATE_PORTS) {
             try {
-                val ss = ServerSocket(port, 16, loopback)
+                val ss = ServerSocket(port, 32, loopback)
                 serverSocket = ss
                 boundPort = port
                 isRunning = true
@@ -87,11 +89,6 @@ class TavernBridgeServer(private val manager: TavernBridgeManager) {
                 }
             }
 
-            val contentLength = headers["content-length"]?.toIntOrNull() ?: 0
-            val bodyBytes = if (contentLength > 0 && contentLength <= 4 * 1024 * 1024) {
-                readExact(inp, contentLength)
-            } else ByteArray(0)
-
             if (method == "OPTIONS") {
                 writeHttp(out, 204, "No Content", "")
                 return
@@ -102,9 +99,23 @@ class TavernBridgeServer(private val manager: TavernBridgeManager) {
                 return
             }
 
-            if (method == "DELETE" || method == "GET") {
-                writeHttp(out, 200, "OK", """{"ok":true,"app":"stvault"}""")
+            // Per MCP Streamable HTTP spec: return 405 if server doesn't open an SSE stream on GET
+            if (method == "GET") {
+                writeHttp(out, 405, "Method Not Allowed", "")
                 return
+            }
+
+            if (method == "DELETE") {
+                writeHttp(out, 204, "No Content", "")
+                return
+            }
+
+            val isChunked = headers["transfer-encoding"]?.lowercase()?.contains("chunked") == true
+            val contentLength = headers["content-length"]?.toIntOrNull() ?: 0
+            val bodyBytes = when {
+                isChunked -> readChunkedBody(inp)
+                contentLength > 0 && contentLength <= 8 * 1024 * 1024 -> readExact(inp, contentLength)
+                else -> ByteArray(0)
             }
 
             val bodyText = String(bodyBytes, Charsets.UTF_8).trim()
@@ -118,22 +129,30 @@ class TavernBridgeServer(private val manager: TavernBridgeManager) {
             val hasId = req.has("id") && !req.isNull("id")
             val idVal = if (hasId) req.get("id") else null
 
+            manager.recordDiag("收到 $rpcMethod")
+
             if (rpcMethod.startsWith("notifications/") || !hasId) {
                 writeHttp(out, 202, "Accepted", "")
                 return
             }
 
             val resp = when (rpcMethod) {
-                "initialize" -> jsonRpcResult(idVal, JSONObject().apply {
-                    put("protocolVersion", "2025-03-26")
-                    put("capabilities", JSONObject().apply {
-                        put("tools", JSONObject().apply { put("listChanged", false) })
+                "initialize" -> {
+                    val clientProto = req.optJSONObject("params")
+                        ?.optString("protocolVersion", "")
+                        ?.takeIf { it.isNotBlank() }
+                        ?: "2025-03-26"
+                    jsonRpcResult(idVal, JSONObject().apply {
+                        put("protocolVersion", clientProto)
+                        put("capabilities", JSONObject().apply {
+                            put("tools", JSONObject().apply { put("listChanged", false) })
+                        })
+                        put("serverInfo", JSONObject().apply {
+                            put("name", "stvault-bridge")
+                            put("version", "1.8.2")
+                        })
                     })
-                    put("serverInfo", JSONObject().apply {
-                        put("name", "stvault-bridge")
-                        put("version", "1.8.0")
-                    })
-                })
+                }
 
                 "ping" -> jsonRpcResult(idVal, JSONObject())
 
@@ -167,7 +186,8 @@ class TavernBridgeServer(private val manager: TavernBridgeManager) {
             }
 
             writeHttp(out, 200, "OK", resp.toString())
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            manager.recordDiag("请求异常：${e.message}")
         } finally {
             try { socket.close() } catch (_: Exception) {}
         }
@@ -198,7 +218,7 @@ class TavernBridgeServer(private val manager: TavernBridgeManager) {
             })
         }
 
-        addTool("stvault_ping", "Ping 酒馆匣 local bridge")
+        addTool("stvault_ping", "Ping stvault local bridge")
         addTool("stvault_sync_inventory", "Sync installed resource names from Tavern",
             "themes" to "array", "characters" to "array", "worldbooks" to "array", "presets" to "array")
         addTool("stvault_outbox_list", "List items queued to install into Tavern")
@@ -207,7 +227,7 @@ class TavernBridgeServer(private val manager: TavernBridgeManager) {
         addTool("stvault_outbox_ack", "Acknowledge an outbox item installed", "id" to "string")
         addTool("stvault_pull_poll", "Check if user requested pulling from Tavern")
         addTool("stvault_pull_done", "Report pull completion", "summary" to "string")
-        addTool("stvault_push_begin", "Start chunked upload to 酒馆匣",
+        addTool("stvault_push_begin", "Start chunked upload to stvault",
             "kind" to "string", "fileName" to "string", "bytes" to "integer")
         addTool("stvault_push_chunk", "Send chunk of upload",
             "opId" to "string", "index" to "integer", "data" to "string")
@@ -219,7 +239,9 @@ class TavernBridgeServer(private val manager: TavernBridgeManager) {
         val bodyBytes = body.toByteArray(Charsets.UTF_8)
         val sb = StringBuilder()
         sb.append("HTTP/1.1 ").append(code).append(' ').append(statusText).append("\r\n")
-        sb.append("Content-Type: application/json; charset=utf-8\r\n")
+        if (bodyBytes.isNotEmpty()) {
+            sb.append("Content-Type: application/json; charset=utf-8\r\n")
+        }
         sb.append("Mcp-Session-Id: ").append(sessionId).append("\r\n")
         sb.append("Access-Control-Allow-Origin: *\r\n")
         sb.append("Access-Control-Allow-Methods: POST, GET, DELETE, OPTIONS\r\n")
@@ -251,6 +273,24 @@ class TavernBridgeServer(private val manager: TavernBridgeManager) {
             off += n
         }
         return if (off == len) buf else buf.copyOf(off)
+    }
+
+    private fun readChunkedBody(inp: BufferedInputStream): ByteArray {
+        val baos = ByteArrayOutputStream()
+        var total = 0
+        while (total < 8 * 1024 * 1024) {
+            val sizeLine = readLine(inp)?.trim()?.substringBefore(';') ?: break
+            val chunkSize = sizeLine.toIntOrNull(16) ?: break
+            if (chunkSize <= 0) {
+                readLine(inp) // trailing CRLF
+                break
+            }
+            val chunk = readExact(inp, chunkSize)
+            baos.write(chunk)
+            total += chunk.size
+            readLine(inp) // chunk terminator CRLF
+        }
+        return baos.toByteArray()
     }
 
     companion object {

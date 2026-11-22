@@ -45,7 +45,8 @@ data class TavernBridgeState(
     val outboxCount: Int = 0,
     val conflictCount: Int = 0,
     val pendingPullKind: String = "",
-    val lastPullSummary: String = ""
+    val lastPullSummary: String = "",
+    val lastDiagLog: String = ""
 )
 
 class TavernBridgeManager private constructor(private val appContext: Context) {
@@ -85,6 +86,14 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
 
     @Volatile
     private var lastPullSummary: String = ""
+
+    @Volatile
+    private var lastDiagLog: String = ""
+
+    fun recordDiag(msg: String) {
+        lastDiagLog = msg
+        publishState()
+    }
 
     private val _stateFlow = MutableStateFlow(TavernBridgeState())
     val stateFlow: StateFlow<TavernBridgeState> = _stateFlow.asStateFlow()
@@ -431,6 +440,19 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
         }
 
         val incomingDisplayName = extractDisplayName(module, fileName, bytes)
+
+        // Avoid duplicate standalone worldbook if already embedded inside an existing Character Card
+        if (module == "worldbooks") {
+            val incKey = normKey(incomingDisplayName)
+            val embeddedHit = libRepo.getAllCharacters().any { ch ->
+                if (!ch.hasEmbeddedBook) false
+                else {
+                    val bookName = libRepo.parseCharacterDetail(ch)?.embeddedWorldBook?.name.orEmpty()
+                    (bookName.isNotEmpty() && normKey(bookName) == incKey) || normKey(ch.name) == incKey
+                }
+            }
+            if (embeddedHit) return "skipped_embedded"
+        }
         val existingList: List<Pair<String, String>> = when (module) {
             "themes" -> vaultRepo.getAllSources().map { it.id to it.name }
             "characters" -> libRepo.getAllCharacters().map { it.id to it.name }
@@ -632,7 +654,8 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
             outboxCount = outboxMap.size,
             conflictCount = conflictsMap.size,
             pendingPullKind = pendingPullKind,
-            lastPullSummary = lastPullSummary
+            lastPullSummary = lastPullSummary,
+            lastDiagLog = lastDiagLog
         )
     }
 
