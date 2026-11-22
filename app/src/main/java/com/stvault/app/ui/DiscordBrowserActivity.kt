@@ -51,7 +51,8 @@ class DiscordBrowserActivity : AppCompatActivity() {
         val id: String,
         val url: String,
         val fileName: String,
-        val author: String
+        val author: String,
+        val authorUid: String = ""
     )
 
     @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
@@ -162,6 +163,21 @@ class DiscordBrowserActivity : AppCompatActivity() {
                     binding.webDiscord.postDelayed({
                         dispatchNativeKey(KeyEvent.KEYCODE_ENTER)
                     }, delayMs.coerceIn(80L, 1200L))
+                }
+            }
+
+            @JavascriptInterface
+            fun requestNativeSlashType(restCmd: String) {
+                runOnUiThread {
+                    dispatchNativeKey(KeyEvent.KEYCODE_SLASH)
+                    binding.webDiscord.postDelayed({
+                        val escapedRest = JSONObject.quote(restCmd)
+                        val bare = JSONObject.quote(restCmd.trim().lowercase())
+                        binding.webDiscord.evaluateJavascript(
+                            "if(window.__stContinueSlashCmd) window.__stContinueSlashCmd($escapedRest, $bare);",
+                            null
+                        )
+                    }, 260L)
                 }
             }
 
@@ -335,8 +351,9 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 val url = obj.optString("url").trim()
                 val fn = obj.optString("fileName").trim()
                 val author = obj.optString("author").trim()
+                val authorUid = obj.optString("authorUid").trim()
                 if (url.isNotBlank() && fn.isNotBlank()) {
-                    list.add(PageAttachment(id = "att_$i", url = url, fileName = fn, author = author))
+                    list.add(PageAttachment(id = "att_$i", url = url, fileName = fn, author = author, authorUid = authorUid))
                 }
             }
             list
@@ -352,7 +369,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
             PickerItem(id = att.id, title = att.fileName, subtitle = sub)
         }
         val allIds = found.map { it.id }.toSet()
-        val firstAuthor = found.firstOrNull { it.author.isNotBlank() }?.author.orEmpty()
+        val firstWithAuthor = found.firstOrNull { it.author.isNotBlank() || it.authorUid.isNotBlank() }
 
         VaultSheets.multiSelect(
             ctx = this,
@@ -376,11 +393,14 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 toast("未勾选任何附件")
                 return@multiSelect
             }
-            val suggested = suggestAuthorTagPath(chosen.firstOrNull { it.author.isNotBlank() }?.author ?: firstAuthor)
+            val refAtt = chosen.firstOrNull { it.author.isNotBlank() || it.authorUid.isNotBlank() } ?: firstWithAuthor
+            val refAuthor = refAtt?.author.orEmpty()
+            val refUid = refAtt?.authorUid.orEmpty()
+            val suggested = suggestAuthorTagPath(refAuthor, refUid)
             VaultSheets.input(
                 ctx = this,
                 title = "确认分类标签",
-                message = "可改名或指定目录（如 作者/某某，多个标签用空格隔开；留空则仅囤入）。",
+                message = "已自动记住楼主对应分类（即使楼主改名也能识别）；多个标签用空格隔开。",
                 initialValue = suggested,
                 hint = "例如：作者/某某 古风",
                 confirmText = "确认囤入"
@@ -390,14 +410,51 @@ class DiscordBrowserActivity : AppCompatActivity() {
                     .map { it.trim().trimStart('#').trim('/') }
                     .filter { it.isNotBlank() }
                     .distinct()
+                if (tags.isNotEmpty() && (refUid.isNotBlank() || refAuthor.isNotBlank())) {
+                    saveAuthorAlias(refUid, refAuthor, tags.first())
+                }
                 runBatchHoard(chosen, overrideTags = tags)
             }
         }
     }
 
-    private fun suggestAuthorTagPath(rawAuthor: String): String {
+    private fun loadAuthorAliasMap(): JSONObject {
+        val raw = getSharedPreferences("st_inbox_prefs", Context.MODE_PRIVATE)
+            .getString("dc_author_aliases", "").orEmpty()
+        return try {
+            if (raw.isNotBlank()) JSONObject(raw) else JSONObject()
+        } catch (_: Exception) {
+            JSONObject()
+        }
+    }
+
+    private fun saveAuthorAlias(uid: String, name: String, mappedTag: String) {
+        if (mappedTag.isBlank()) return
+        val map = loadAuthorAliasMap()
+        if (uid.isNotBlank()) map.put("uid:$uid", mappedTag)
+        if (name.isNotBlank()) map.put("name:${name.lowercase()}", mappedTag)
+        getSharedPreferences("st_inbox_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .putString("dc_author_aliases", map.toString())
+            .apply()
+    }
+
+    private fun suggestAuthorTagPath(rawAuthor: String, rawUid: String): String {
         val clean = rawAuthor.trim()
+        val uid = rawUid.trim()
+        val map = loadAuthorAliasMap()
+        // 1. Permanent Discord User ID match (survives nickname changes!)
+        if (uid.isNotBlank()) {
+            val hit = map.optString("uid:$uid", "").trim()
+            if (hit.isNotBlank()) return hit
+        }
+        // 2. Saved nickname alias match
+        if (clean.isNotBlank()) {
+            val hit = map.optString("name:${clean.lowercase()}", "").trim()
+            if (hit.isNotBlank()) return hit
+        }
         if (clean.isEmpty()) return ""
+        // 3. Existing hierarchical category shorthand match
         val cm = CategoryManager.getInstance(this)
         val themeMatch = cm.resolveTagPath(CategoryManager.SCOPE_THEMES, clean)
         if (themeMatch.contains('/')) return themeMatch
@@ -621,20 +678,28 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 var textToInsert = $escaped;
                 var isSlash = textToInsert.indexOf('/') === 0;
                 if (isSlash) {
-                  // Type '/' first so Discord's slash-command detector reliably opens the autocomplete popup
-                  insertSlateText('/');
-                  var rest = textToInsert.slice(1);
-                  setTimeout(function() {
-                    box.focus();
-                    if (rest) insertSlateText(rest);
+                  window.__stContinueSlashCmd = function(rest, targetName) {
+                    var b = findVisibleBox();
+                    if (!b) return;
+                    b.focus();
+                    if (rest) {
+                      var bef = (b.textContent || '').trim();
+                      try {
+                        b.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: rest, bubbles: true, cancelable: true }));
+                      } catch (e2) {}
+                      if ((b.textContent || '').trim() === bef) {
+                        document.execCommand('insertText', false, rest);
+                      }
+                    }
                     var tries = 0;
-                    var targetName = $bareName;
                     var timer = setInterval(function() {
                       tries++;
-                      var popup = document.querySelector('div[class*="autocomplete"], [role="listbox"]');
-                      if (popup && popup.getBoundingClientRect().height > 20) {
+                      // Strictly match Discord's slash-command autocomplete popup (never generic channel listboxes!)
+                      var popup = document.querySelector('div[class*="autocomplete_"]');
+                      var hasCmdRows = popup && popup.querySelectorAll('div[class*="autocompleteRow_"], [class*="commandName_"], [role="option"]').length > 0;
+                      if (popup && hasCmdRows && popup.getBoundingClientRect().height > 20) {
                         clearInterval(timer);
-                        var rows = popup.querySelectorAll('[role="option"], div[class*="autocompleteRow"], div[class*="clickable_"], div[class*="selectable_"]');
+                        var rows = popup.querySelectorAll('[role="option"], div[class*="autocompleteRow_"], div[class*="clickable_"]');
                         var firstText = (rows && rows.length > 0) ? (rows[0].textContent || '').toLowerCase() : '';
                         var matched = null;
                         if (rows && rows.length > 1 && targetName && firstText.indexOf(targetName) === -1) {
@@ -654,11 +719,15 @@ class DiscordBrowserActivity : AppCompatActivity() {
                         } else if (window.STHoardBridge && window.STHoardBridge.requestNativeTabThenEnter) {
                           window.STHoardBridge.requestNativeTabThenEnter(120, 420);
                         }
-                      } else if (tries >= 28) {
+                      } else if (tries >= 26) {
                         clearInterval(timer);
                       }
                     }, 120);
-                  }, 180);
+                  };
+                  // Trigger '/' via real native KEYCODE_SLASH so Discord's slash command UI opens
+                  if (window.STHoardBridge && window.STHoardBridge.requestNativeSlashType) {
+                    window.STHoardBridge.requestNativeSlashType(textToInsert.slice(1));
+                  }
                 } else {
                   insertSlateText(textToInsert);
                   if (window.STHoardBridge && window.STHoardBridge.requestNativeEnter) {
@@ -835,18 +904,44 @@ class DiscordBrowserActivity : AppCompatActivity() {
                   }
                   return u;
                 }
-                function findAuthor(el) {
-                  var msg = el.closest('li[id^="chat-messages-"], div[id^="chat-messages-"], [class*="messageListItem"]');
-                  if (!msg) return '';
-                  var cur = msg;
-                  for (var steps = 0; steps < 8 && cur; steps++) {
+                function readMsgMeta(msgEl) {
+                  if (!msgEl) return { name: '', uid: '', isBot: false };
+                  var cur = msgEl;
+                  for (var steps = 0; steps < 10 && cur; steps++) {
                     var u = cur.querySelector('[id^="message-username-"], span[class*="username_"], h3 [class*="username"]');
                     if (u && u.textContent && u.textContent.trim()) {
-                      return u.textContent.trim().slice(0, 24);
+                      var name = u.textContent.trim().slice(0, 28);
+                      var isBot = !!cur.querySelector('span[class*="botTag"], [class*="botText"]');
+                      var uid = '';
+                      var av = cur.querySelector('img[class*="avatar_"], img[src*="/avatars/"]');
+                      if (av && av.src) {
+                        var m = av.src.match(/\/avatars\/(\d+)\//);
+                        if (m && m[1]) uid = m[1];
+                      }
+                      return { name: name, uid: uid, isBot: isBot };
                     }
                     cur = cur.previousElementSibling;
                   }
-                  return '';
+                  return { name: '', uid: '', isBot: false };
+                }
+                function findThreadOp() {
+                  var root = document.querySelector('div[class*="chatLayerWrapper_"]') || document;
+                  var msgs = root.querySelectorAll('li[id^="chat-messages-"], div[id^="chat-messages-"]');
+                  for (var i = 0; i < Math.min(msgs.length, 6); i++) {
+                    var meta = readMsgMeta(msgs[i]);
+                    if (meta.name && !meta.isBot) return meta;
+                  }
+                  return { name: '', uid: '', isBot: false };
+                }
+                var threadOp = findThreadOp();
+                function findAuthorInfo(el) {
+                  var msg = el.closest('li[id^="chat-messages-"], div[id^="chat-messages-"], [class*="messageListItem"]');
+                  var meta = readMsgMeta(msg);
+                  // If attachment came from a Bot (e.g. card-claim bot ephemeral reply), use the Forum Thread OP (楼主) instead!
+                  if ((meta.isBot || !meta.name) && threadOp.name) {
+                    return threadOp;
+                  }
+                  return meta;
                 }
                 function extractDomFileName(el, urlFallback) {
                   try {
@@ -887,7 +982,8 @@ class DiscordBrowserActivity : AppCompatActivity() {
                   var urlFn = path.substring(path.lastIndexOf('/') + 1);
                   try { urlFn = decodeURIComponent(urlFn); } catch (e) {}
                   var fn = extractDomFileName(el, urlFn);
-                  results.push({ url: u, fileName: fn, author: findAuthor(el) });
+                  var aInfo = findAuthorInfo(el);
+                  results.push({ url: u, fileName: fn, author: aInfo.name, authorUid: aInfo.uid });
                 }
                 var anchors = document.querySelectorAll('a[href]');
                 for (var i = 0; i < anchors.length; i++) {
