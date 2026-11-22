@@ -77,7 +77,7 @@ class ThemePreviewActivity : AppCompatActivity() {
             }
         }
 
-    @SuppressLint("SetJavaScriptEnabled")
+    @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityThemePreviewBinding.inflate(layoutInflater)
@@ -117,7 +117,6 @@ class ThemePreviewActivity : AppCompatActivity() {
                 return false
             }
         })
-        @SuppressLint("ClickableViewAccessibility")
         web.setOnTouchListener { _, event ->
             swipeDetector.onTouchEvent(event)
             false
