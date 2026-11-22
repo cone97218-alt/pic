@@ -153,6 +153,8 @@ object SimilarityDeduplicator {
                 if (stems[j].length < 2) continue
                 // Skip if already grouped into the same version series
                 if (items[i].seriesKey.isNotEmpty() && items[i].seriesKey == items[j].seriesKey) continue
+                // Skip color/form sibling variants for Themes (e.g. 黑/蓝/绿, 日间/夜间, 手机端/电脑端)
+                if (module == "themes" && ThemeVariantGrouper.areSiblingVariants(items[i].name, items[j].name)) continue
 
                 val exactName = items[i].name.trim().equals(items[j].name.trim(), ignoreCase = true)
                 val sameStem = stems[i] == stems[j]

@@ -59,6 +59,7 @@ class SourcesAdapter(
 
         val meta = buildString {
             if (installed) append("已装 · ")
+            if (row.variantCount > 1) append("${row.variantCount} 变体 · ")
             if (s.urls.isEmpty()) {
                 append("纯样式")
             } else {

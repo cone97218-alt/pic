@@ -79,7 +79,7 @@ class SettingsActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
             val curId = prefs.getString("greeting_theme_id", "").orEmpty()
-            val items = themes.map { PickerItem(it.id, it.name.substringAfterLast('/'), it.folderName) }
+            val items = themes.map { PickerItem(it.id, it.name, it.folderName) }
             VaultSheets.searchablePicker(
                 ctx = this,
                 title = "选择联动美化主题",
@@ -96,10 +96,14 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
 
-        // 2. Version Auto-Grouping
+        // 2. Version Auto-Grouping & Theme Variant Folding
         binding.swGroupVersions.isChecked = prefs.getBoolean("group_versions", true)
         binding.swGroupVersions.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean("group_versions", isChecked).apply()
+        }
+        binding.swGroupThemeVariants.isChecked = prefs.getBoolean("group_theme_variants", true)
+        binding.swGroupThemeVariants.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean("group_theme_variants", isChecked).apply()
         }
 
         // 3. Hierarchical Categories

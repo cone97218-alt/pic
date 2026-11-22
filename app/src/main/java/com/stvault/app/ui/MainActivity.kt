@@ -1483,8 +1483,9 @@ class MainActivity : AppCompatActivity() {
         val q = binding.etSearch.text?.toString().orEmpty()
         lifecycleScope.launch {
             if (vaultSearchModeSources) {
+                val groupVars = prefs.getBoolean("group_theme_variants", true)
                 val list = withContext(Dispatchers.IO) {
-                    repo.searchSourceRows(q, activeSourceFilter, activeThemeCategory)
+                    repo.searchSourceRows(q, activeSourceFilter, activeThemeCategory, groupVars)
                 }
                 sourcesAdapter.submitList(list)
                 binding.tvVaultCount.text = "共 ${list.size} 个美化"
@@ -1525,7 +1526,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun confirmDeleteSource(source: SourceRecord) {
-        val cleanName = source.name.substringAfterLast('/')
+        val cleanName = source.name
         VaultSheets.confirm(
             ctx = this,
             title = "删除美化",
@@ -1549,6 +1550,27 @@ class MainActivity : AppCompatActivity() {
         val dBinding = DialogSourceDetailBinding.inflate(LayoutInflater.from(this))
         dBinding.tvDialogSourceTitle.text = source.name
         dBinding.rvDialogUrls.layoutManager = LinearLayoutManager(this)
+
+        // Populate Sibling Variant Pills when >1 variant exists in this theme series
+        val variants = repo.getVariantsForTheme(source.seriesKey)
+        if (variants.size > 1) {
+            dBinding.scrollDialogVariants.visibility = View.VISIBLE
+            val opts = variants.map { v ->
+                val lbl = v.variantTag.ifBlank { v.name }
+                v.id to lbl
+            }
+            buildSimpleChips(dBinding.chipGroupDialogVariants, opts, source.id) { pickedId ->
+                if (pickedId != source.id) {
+                    com.stvault.app.core.ThemeVariantGrouper.setPreferredVariant(this, source.seriesKey, pickedId)
+                    val target = repo.getSourceById(pickedId)
+                    activeSourceDialog?.dismiss()
+                    refreshVaultList()
+                    if (target != null) showSourceDetailDialog(target)
+                }
+            }
+        } else {
+            dBinding.scrollDialogVariants.visibility = View.GONE
+        }
 
         val detailAdapter = UrlsAdapter(
             repo = repo,
@@ -2134,25 +2156,67 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showThemeActionMenu(source: SourceRecord) {
-        VaultSheets.actionList(
-            ctx = this,
-            title = source.name,
-            actions = listOf(
-                SheetAction("装入酒馆", "推送到 TT 酒馆，支持原版或图床修复版") {
-                    pushThemeToTavern(source)
-                },
-                SheetAction("重命名", "修改显示名称") {
-                    showRenameDialog("重命名美化", source.name) { newName ->
-                        if (repo.renameSource(source.id, newName)) {
-                            toast("已重命名")
+        val variants = repo.getVariantsForTheme(source.seriesKey)
+        val actions = mutableListOf<SheetAction>()
+        if (variants.size > 1) {
+            actions.add(SheetAction("切换变体 (${variants.size})", "在同系列配色 / 形态之间切换") {
+                val items = variants.map { v ->
+                    SheetAction(
+                        label = v.variantTag.ifBlank { v.name },
+                        subtitle = v.name,
+                        checked = (v.id == source.id)
+                    ) {
+                        com.stvault.app.core.ThemeVariantGrouper.setPreferredVariant(this, source.seriesKey, v.id)
+                        refreshVaultList()
+                        showSourceDetailDialog(v)
+                    }
+                }
+                VaultSheets.actionList(this, title = "切换变体 (${variants.size})", actions = items)
+            })
+        }
+        actions.add(SheetAction("装入酒馆", "推送到 TT 酒馆，支持原版或图床修复版") {
+            pushThemeToTavern(source)
+        })
+        actions.add(SheetAction("重命名", "修改显示名称") {
+            showRenameDialog("重命名美化", source.name) { newName ->
+                if (repo.renameSource(source.id, newName)) {
+                    toast("已重命名")
+                    refreshVaultList()
+                }
+            }
+        })
+        actions.add(SheetAction("修改变体标签", "例如 宽黑、窄白、夜间蓝") {
+            VaultSheets.input(
+                ctx = this,
+                title = "自定义变体标签",
+                hint = "例如：宽黑 / 日间粉",
+                initialValue = source.variantTag,
+                confirmText = "保存"
+            ) { tag ->
+                repo.updateThemeVariantTag(source.id, tag)
+                toast("变体标签已更新")
+                refreshVaultList()
+            }
+        })
+        actions.add(SheetAction("归入同系列", "与另一款美化收纳为同系列变体") {
+            val others = repo.getAllSources().filter { it.id != source.id }.map { PickerItem(it.id, it.name, it.variantTag) }
+            if (others.isEmpty()) {
+                toast("暂无其他美化可归入")
+            } else {
+                VaultSheets.searchablePicker(this, "选择同系列美化", others) { picked ->
+                    VaultSheets.input(this, "设置系列名称", hint = "输入系列名", initialValue = source.name, confirmText = "归入") { sName ->
+                        if (sName.trim().isNotEmpty()) {
+                            repo.mergeThemeSeries(listOf(source.id, picked.id), sName.trim())
+                            toast("已归入同系列")
                             refreshVaultList()
                         }
                     }
-                },
-                SheetAction("设置分类标签", "多选 1~3 级分类") { showThemeCategoryAssignDialog(source) },
-                SheetAction("删除美化", destructive = true) { confirmDeleteSource(source) }
-            )
-        )
+                }
+            }
+        })
+        actions.add(SheetAction("设置分类标签", "多选 1~3 级分类") { showThemeCategoryAssignDialog(source) })
+        actions.add(SheetAction("删除美化", destructive = true) { confirmDeleteSource(source) })
+        VaultSheets.actionList(ctx = this, title = source.name, actions = actions)
     }
 
     private fun pushThemeToTavern(source: SourceRecord) {
@@ -2562,8 +2626,8 @@ class MainActivity : AppCompatActivity() {
         binding.batchActionBar.visibility = View.VISIBLE
         binding.btnBatchCategorize.visibility =
             if (activeWorkspace == "themes" || activeWorkspace == "characters") View.VISIBLE else View.GONE
-        binding.btnBatchMergeVersion.visibility =
-            if (activeWorkspace != "themes") View.VISIBLE else View.GONE
+        binding.btnBatchMergeVersion.visibility = View.VISIBLE
+        binding.btnBatchMergeVersion.text = if (activeWorkspace == "themes") "合并系列" else "合并版本"
         syncBatchUi()
     }
 
@@ -2702,6 +2766,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val suggestedName = when (activeWorkspace) {
+            "themes" -> repo.getSourceById(ids.first())?.name ?: ""
             "characters" -> libRepo.getCharacterById(ids.first())?.name ?: ""
             "worldbooks" -> libRepo.getWorldBookById(ids.first())?.name ?: ""
             "presets" -> libRepo.getPresetById(ids.first())?.name ?: ""
@@ -2723,6 +2788,7 @@ class MainActivity : AppCompatActivity() {
             lifecycleScope.launch {
                 withContext(Dispatchers.IO) {
                     when (activeWorkspace) {
+                        "themes" -> repo.mergeThemeSeries(ids, clean)
                         "characters" -> libRepo.mergeCharacterVersions(ids, clean)
                         "worldbooks" -> libRepo.mergeWorldBookVersions(ids, clean)
                         "presets" -> libRepo.mergePresetVersions(ids, clean)

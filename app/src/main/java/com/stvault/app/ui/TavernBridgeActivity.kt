@@ -69,6 +69,12 @@ class TavernBridgeActivity : AppCompatActivity() {
             bridge.clearOutbox()
             toast("已清空待装入队列")
         }
+        binding.btnConflictsKeepAll.setOnClickListener {
+            lifecycleScope.launch {
+                val n = withContext(Dispatchers.IO) { bridge.resolveAllConflictsKeepBoth() }
+                toast("已全部保留入库（$n 项）")
+            }
+        }
         binding.btnBridgePull.setOnClickListener { showPullSheet() }
 
         lifecycleScope.launch {

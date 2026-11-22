@@ -39,14 +39,18 @@ data class SourceRecord(
     val category: String = "ui",
     val folderName: String = "",
     val categories: List<String> = emptyList(),
-    val fileName: String = ""
+    val fileName: String = "",
+    val seriesKey: String = "",
+    val variantTag: String = ""
 )
 
 data class SourceRowUi(
     val source: SourceRecord,
     val okCount: Int,
     val errCount: Int,
-    val pendingCount: Int
+    val pendingCount: Int,
+    val variantCount: Int = 1,
+    val variantLabels: List<String> = emptyList()
 )
 
 data class VaultStats(

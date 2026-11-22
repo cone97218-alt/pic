@@ -245,6 +245,9 @@ class VaultRepository private constructor(private val appContext: Context) {
                                 }
                             }
                         }
+                        val (autoSeries, autoVar) = ThemeVariantGrouper.extractSeriesAndVariant(resolvedName)
+                        val storedSeries = o.optString("seriesKey", "").ifBlank { autoSeries }
+                        val storedVariant = o.optString("variantTag", "").ifBlank { autoVar }
                         sourcesMap[id] = SourceRecord(
                             id = id,
                             name = resolvedName,
@@ -256,7 +259,9 @@ class VaultRepository private constructor(private val appContext: Context) {
                             category = cat,
                             folderName = o.optString("folderName", ""),
                             categories = cats,
-                            fileName = storedFileName
+                            fileName = storedFileName,
+                            seriesKey = storedSeries,
+                            variantTag = storedVariant
                         )
                     }
                 }
@@ -303,6 +308,8 @@ class VaultRepository private constructor(private val appContext: Context) {
                 o.put("folderName", s.folderName)
                 o.put("categories", JSONArray(s.categories))
                 if (s.fileName.isNotEmpty()) o.put("fileName", s.fileName)
+                if (s.seriesKey.isNotEmpty()) o.put("seriesKey", s.seriesKey)
+                if (s.variantTag.isNotEmpty()) o.put("variantTag", s.variantTag)
                 srcObj.put(id, o)
             }
             root.put("sources", srcObj)
@@ -684,6 +691,7 @@ class VaultRepository private constructor(private val appContext: Context) {
             }
         }
 
+        val (autoSeries, autoVar) = ThemeVariantGrouper.extractSeriesAndVariant(displayName)
         sourcesMap[targetId] = SourceRecord(
             id = targetId,
             name = displayName,
@@ -694,7 +702,9 @@ class VaultRepository private constructor(private val appContext: Context) {
             contentHash = contentHash,
             category = category,
             folderName = folderName,
-            fileName = name
+            fileName = name,
+            seriesKey = autoSeries,
+            variantTag = autoVar
         )
         var addedUrls = 0
         for (u in urls) {
@@ -1007,10 +1017,41 @@ class VaultRepository private constructor(private val appContext: Context) {
         sourcesMap.values.sortedByDescending { it.scannedAt }
     }
 
+    fun getVariantsForTheme(seriesKey: String): List<SourceRecord> = synchronized(lock) {
+        if (seriesKey.isBlank()) return emptyList()
+        sourcesMap.values.filter { it.seriesKey == seriesKey }.sortedByDescending { it.scannedAt }
+    }
+
+    fun mergeThemeSeries(ids: List<String>, seriesName: String) {
+        if (ids.size < 2) return
+        val key = ThemeVariantGrouper.normalizeKey(seriesName).ifBlank { seriesName.trim().lowercase() }
+        synchronized(lock) {
+            for (id in ids) {
+                val cur = sourcesMap[id] ?: continue
+                val (_, autoVar) = ThemeVariantGrouper.extractSeriesAndVariant(cur.name)
+                sourcesMap[id] = cur.copy(
+                    seriesKey = key,
+                    variantTag = cur.variantTag.ifBlank { autoVar }
+                )
+            }
+        }
+        saveIndex()
+    }
+
+    fun updateThemeVariantTag(id: String, newTag: String): Boolean {
+        synchronized(lock) {
+            val cur = sourcesMap[id] ?: return false
+            sourcesMap[id] = cur.copy(variantTag = newTag.trim())
+        }
+        saveIndex()
+        return true
+    }
+
     fun searchSourceRows(
         query: String,
         filter: String = "all",
-        categoryFilter: String = ""
+        categoryFilter: String = "",
+        groupVariants: Boolean = true
     ): List<SourceRowUi> {
         val q = query.trim().lowercase()
         synchronized(lock) {
@@ -1024,11 +1065,12 @@ class VaultRepository private constructor(private val appContext: Context) {
                 list = list.filter { s ->
                     s.name.lowercase().contains(q) ||
                         s.fileName.lowercase().contains(q) ||
+                        s.variantTag.lowercase().contains(q) ||
                         s.categories.any { it.lowercase().contains(q) } ||
                         s.urls.any { it.lowercase().contains(q) }
                 }
             }
-            val rows = list.map { s ->
+            val rawRows = list.map { s ->
                 var ok = 0
                 var err = 0
                 var pending = 0
@@ -1053,9 +1095,30 @@ class VaultRepository private constructor(private val appContext: Context) {
                 }
             }.toList()
 
+            val grouped = if (!groupVariants) {
+                rawRows
+            } else {
+                val buckets = LinkedHashMap<String, MutableList<SourceRowUi>>()
+                for (row in rawRows) {
+                    val key = row.source.seriesKey.ifBlank { row.source.id }
+                    buckets.getOrPut(key) { mutableListOf() }.add(row)
+                }
+                buckets.entries.map { (key, bucket) ->
+                    val sorted = bucket.sortedByDescending { it.source.scannedAt }
+                    val prefId = ThemeVariantGrouper.getPreferredVariant(appContext, key)
+                    val primary = if (!prefId.isNullOrBlank()) {
+                        sorted.firstOrNull { it.source.id == prefId } ?: sorted.first()
+                    } else {
+                        sorted.first()
+                    }
+                    val labels = sorted.map { it.source.variantTag.ifBlank { it.source.name } }.distinct()
+                    primary.copy(variantCount = sorted.size, variantLabels = labels)
+                }
+            }
+
             return when (filter) {
-                "most_imgs" -> rows.sortedByDescending { it.source.urls.size }
-                else -> rows.sortedByDescending { it.source.scannedAt }
+                "most_imgs" -> grouped.sortedByDescending { it.source.urls.size }
+                else -> grouped.sortedByDescending { it.source.scannedAt }
             }
         }
     }

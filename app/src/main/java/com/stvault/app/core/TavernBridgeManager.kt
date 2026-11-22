@@ -225,6 +225,16 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
         conflictsMap.values.toList()
     }
 
+    fun resolveAllConflictsKeepBoth(): Int {
+        val ids = synchronized(lock) { conflictsMap.keys.toList() }
+        var count = 0
+        for (id in ids) {
+            resolveConflict(id, "keep_both")
+            count++
+        }
+        return count
+    }
+
     fun resolveConflict(conflictId: String, action: String): String {
         val conflict = synchronized(lock) { conflictsMap.remove(conflictId) } ?: return "冲突已处理"
         val file = File(conflict.incomingFilePath)
@@ -531,10 +541,13 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
             return "overwritten"
         }
 
-        // 2. Near-duplicate name -> Record conflict for user decision!
+        // 2. Near-duplicate name -> Record conflict for user decision (skip color/form sibling variants for themes!)
         var bestMatch: Pair<String, String>? = null
         var bestSim = 0.0
         for (pair in existingList) {
+            if (module == "themes" && ThemeVariantGrouper.areSiblingVariants(incomingDisplayName, pair.second)) {
+                continue
+            }
             val sim = SimilarityDeduplicator.computeNameSimilarity(incomingDisplayName, pair.second)
             if (sim >= 0.68 && sim > bestSim) {
                 bestSim = sim
