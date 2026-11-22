@@ -545,7 +545,8 @@ class VaultRepository private constructor(private val appContext: Context) {
         rawText: String,
         fileName: String,
         folderName: String = "导入",
-        deferSave: Boolean = false
+        deferSave: Boolean = false,
+        initialCategory: String = ""
     ): Pair<Int, Boolean>? {
         if (rawText.isBlank()) return null
         val (urls, isJson) = UrlExtractor.extract(rawText)
@@ -559,7 +560,8 @@ class VaultRepository private constructor(private val appContext: Context) {
                 contentHash = contentHash,
                 rawContent = rawText,
                 folderName = folderName,
-                allowEmptyUrls = true
+                allowEmptyUrls = true,
+                initialCategory = initialCategory
             )
         }
         if (!deferSave) saveIndex()
@@ -655,7 +657,8 @@ class VaultRepository private constructor(private val appContext: Context) {
         contentHash: String,
         rawContent: String = "",
         folderName: String = "",
-        allowEmptyUrls: Boolean = false
+        allowEmptyUrls: Boolean = false,
+        initialCategory: String = ""
     ): Pair<Int, Boolean> {
         if (urls.isEmpty() && !allowEmptyUrls) return 0 to false
         val sourceId = sha1Short(if (docUri.isNotBlank()) docUri else name)
@@ -698,6 +701,10 @@ class VaultRepository private constructor(private val appContext: Context) {
 
         val (autoSeries, autoVar) = ThemeVariantGrouper.extractSeriesAndVariant(displayName)
         val autoSeriesName = ThemeVariantGrouper.extractDisplaySeriesName(displayName)
+        val initCats = buildList {
+            legacySameName?.categories?.let { addAll(it) }
+            if (initialCategory.isNotBlank()) add(initialCategory)
+        }.distinct()
         sourcesMap[targetId] = SourceRecord(
             id = targetId,
             name = displayName,
@@ -709,6 +716,7 @@ class VaultRepository private constructor(private val appContext: Context) {
             category = category,
             folderName = folderName,
             fileName = name,
+            categories = initCats,
             seriesKey = autoSeries,
             seriesName = autoSeriesName,
             variantTag = autoVar

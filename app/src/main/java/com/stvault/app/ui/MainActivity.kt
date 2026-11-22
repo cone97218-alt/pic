@@ -423,6 +423,11 @@ class MainActivity : AppCompatActivity() {
         applyBottomBarVisibility()
         refreshActiveWorkspace()
         libRepo.refreshCounts()
+        binding.drawer.tvDrawerInboxStatus.text = if (com.stvault.app.core.InboxManager.isDiscordConfigured(this)) {
+            "DC 已配"
+        } else {
+            "DC · 本地"
+        }
     }
 
     private fun requestNotificationPermissionIfNeeded() {
@@ -653,6 +658,10 @@ class MainActivity : AppCompatActivity() {
         binding.drawer.drawerItemWorldBooks.setOnClickListener { switchWorkspace("worldbooks") }
         binding.drawer.drawerItemPresets.setOnClickListener { switchWorkspace("presets") }
         binding.drawer.drawerItemComponents.setOnClickListener { switchWorkspace("components") }
+        binding.drawer.drawerItemInbox.setOnClickListener {
+            binding.drawerLayout.closeDrawer(GravityCompat.START)
+            startActivity(Intent(this, InboxActivity::class.java))
+        }
         binding.drawer.drawerItemBridge.setOnClickListener {
             binding.drawerLayout.closeDrawer(GravityCompat.START)
             TavernBridgeActivity.open(this)

@@ -3,6 +3,7 @@ package com.stvault.app.core
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
@@ -43,18 +44,26 @@ data class SmartImportSummary(
 /**
  * Smart auto-router & streaming ZIP bundle importer.
  * Handles cross-profile Share Intents (ACTION_SEND / ACTION_SEND_MULTIPLE / ACTION_VIEW),
- * local Files from the built-in File Browser, and .zip archives.
+ * local Files from the built-in File Browser / Download Inbox, Discord sync bytes, and .zip archives.
  */
 object SmartImporter {
+
+    private fun isZipBytes(bytes: ByteArray): Boolean =
+        bytes.size >= 4 &&
+            bytes[0] == 0x50.toByte() &&
+            bytes[1] == 0x4B.toByte() &&
+            (bytes[2] == 0x03.toByte() || bytes[2] == 0x05.toByte())
 
     fun importUris(
         context: Context,
         uris: List<Uri>,
         preferredModule: String = "", // "" = auto-detect all, or "themes"/"characters"/"worldbooks"/"presets"/"components"
+        autoTag: String = "",
         onProgress: (processed: Int, label: String) -> Unit = { _, _ -> }
     ): SmartImportSummary {
         val vaultRepo = VaultRepository.getInstance(context)
         val libRepo = ResourceLibraryRepository.getInstance(context)
+        val catMgr = CategoryManager.getInstance(context)
         val summary = SmartImportSummary()
         var count = 0
 
@@ -69,10 +78,16 @@ object SmartImporter {
             try {
                 context.contentResolver.openInputStream(uri)?.use { inp ->
                     if (fileName.endsWith(".zip", ignoreCase = true)) {
-                        importZipStream(inp, vaultRepo, libRepo, preferredModule, summary, onProgress)
+                        importZipStream(inp, vaultRepo, libRepo, catMgr, preferredModule, autoTag, summary, onProgress)
                     } else {
                         val bytes = inp.readBytes()
-                        routeBytes(bytes, fileName, uri.toString(), vaultRepo, libRepo, preferredModule, summary)
+                        if (isZipBytes(bytes)) {
+                            ByteArrayInputStream(bytes).use { bis ->
+                                importZipStream(bis, vaultRepo, libRepo, catMgr, preferredModule, autoTag, summary, onProgress)
+                            }
+                        } else {
+                            routeBytes(bytes, fileName, uri.toString(), vaultRepo, libRepo, catMgr, preferredModule, autoTag, summary)
+                        }
                     }
                 }
             } catch (_: Exception) {
@@ -86,10 +101,12 @@ object SmartImporter {
         context: Context,
         files: List<File>,
         preferredModule: String = "",
+        autoTag: String = "",
         onProgress: (processed: Int, label: String) -> Unit = { _, _ -> }
     ): SmartImportSummary {
         val vaultRepo = VaultRepository.getInstance(context)
         val libRepo = ResourceLibraryRepository.getInstance(context)
+        val catMgr = CategoryManager.getInstance(context)
         val summary = SmartImportSummary()
         var count = 0
 
@@ -100,14 +117,21 @@ object SmartImporter {
             try {
                 if (file.name.endsWith(".zip", ignoreCase = true)) {
                     file.inputStream().use { inp ->
-                        importZipStream(inp, vaultRepo, libRepo, preferredModule, summary, onProgress)
+                        importZipStream(inp, vaultRepo, libRepo, catMgr, preferredModule, autoTag, summary, onProgress)
                     }
                 } else {
                     if (file.length() > 45L * 1024L * 1024L) {
                         summary.skipped++
                         continue
                     }
-                    routeBytes(file.readBytes(), file.name, "file://${file.absolutePath}", vaultRepo, libRepo, preferredModule, summary)
+                    val bytes = file.readBytes()
+                    if (isZipBytes(bytes)) {
+                        ByteArrayInputStream(bytes).use { bis ->
+                            importZipStream(bis, vaultRepo, libRepo, catMgr, preferredModule, autoTag, summary, onProgress)
+                        }
+                    } else {
+                        routeBytes(bytes, file.name, "file://${file.absolutePath}", vaultRepo, libRepo, catMgr, preferredModule, autoTag, summary)
+                    }
                 }
             } catch (_: Exception) {
                 summary.skipped++
@@ -116,11 +140,44 @@ object SmartImporter {
         return summary
     }
 
+    fun importBytes(
+        context: Context,
+        bytes: ByteArray,
+        fileName: String,
+        sourceRef: String = "",
+        preferredModule: String = "",
+        autoTag: String = "",
+        summary: SmartImportSummary = SmartImportSummary(),
+        onProgress: (processed: Int, label: String) -> Unit = { _, _ -> }
+    ): SmartImportSummary {
+        if (bytes.isEmpty()) {
+            summary.skipped++
+            return summary
+        }
+        val vaultRepo = VaultRepository.getInstance(context)
+        val libRepo = ResourceLibraryRepository.getInstance(context)
+        val catMgr = CategoryManager.getInstance(context)
+        try {
+            if (fileName.endsWith(".zip", ignoreCase = true) || isZipBytes(bytes)) {
+                ByteArrayInputStream(bytes).use { bis ->
+                    importZipStream(bis, vaultRepo, libRepo, catMgr, preferredModule, autoTag, summary, onProgress)
+                }
+            } else {
+                routeBytes(bytes, fileName, sourceRef, vaultRepo, libRepo, catMgr, preferredModule, autoTag, summary)
+            }
+        } catch (_: Exception) {
+            summary.skipped++
+        }
+        return summary
+    }
+
     private fun importZipStream(
         inputStream: InputStream,
         vaultRepo: VaultRepository,
         libRepo: ResourceLibraryRepository,
+        catMgr: CategoryManager,
         preferredModule: String,
+        autoTag: String,
         summary: SmartImportSummary,
         onProgress: (processed: Int, label: String) -> Unit
     ) {
@@ -164,7 +221,7 @@ object SmartImporter {
                 if (zipCount % 3 == 0 || zipCount == 1) {
                     onProgress(zipCount, entryName)
                 }
-                routeBytes(baos.toByteArray(), entryName, "zip://$entryName", vaultRepo, libRepo, preferredModule, summary)
+                routeBytes(baos.toByteArray(), entryName, "zip://$entryName", vaultRepo, libRepo, catMgr, preferredModule, autoTag, summary)
             }
         }
     }
@@ -175,11 +232,14 @@ object SmartImporter {
         sourceRef: String,
         vaultRepo: VaultRepository,
         libRepo: ResourceLibraryRepository,
+        catMgr: CategoryManager,
         preferredModule: String,
+        autoTag: String,
         summary: SmartImportSummary
     ) {
         if (bytes.isEmpty()) return
         val ext = fileName.substringAfterLast('.', "").lowercase()
+        val cleanTag = autoTag.trim()
 
         // 1. PNG -> Character Card
         if (ext == "png" || CharacterCardParser.isPng(bytes)) {
@@ -193,6 +253,11 @@ object SmartImporter {
                 rec != null -> {
                     summary.characters++
                     summary.newUrls += addedUrls
+                    if (cleanTag.isNotEmpty()) {
+                        catMgr.addCategory(CategoryManager.SCOPE_CHARACTERS, cleanTag)
+                        val merged = (rec.categories + cleanTag).distinct()
+                        libRepo.setCharacterCategories(rec.id, merged)
+                    }
                 }
                 else -> summary.skipped++
             }
@@ -223,12 +288,13 @@ object SmartImporter {
 
         // 3. CSS / HTML -> Theme
         if (ext == "css" || ext == "html" || ext == "htm") {
-            val res = vaultRepo.importRawThemeText(text, fileName, "导入")
+            val res = vaultRepo.importRawThemeText(text, fileName, "导入", initialCategory = cleanTag)
             if (res == null) summary.skipped++
             else if (res.second) summary.duplicates++
             else {
                 summary.themes++
                 summary.newUrls += res.first
+                if (cleanTag.isNotEmpty()) catMgr.addCategory(CategoryManager.SCOPE_THEMES, cleanTag)
             }
             return
         }
@@ -251,6 +317,11 @@ object SmartImporter {
                 rec != null -> {
                     summary.characters++
                     summary.newUrls += addedUrls
+                    if (cleanTag.isNotEmpty()) {
+                        catMgr.addCategory(CategoryManager.SCOPE_CHARACTERS, cleanTag)
+                        val merged = (rec.categories + cleanTag).distinct()
+                        libRepo.setCharacterCategories(rec.id, merged)
+                    }
                 }
                 else -> summary.skipped++
             }
@@ -284,12 +355,13 @@ object SmartImporter {
         }
 
         // Fallback: Theme JSON/TXT with external image URLs
-        val themeRes = vaultRepo.importRawThemeText(text, fileName, "导入")
+        val themeRes = vaultRepo.importRawThemeText(text, fileName, "导入", initialCategory = cleanTag)
         if (themeRes != null) {
             if (themeRes.second) summary.duplicates++
             else {
                 summary.themes++
                 summary.newUrls += themeRes.first
+                if (cleanTag.isNotEmpty()) catMgr.addCategory(CategoryManager.SCOPE_THEMES, cleanTag)
             }
         } else {
             summary.skipped++
