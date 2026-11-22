@@ -558,11 +558,13 @@ class DiscordBrowserActivity : AppCompatActivity() {
                   'html.st-hide-sidebar div[class*="base_"] { position: relative !important; left: 0 !important; right: 0 !important; margin-left: 0 !important; width: 100% !important; min-width: 0 !important; max-width: 100% !important; }',
                   'html.st-hide-sidebar div[class*="base_"] > div[class*="content_"] { width: 100% !important; min-width: 0 !important; max-width: 100% !important; margin: 0 !important; left: 0 !important; }',
                   'html.st-hide-sidebar div[class*="chat_"], html.st-hide-sidebar main[class*="chatContent_"], html.st-hide-sidebar div[class*="container_"] { min-width: 0 !important; max-width: 100% !important; margin-left: 0 !important; left: 0 !important; box-sizing: border-box !important; }',
-                  'html.st-hide-sidebar div[class*="chatLayerWrapper_"] { position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important; width: 100% !important; min-width: 0 !important; max-width: 100% !important; margin: 0 !important; padding: 0 !important; transform: none !important; z-index: 40 !important; box-sizing: border-box !important; }',
+                  'html.st-hide-sidebar div[class*="chatLayerWrapper_"] { position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important; width: 100% !important; min-width: 0 !important; max-width: 100% !important; margin: 0 !important; padding: 0 !important; transform: none !important; z-index: 200 !important; background: var(--background-primary, #313338) !important; box-sizing: border-box !important; }',
                   'html.st-hide-sidebar div[class*="chatLayerWrapper_"] > * { width: 100% !important; min-width: 0 !important; max-width: 100% !important; margin: 0 !important; left: 0 !important; }',
+                  'html.st-hide-sidebar section[class*="title_"] { position: relative !important; z-index: 20 !important; flex-shrink: 0 !important; }',
                   'html.st-hide-sidebar section[class*="title_"] div[class*="children_"] { min-width: 0 !important; flex: 1 1 auto !important; overflow: hidden !important; }',
                   'html.st-hide-sidebar section[class*="title_"] h1, html.st-hide-sidebar section[class*="title_"] div[class*="titleWrapper_"] { min-width: 0 !important; overflow: hidden !important; text-overflow: ellipsis !important; white-space: nowrap !important; }',
-                  'html.st-hide-sidebar section[class*="title_"] div[class*="toolbar_"] { flex-shrink: 0 !important; position: relative !important; z-index: 5 !important; }',
+                  'html.st-hide-sidebar section[class*="title_"] div[class*="toolbar_"] { flex-shrink: 0 !important; position: relative !important; z-index: 25 !important; }',
+                  'html.st-hide-sidebar div[class*="headerRow_"], html.st-hide-sidebar div[class*="buttons_"] { position: relative !important; z-index: 15 !important; }',
                   'html.st-hide-sidebar ol[class*="scrollerInner_"], html.st-hide-sidebar li[class*="messageListItem_"] { max-width: 100% !important; box-sizing: border-box !important; }',
                   'html:not(.st-hide-sidebar) div[class*="base_"] > div[class*="content_"] > div[class*="sidebar_"] { width: calc(100vw - 72px) !important; min-width: 240px !important; max-width: 100vw !important; }',
                   'html:not(.st-hide-sidebar) div[class*="sidebarList_"] { width: calc(100vw - 72px) !important; }'
@@ -633,6 +635,32 @@ class DiscordBrowserActivity : AppCompatActivity() {
                   }
                   return '';
                 }
+                function extractDomFileName(el, urlFallback) {
+                  try {
+                    var candidates = [];
+                    if (el) {
+                      var txt = (el.textContent || '').trim();
+                      if (txt && exts.test(txt) && txt.length <= 140) candidates.push(txt);
+                      var ttl = (el.getAttribute('title') || '').trim();
+                      if (ttl && exts.test(ttl) && ttl.length <= 140) candidates.push(ttl);
+                      var alt = (el.getAttribute('alt') || '').trim();
+                      if (alt && exts.test(alt) && alt.length <= 140) candidates.push(alt);
+                      var box = el.closest('[class*="attachment_"], [class*="nonMediaAttachment_"], [class*="file_"], [class*="mosaicItem_"]');
+                      if (box) {
+                        var fnEl = box.querySelector('a[class*="fileNameLink_"], div[class*="filename_"], span[class*="filename_"], [class*="fileName_"]');
+                        if (fnEl && fnEl.textContent) {
+                          var btxt = fnEl.textContent.trim();
+                          if (btxt && exts.test(btxt) && btxt.length <= 140) candidates.push(btxt);
+                        }
+                      }
+                    }
+                    for (var k = 0; k < candidates.length; k++) {
+                      var c = candidates[k].replace(/[\r\n]+/g, ' ').trim();
+                      if (c) return c;
+                    }
+                  } catch (e) {}
+                  return urlFallback;
+                }
                 function pushUrl(rawUrl, el) {
                   var u = cleanCdnUrl(rawUrl);
                   if (!u) return;
@@ -643,8 +671,9 @@ class DiscordBrowserActivity : AppCompatActivity() {
                   var key = path.toLowerCase();
                   if (seen[key]) return;
                   seen[key] = true;
-                  var fn = path.substring(path.lastIndexOf('/') + 1);
-                  try { fn = decodeURIComponent(fn); } catch (e) {}
+                  var urlFn = path.substring(path.lastIndexOf('/') + 1);
+                  try { urlFn = decodeURIComponent(urlFn); } catch (e) {}
+                  var fn = extractDomFileName(el, urlFn);
                   results.push({ url: u, fileName: fn, author: findAuthor(el) });
                 }
                 var anchors = document.querySelectorAll('a[href]');

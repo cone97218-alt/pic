@@ -547,7 +547,8 @@ object InboxManager {
     ): Boolean {
         val hintName = fallbackName.ifBlank { inferFileNameFromUrl(url, null) }
         val allowHtml = hintName.endsWith(".html", true) || hintName.endsWith(".htm", true)
-        val dl = downloadUrlBytes(url, hintName, allowHtml) ?: run {
+        val hasCleanDomName = fallbackName.isNotBlank() && fallbackName.contains('.')
+        val dl = downloadUrlBytes(url, hintName, allowHtml, preferFallbackName = hasCleanDomName) ?: run {
             summary.skipped++
             return false
         }
@@ -566,7 +567,8 @@ object InboxManager {
     private fun downloadUrlBytes(
         url: String,
         fallbackName: String,
-        allowGenericHtml: Boolean = false
+        allowGenericHtml: Boolean = false,
+        preferFallbackName: Boolean = false
     ): Pair<ByteArray, String>? {
         val req = Request.Builder()
             .url(url)
@@ -582,8 +584,12 @@ object InboxManager {
 
                 val contentType = resp.header("Content-Type").orEmpty().lowercase()
                 val disposition = resp.header("Content-Disposition")
-                val resolvedName = extractFilenameFromDisposition(disposition)
-                    ?: fallbackName.ifBlank { inferFileNameFromUrl(url, contentType) }
+                val resolvedName = if (preferFallbackName && fallbackName.isNotBlank()) {
+                    fallbackName
+                } else {
+                    extractFilenameFromDisposition(disposition)
+                        ?: fallbackName.ifBlank { inferFileNameFromUrl(url, contentType) }
+                }
 
                 // Guard against accidentally importing a web login/404 HTML page as a theme
                 if (contentType.contains("text/html") && !allowGenericHtml &&

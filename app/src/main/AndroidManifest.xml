@@ -64,8 +64,9 @@
 
         <activity
             android:name=".ui.DiscordBrowserActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|keyboard"
             android:exported="false"
-            android:windowSoftInputMode="adjustResize" />
+            android:windowSoftInputMode="adjustPan" />
 
         <activity
             android:name=".ui.FileBrowserActivity"
