@@ -49,6 +49,9 @@ class ResourceDetailActivity : AppCompatActivity() {
 
     private var pendingExportFile: File? = null
     private var pendingExportBytes: ByteArray? = null
+    private var currentCharacter: CharacterRecord? = null
+    private var currentWorldBook: WorldBookRecord? = null
+    private var currentPreset: PresetRecord? = null
 
     private val exportDocLauncher =
         registerForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
@@ -90,7 +93,8 @@ class ResourceDetailActivity : AppCompatActivity() {
         resId = intent.getStringExtra(EXTRA_ID) ?: ""
 
         binding.btnDetailClose.setOnClickListener { finish() }
-        binding.btnDetailDelete.setOnClickListener { confirmDelete() }
+        binding.btnDetailExport.setOnClickListener { exportCurrentResource() }
+        binding.btnDetailMore.setOnClickListener { showMoreActionsMenu() }
 
         when (resType) {
             TYPE_CHARACTER -> loadCharacter()
@@ -98,6 +102,41 @@ class ResourceDetailActivity : AppCompatActivity() {
             TYPE_PRESET -> loadPreset()
             else -> finish()
         }
+    }
+
+    private fun exportCurrentResource() {
+        pendingExportBytes = null
+        when (resType) {
+            TYPE_CHARACTER -> currentCharacter?.let {
+                pendingExportFile = libRepo.getCharacterFile(it)
+                exportDocLauncher.launch(it.fileName)
+            }
+            TYPE_WORLDBOOK -> currentWorldBook?.let {
+                pendingExportFile = libRepo.getWorldBookFile(it)
+                exportDocLauncher.launch(it.fileName)
+            }
+            TYPE_PRESET -> currentPreset?.let {
+                pendingExportFile = libRepo.getPresetFile(it)
+                exportDocLauncher.launch(it.fileName)
+            }
+        }
+    }
+
+    private fun showMoreActionsMenu() {
+        val actions = mutableListOf<Pair<String, () -> Unit>>()
+        if (resType == TYPE_CHARACTER) {
+            val c = currentCharacter
+            if (c != null && c.urls.isNotEmpty()) {
+                actions.add("图床换链复活" to { runCharacterRepair(c) })
+            }
+        }
+        actions.add("删除该资源" to { confirmDelete() })
+
+        AlertDialog.Builder(this)
+            .setItems(actions.map { it.first }.toTypedArray()) { _, which ->
+                actions[which].second()
+            }
+            .show()
     }
 
     private fun confirmDelete() {
@@ -138,6 +177,7 @@ class ResourceDetailActivity : AppCompatActivity() {
                 return@launch
             }
             val (rec, parsed) = pair
+            currentCharacter = rec
             binding.tvDetailTitle.text = rec.name
             renderCharacterUI(rec, parsed)
         }
@@ -186,28 +226,6 @@ class ResourceDetailActivity : AppCompatActivity() {
         }
         topRow.addView(infoCol)
         headerInner.addView(topRow)
-
-        // Action Buttons Row
-        val actionRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = dp(14)
-            }
-        }
-        val btnExport = makePrimaryButton("导出原卡") {
-            pendingExportBytes = null
-            pendingExportFile = libRepo.getCharacterFile(rec)
-            exportDocLauncher.launch(rec.fileName)
-        }
-        actionRow.addView(btnExport, LinearLayout.LayoutParams(0, dp(40), 1f))
-
-        if (rec.urls.isNotEmpty()) {
-            val btnRepair = makeSecondaryButton("换链复活") {
-                runCharacterRepair(rec)
-            }
-            actionRow.addView(btnRepair, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginStart = dp(8) })
-        }
-        headerInner.addView(actionRow)
         headerCard.addView(headerInner)
         root.addView(headerCard)
 
@@ -259,18 +277,39 @@ class ResourceDetailActivity : AppCompatActivity() {
                 }
                 "book" -> {
                     val book = parsed.embeddedWorldBook ?: return
-                    val extractBtn = makePrimaryButton("抽离为独立世界书") {
-                        lifecycleScope.launch {
-                            val (_, msg) = withContext(Dispatchers.IO) {
-                                libRepo.extractEmbeddedWorldBook(rec.id)
-                            }
-                            toast(msg)
+                    val bar = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                            bottomMargin = dp(8)
                         }
                     }
-                    sectionContent.addView(
-                        extractBtn,
-                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)).apply { bottomMargin = dp(10) }
+                    bar.addView(
+                        TextView(this).apply {
+                            text = "${book.name} · ${book.entries.size} 条目"
+                            setTextColor(color(R.color.text_muted))
+                            textSize = 12f
+                            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                        }
                     )
+                    bar.addView(
+                        TextView(this).apply {
+                            text = "抽离为独立世界书"
+                            setTextColor(color(R.color.text_muted))
+                            textSize = 11.5f
+                            setBackgroundResource(R.drawable.bg_pill_accent)
+                            setPadding(dp(10), dp(4), dp(10), dp(4))
+                            setOnClickListener {
+                                lifecycleScope.launch {
+                                    val (_, msg) = withContext(Dispatchers.IO) {
+                                        libRepo.extractEmbeddedWorldBook(rec.id)
+                                    }
+                                    toast(msg)
+                                }
+                            }
+                        }
+                    )
+                    sectionContent.addView(bar)
                     renderWorldEntriesList(sectionContent, book.entries)
                 }
                 "scripts" -> {
@@ -360,6 +399,7 @@ class ResourceDetailActivity : AppCompatActivity() {
                 return@launch
             }
             val (rec, parsed) = pair
+            currentWorldBook = rec
             binding.tvDetailTitle.text = rec.name
             val root = binding.detailContainer
             root.removeAllViews()
@@ -367,22 +407,15 @@ class ResourceDetailActivity : AppCompatActivity() {
             val headerCard = makeCard()
             val inner = LinearLayout(this@ResourceDetailActivity).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(16), dp(16), dp(16), dp(16))
+                setPadding(dp(16), dp(14), dp(16), dp(14))
             }
-            inner.addView(makeTitleText(rec.name, 17f))
+            inner.addView(makeTitleText(rec.name, 16.5f))
             val approxTokens = (rec.totalChars / 2.2).toInt()
             val meta = buildString {
                 append("${rec.entryCount} 条目 · 常驻 ${rec.constantCount} · 约 $approxTokens tokens")
                 if (rec.originCardName.isNotEmpty()) append("\n来源角色卡：${rec.originCardName}")
             }
-            inner.addView(makeMutedText(meta, 12.5f, topMarginDp = 6))
-
-            val btnExport = makePrimaryButton("导出世界书 JSON") {
-                pendingExportBytes = null
-                pendingExportFile = libRepo.getWorldBookFile(rec)
-                exportDocLauncher.launch(rec.fileName)
-            }
-            inner.addView(btnExport, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40)).apply { topMargin = dp(12) })
+            inner.addView(makeMutedText(meta, 12.5f, topMarginDp = 5))
             headerCard.addView(inner)
             root.addView(headerCard)
 
@@ -449,6 +482,7 @@ class ResourceDetailActivity : AppCompatActivity() {
                 return@launch
             }
             val (rec, parsed) = pair
+            currentPreset = rec
             binding.tvDetailTitle.text = rec.name
             val root = binding.detailContainer
             root.removeAllViews()
@@ -456,9 +490,9 @@ class ResourceDetailActivity : AppCompatActivity() {
             val headerCard = makeCard()
             val inner = LinearLayout(this@ResourceDetailActivity).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(16), dp(16), dp(16), dp(16))
+                setPadding(dp(16), dp(14), dp(16), dp(14))
             }
-            inner.addView(makeTitleText(rec.name, 17f))
+            inner.addView(makeTitleText(rec.name, 16.5f))
             val paramText = buildString {
                 append("启用 ${rec.enabledPromptCount} / ${rec.promptCount} 条目")
                 parsed?.temperature?.let { append("  ·  Temp ${String.format("%.2f", it)}") }
@@ -466,14 +500,7 @@ class ResourceDetailActivity : AppCompatActivity() {
                 parsed?.maxTokens?.let { append("  ·  MaxTokens $it") }
                 parsed?.maxContext?.let { append("  ·  Context $it") }
             }
-            inner.addView(makeMutedText(paramText, 12.5f, topMarginDp = 6))
-
-            val btnExport = makePrimaryButton("导出预设 JSON") {
-                pendingExportBytes = null
-                pendingExportFile = libRepo.getPresetFile(rec)
-                exportDocLauncher.launch(rec.fileName)
-            }
-            inner.addView(btnExport, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40)).apply { topMargin = dp(12) })
+            inner.addView(makeMutedText(paramText, 12.5f, topMarginDp = 5))
             headerCard.addView(inner)
             root.addView(headerCard)
 

@@ -1,17 +1,55 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:paddingHorizontal="16dp"
     android:visibility="gone">
 
-    <!-- Sub-tab 1: Presets List -->
+    <!-- Clean Inline Segmented Toggle -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="38dp"
+        android:layout_marginBottom="10dp"
+        android:background="@drawable/bg_input"
+        android:orientation="horizontal"
+        android:padding="3dp">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnPresetModeList"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:text="预设库"
+            android:textColor="@color/on_accent"
+            android:textSize="12.5sp"
+            app:backgroundTint="@color/accent"
+            app:cornerRadius="8dp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnPresetModeComps"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:text="关联组件"
+            android:textColor="@color/text_muted"
+            android:textSize="12.5sp"
+            app:cornerRadius="8dp" />
+    </LinearLayout>
+
+    <!-- Presets List Section -->
     <LinearLayout
         android:id="@+id/tabPresetList"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:orientation="vertical"
-        android:paddingHorizontal="16dp">
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -75,7 +113,7 @@
                 android:insetBottom="0dp"
                 android:minWidth="0dp"
                 android:paddingHorizontal="8dp"
-                android:text="扫描目录"
+                android:text="目录"
                 android:textColor="@color/text_muted"
                 android:textSize="12sp" />
 
@@ -100,16 +138,16 @@
             android:layout_height="0dp"
             android:layout_weight="1"
             android:clipToPadding="false"
-            android:paddingBottom="16dp" />
+            android:paddingBottom="18dp" />
     </LinearLayout>
 
-    <!-- Sub-tab 2: Preset Linked Components -->
+    <!-- Linked Components Section -->
     <LinearLayout
         android:id="@+id/tabPresetComponents"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
         android:orientation="vertical"
-        android:paddingHorizontal="16dp"
         android:visibility="gone">
 
         <TextView
@@ -117,7 +155,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="10dp"
-            android:text="显示已关联到预设的正则与酒馆助手脚本，点击组件可修改关联宿主"
+            android:text="已关联到预设的正则与酒馆助手脚本"
             android:textColor="@color/text_muted"
             android:textSize="12sp" />
 
@@ -127,6 +165,6 @@
             android:layout_height="0dp"
             android:layout_weight="1"
             android:clipToPadding="false"
-            android:paddingBottom="16dp" />
+            android:paddingBottom="18dp" />
     </LinearLayout>
-</FrameLayout>
+</LinearLayout>

@@ -1,6 +1,7 @@
 package com.stvault.app.ui
 
 import android.Manifest
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -28,6 +29,7 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.chip.Chip
 import com.stvault.app.BuildConfig
 import com.stvault.app.R
@@ -37,6 +39,7 @@ import com.stvault.app.core.ResourceLibraryRepository
 import com.stvault.app.core.UpdateManager
 import com.stvault.app.core.VaultRepository
 import com.stvault.app.databinding.ActivityMainBinding
+import com.stvault.app.databinding.DialogImportCharUrlsBinding
 import com.stvault.app.databinding.DialogSourceDetailBinding
 import com.stvault.app.model.CharacterRecord
 import com.stvault.app.model.ComponentRecord
@@ -261,7 +264,7 @@ class MainActivity : AppCompatActivity() {
     private val scanCharFolderLauncher =
         registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
             if (uri == null) return@registerForActivityResult
-            runModuleFolderScan("角色卡", uri, binding.wsCharacters.tvCharScanStatus) { u, cb ->
+            runModuleFolderScan("角色卡", uri, null) { u, cb ->
                 libRepo.scanCharactersTreeUri(u, cb)
             }
         }
@@ -275,7 +278,7 @@ class MainActivity : AppCompatActivity() {
     private val scanWbFolderLauncher =
         registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
             if (uri == null) return@registerForActivityResult
-            runModuleFolderScan("世界书", uri, binding.wsWorldBooks.tvWbScanStatus) { u, cb ->
+            runModuleFolderScan("世界书", uri, null) { u, cb ->
                 libRepo.scanWorldBooksTreeUri(u, cb)
             }
         }
@@ -518,16 +521,15 @@ class MainActivity : AppCompatActivity() {
         binding.wsPresets.root.visibility = if (workspace == "presets") View.VISIBLE else View.GONE
         binding.wsComponents.root.visibility = if (workspace == "components") View.VISIBLE else View.GONE
 
-        // Update Top Header title & subtitle
-        val (title, sub) = when (workspace) {
-            "characters" -> "角色卡" to "PNG / JSON 原卡与内嵌资源"
-            "worldbooks" -> "世界书" to "独立世界书与条目预览"
-            "presets" -> "预设" to "Prompt 顺序与采样参数"
-            "components" -> "组件" to "正则 · 酒馆助手 · 快速回复"
-            else -> "美化" to "图床缓存与离线预览"
+        // Update Top Header title (clean single-line, no subtitle)
+        val title = when (workspace) {
+            "characters" -> "角色卡"
+            "worldbooks" -> "世界书"
+            "presets" -> "预设"
+            "components" -> "组件"
+            else -> "美化"
         }
         binding.tvWorkspaceTitle.text = title
-        binding.tvWorkspaceSubtitle.text = sub
 
         // Highlight active drawer item
         val primary = ContextCompat.getColor(this, R.color.text_primary)
@@ -547,43 +549,58 @@ class MainActivity : AppCompatActivity() {
             pair.second.imageTintList = ColorStateList.valueOf(if (active) primary else muted)
         }
 
-        // Swap dedicated bottom bar per workspace
-        binding.bottomNav.menu.clear()
-        when (workspace) {
-            "themes" -> {
-                binding.bottomNavContainer.visibility = View.VISIBLE
-                binding.bottomNav.inflateMenu(R.menu.bottom_nav_menu)
-                binding.bottomNav.selectedItemId = R.id.nav_cache
-                binding.tabCache.visibility = View.VISIBLE
-                binding.tabVault.visibility = View.GONE
-                binding.tabRepair.visibility = View.GONE
-            }
-            "characters" -> {
-                binding.bottomNavContainer.visibility = View.VISIBLE
-                binding.bottomNav.inflateMenu(R.menu.bottom_nav_characters)
-                binding.bottomNav.selectedItemId = R.id.nav_char_list
-                binding.wsCharacters.tabCharList.visibility = View.VISIBLE
-                binding.wsCharacters.tabCharImport.visibility = View.GONE
-            }
-            "worldbooks" -> {
-                binding.bottomNavContainer.visibility = View.VISIBLE
-                binding.bottomNav.inflateMenu(R.menu.bottom_nav_worldbooks)
-                binding.bottomNav.selectedItemId = R.id.nav_wb_list
-                binding.wsWorldBooks.tabWbList.visibility = View.VISIBLE
-                binding.wsWorldBooks.tabWbImport.visibility = View.GONE
-            }
-            "presets" -> {
-                binding.bottomNavContainer.visibility = View.VISIBLE
-                binding.bottomNav.inflateMenu(R.menu.bottom_nav_presets)
-                binding.bottomNav.selectedItemId = R.id.nav_preset_list
-                binding.wsPresets.tabPresetList.visibility = View.VISIBLE
-                binding.wsPresets.tabPresetComponents.visibility = View.GONE
-            }
-            "components" -> {
-                binding.bottomNavContainer.visibility = View.GONE
-            }
+        // Show sleek floating pill dock ONLY for Themes workspace
+        binding.floatingBottomDock.visibility = if (workspace == "themes") View.VISIBLE else View.GONE
+        if (workspace == "themes") {
+            selectThemeDockTab("cache")
+        } else if (workspace == "presets") {
+            selectPresetSubMode(showList = true)
         }
         refreshActiveWorkspace()
+    }
+
+    private fun selectThemeDockTab(tab: String) {
+        binding.tabCache.visibility = if (tab == "cache") View.VISIBLE else View.GONE
+        binding.tabVault.visibility = if (tab == "vault") View.VISIBLE else View.GONE
+        binding.tabRepair.visibility = if (tab == "repair") View.VISIBLE else View.GONE
+        if (tab == "vault") refreshVaultList()
+
+        val onAccent = ContextCompat.getColor(this, R.color.on_accent)
+        val muted = ContextCompat.getColor(this, R.color.text_muted)
+        val tabs = listOf(
+            Triple("cache", binding.dockTabCache, binding.ivDockCache to binding.tvDockCache),
+            Triple("vault", binding.dockTabVault, binding.ivDockVault to binding.tvDockVault),
+            Triple("repair", binding.dockTabRepair, binding.ivDockRepair to binding.tvDockRepair)
+        )
+        for ((key, pill, pair) in tabs) {
+            val active = (key == tab)
+            pill.setBackgroundResource(if (active) R.drawable.bg_dock_item_active else 0)
+            pair.first.imageTintList = ColorStateList.valueOf(if (active) onAccent else muted)
+            pair.second.setTextColor(if (active) onAccent else muted)
+            pair.second.setTypeface(null, if (active) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+        }
+    }
+
+    private fun selectPresetSubMode(showList: Boolean) {
+        val accent = ContextCompat.getColor(this, R.color.accent)
+        val onAccent = ContextCompat.getColor(this, R.color.on_accent)
+        val muted = ContextCompat.getColor(this, R.color.text_muted)
+        val transparent = android.graphics.Color.TRANSPARENT
+
+        binding.wsPresets.tabPresetList.visibility = if (showList) View.VISIBLE else View.GONE
+        binding.wsPresets.tabPresetComponents.visibility = if (showList) View.GONE else View.VISIBLE
+
+        if (showList) {
+            binding.wsPresets.btnPresetModeList.backgroundTintList = ColorStateList.valueOf(accent)
+            binding.wsPresets.btnPresetModeList.setTextColor(onAccent)
+            binding.wsPresets.btnPresetModeComps.backgroundTintList = ColorStateList.valueOf(transparent)
+            binding.wsPresets.btnPresetModeComps.setTextColor(muted)
+        } else {
+            binding.wsPresets.btnPresetModeComps.backgroundTintList = ColorStateList.valueOf(accent)
+            binding.wsPresets.btnPresetModeComps.setTextColor(onAccent)
+            binding.wsPresets.btnPresetModeList.backgroundTintList = ColorStateList.valueOf(transparent)
+            binding.wsPresets.btnPresetModeList.setTextColor(muted)
+        }
     }
 
     private fun refreshActiveWorkspace() {
@@ -719,37 +736,10 @@ class MainActivity : AppCompatActivity() {
             checkUpdateManually()
         }
 
-        // Dynamic Bottom Nav (handles all workspace bottom menus)
-        binding.bottomNav.setOnItemSelectedListener { item ->
-            when (item.itemId) {
-                // Themes workspace
-                R.id.nav_cache, R.id.nav_vault, R.id.nav_repair -> {
-                    binding.tabCache.visibility = if (item.itemId == R.id.nav_cache) View.VISIBLE else View.GONE
-                    binding.tabVault.visibility = if (item.itemId == R.id.nav_vault) View.VISIBLE else View.GONE
-                    binding.tabRepair.visibility = if (item.itemId == R.id.nav_repair) View.VISIBLE else View.GONE
-                    if (item.itemId == R.id.nav_vault) refreshVaultList()
-                }
-                // Characters workspace
-                R.id.nav_char_list, R.id.nav_char_import -> {
-                    binding.wsCharacters.tabCharList.visibility = if (item.itemId == R.id.nav_char_list) View.VISIBLE else View.GONE
-                    binding.wsCharacters.tabCharImport.visibility = if (item.itemId == R.id.nav_char_import) View.VISIBLE else View.GONE
-                    refreshCharactersList()
-                }
-                // World Books workspace
-                R.id.nav_wb_list, R.id.nav_wb_import -> {
-                    binding.wsWorldBooks.tabWbList.visibility = if (item.itemId == R.id.nav_wb_list) View.VISIBLE else View.GONE
-                    binding.wsWorldBooks.tabWbImport.visibility = if (item.itemId == R.id.nav_wb_import) View.VISIBLE else View.GONE
-                    refreshWorldBooksList()
-                }
-                // Presets workspace
-                R.id.nav_preset_list, R.id.nav_preset_components -> {
-                    binding.wsPresets.tabPresetList.visibility = if (item.itemId == R.id.nav_preset_list) View.VISIBLE else View.GONE
-                    binding.wsPresets.tabPresetComponents.visibility = if (item.itemId == R.id.nav_preset_components) View.VISIBLE else View.GONE
-                    refreshPresetsList()
-                }
-            }
-            true
-        }
+        // Floating Pill Bottom Dock (Themes Workspace)
+        binding.dockTabCache.setOnClickListener { selectThemeDockTab("cache") }
+        binding.dockTabVault.setOnClickListener { selectThemeDockTab("vault") }
+        binding.dockTabRepair.setOnClickListener { selectThemeDockTab("repair") }
 
         // Workspace 2: Characters Listeners
         binding.wsCharacters.btnCharSearch.setOnClickListener { refreshCharactersList() }
@@ -757,9 +747,7 @@ class MainActivity : AppCompatActivity() {
             if (actionId == EditorInfo.IME_ACTION_SEARCH) { refreshCharactersList(); true } else false
         }
         binding.wsCharacters.btnCharQuickImport.setOnClickListener { importCharFilesLauncher.launch(arrayOf("*/*")) }
-        binding.wsCharacters.btnCharImportFile.setOnClickListener { importCharFilesLauncher.launch(arrayOf("*/*")) }
         binding.wsCharacters.btnCharQuickUrl.setOnClickListener { showImportCharacterUrlDialog() }
-        binding.wsCharacters.btnCharImportUrl.setOnClickListener { showImportCharacterUrlDialog() }
         binding.wsCharacters.btnCharScanFolder.setOnClickListener { scanCharFolderLauncher.launch(null) }
         binding.wsCharacters.btnCharStartCache.setOnClickListener {
             VaultDownloadService.start(this, mode = "pending", concurrency = downloadConcurrency)
@@ -772,7 +760,6 @@ class MainActivity : AppCompatActivity() {
             if (actionId == EditorInfo.IME_ACTION_SEARCH) { refreshWorldBooksList(); true } else false
         }
         binding.wsWorldBooks.btnWbQuickImport.setOnClickListener { importWbFilesLauncher.launch(arrayOf("*/*")) }
-        binding.wsWorldBooks.btnWbImportFile.setOnClickListener { importWbFilesLauncher.launch(arrayOf("*/*")) }
         binding.wsWorldBooks.btnWbScanFolder.setOnClickListener { scanWbFolderLauncher.launch(null) }
         binding.wsWorldBooks.btnWbStartCache.setOnClickListener {
             VaultDownloadService.start(this, mode = "pending", concurrency = downloadConcurrency)
@@ -780,6 +767,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Workspace 4: Presets Listeners
+        binding.wsPresets.btnPresetModeList.setOnClickListener { selectPresetSubMode(showList = true) }
+        binding.wsPresets.btnPresetModeComps.setOnClickListener {
+            selectPresetSubMode(showList = false)
+            refreshPresetsList()
+        }
         binding.wsPresets.btnPresetSearch.setOnClickListener { refreshPresetsList() }
         binding.wsPresets.etPresetSearch.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEARCH) { refreshPresetsList(); true } else false
@@ -1634,61 +1626,105 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showImportCharacterUrlDialog() {
-        val container = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            setPadding(48, 28, 48, 8)
-        }
-        val input = android.widget.EditText(this).apply {
-            hint = "粘贴角色卡 PNG 或 JSON 直链 (https://...)"
-            isSingleLine = false
-            maxLines = 4
-            textSize = 13.5f
-        }
-        container.addView(input)
+        val sheet = BottomSheetDialog(this)
+        val sheetBinding = DialogImportCharUrlsBinding.inflate(LayoutInflater.from(this))
+        sheet.setContentView(sheetBinding.root)
+        sheet.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
+            ?.setBackgroundColor(android.graphics.Color.TRANSPARENT)
 
-        AlertDialog.Builder(this)
-            .setTitle("从链接导入角色卡")
-            .setMessage("支持直链 PNG（含 chara / ccv3 数据）或 JSON 角色卡，将自动下载保存完整原卡并提取内嵌资源。")
-            .setView(container)
-            .setPositiveButton("导入") { _, _ ->
-                val url = input.text?.toString()?.trim().orEmpty()
-                if (url.isEmpty()) {
-                    toast("请输入链接")
-                    return@setPositiveButton
-                }
-                showIsland("正在下载角色卡...")
-                lifecycleScope.launch {
+        sheetBinding.btnPasteUrls.setOnClickListener {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            val clipText = cm?.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty().trim()
+            if (clipText.isEmpty()) {
+                toast("剪贴板为空")
+            } else {
+                val cur = sheetBinding.etBatchCharUrls.text?.toString().orEmpty()
+                val next = if (cur.isBlank()) clipText else "$cur\n$clipText"
+                sheetBinding.etBatchCharUrls.setText(next)
+                sheetBinding.etBatchCharUrls.setSelection(next.length)
+            }
+        }
+
+        sheetBinding.btnCancelUrlImport.setOnClickListener { sheet.dismiss() }
+
+        sheetBinding.btnConfirmUrlImport.setOnClickListener {
+            val raw = sheetBinding.etBatchCharUrls.text?.toString().orEmpty()
+            val urls = raw.lines()
+                .map { it.trim() }
+                .filter { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
+                .distinct()
+            if (urls.isEmpty()) {
+                toast("请粘贴至少一条有效的 http/https 直链")
+                return@setOnClickListener
+            }
+            sheet.dismiss()
+            runBatchCharacterUrlImport(urls)
+        }
+
+        sheet.show()
+    }
+
+    private fun runBatchCharacterUrlImport(urls: List<String>) {
+        val total = urls.size
+        showIsland(if (total == 1) "正在下载角色卡..." else "链接导入 1 / $total")
+        lifecycleScope.launch {
+            var okCount = 0
+            var dupCount = 0
+            var failCount = 0
+            var lastSingleMsg = ""
+
+            withContext(Dispatchers.IO) {
+                urls.forEachIndexed { idx, url ->
+                    if (total > 1) {
+                        runOnUiThread { updateIsland("链接导入 ${idx + 1} / $total") }
+                    }
                     try {
-                        val (rec, msg) = withContext(Dispatchers.IO) {
-                            libRepo.importCharacterFromUrl(url)
+                        val (rec, msg) = libRepo.importCharacterFromUrl(url)
+                        lastSingleMsg = msg
+                        when {
+                            msg.contains("已在库中") -> dupCount++
+                            rec != null -> okCount++
+                            else -> failCount++
                         }
-                        finishIsland(if (rec != null) "已导入 ${rec.name}" else "导入失败")
-                        toast(msg)
-                        if (rec != null) refreshCharactersList()
                     } catch (e: Exception) {
-                        finishIsland("下载失败")
-                        toast("链接导入失败：${e.message}")
+                        lastSingleMsg = "失败：${e.message}"
+                        failCount++
                     }
                 }
             }
-            .setNegativeButton("取消", null)
-            .show()
+
+            val summary = if (total == 1) {
+                lastSingleMsg
+            } else {
+                buildString {
+                    append("导入完成：成功 $okCount")
+                    if (dupCount > 0) append(" · 重复 $dupCount")
+                    if (failCount > 0) append(" · 失败 $failCount")
+                }
+            }
+            finishIsland(summary)
+            toast(summary)
+            if (okCount > 0) refreshCharactersList()
+        }
     }
 
     private fun refreshCharactersList() {
         val q = binding.wsCharacters.etCharSearch.text?.toString().orEmpty()
         lifecycleScope.launch {
-            val (list, assetCounts) = withContext(Dispatchers.IO) {
+            val (list, pendingCount) = withContext(Dispatchers.IO) {
                 val chars = libRepo.searchCharacters(q, activeCharFilter)
                 val urls = libRepo.getAllCharacterUrls()
                 val counts = repo.getCountsForUrls(urls)
-                chars to Pair(counts, urls.size)
+                chars to counts.third
             }
             charactersAdapter.submitList(list)
-            binding.wsCharacters.tvCharCount.text = "共 ${list.size} 张角色卡"
-            val (counts, total) = assetCounts
-            binding.wsCharacters.tvCharAssetSummary.text =
-                "已缓存 ${counts.first} / $total 张卡内外链图床（待缓存 ${counts.third} · 失败 ${counts.second}）"
+            binding.wsCharacters.tvCharCount.text = "共 ${list.size} 张"
+            if (pendingCount > 0) {
+                binding.wsCharacters.btnCharStartCache.visibility = View.VISIBLE
+                binding.wsCharacters.btnCharStartCache.text = "缓存图床 ($pendingCount)"
+            } else {
+                binding.wsCharacters.btnCharStartCache.visibility = View.GONE
+            }
         }
     }
 
@@ -1710,17 +1746,20 @@ class MainActivity : AppCompatActivity() {
     private fun refreshWorldBooksList() {
         val q = binding.wsWorldBooks.etWbSearch.text?.toString().orEmpty()
         lifecycleScope.launch {
-            val (list, assetCounts) = withContext(Dispatchers.IO) {
+            val (list, pendingCount) = withContext(Dispatchers.IO) {
                 val books = libRepo.searchWorldBooks(q, activeWbFilter)
                 val urls = libRepo.getAllWorldBookUrls()
                 val counts = repo.getCountsForUrls(urls)
-                books to Pair(counts, urls.size)
+                books to counts.third
             }
             worldBooksAdapter.submitList(list)
-            binding.wsWorldBooks.tvWbCount.text = "共 ${list.size} 本世界书"
-            val (counts, total) = assetCounts
-            binding.wsWorldBooks.tvWbAssetSummary.text =
-                "已缓存 ${counts.first} / $total 张外链图床（待缓存 ${counts.third} · 失败 ${counts.second}）"
+            binding.wsWorldBooks.tvWbCount.text = "共 ${list.size} 本"
+            if (pendingCount > 0) {
+                binding.wsWorldBooks.btnWbStartCache.visibility = View.VISIBLE
+                binding.wsWorldBooks.btnWbStartCache.text = "缓存图床 ($pendingCount)"
+            } else {
+                binding.wsWorldBooks.btnWbStartCache.visibility = View.GONE
+            }
         }
     }
 
