@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Bundle
 import android.view.MotionEvent
 import android.view.View
+import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -146,63 +147,86 @@ class DiscordBrowserActivity : AppCompatActivity() {
             }
         }
 
-        // Make the floating「囤囤」button freely draggable anywhere on screen so it never blocks Discord inputs
-        setupDraggableHoardButton()
+        // Make the floating [⚡ 指令 | 囤囤] pill freely draggable anywhere on screen
+        setupDraggableHoardDock()
+        refreshActiveQuickCmdLabel()
 
         web.loadUrl("https://discord.com/app")
     }
 
     @SuppressLint("ClickableViewAccessibility")
-    private fun setupDraggableHoardButton() {
-        val fab = binding.fabHoard
+    private fun setupDraggableHoardDock() {
+        val dock = binding.fabHoardDock
         val touchSlop = 8f * resources.displayMetrics.density
-        var downRawX = 0f
-        var downRawY = 0f
-        var startX = 0f
-        var startY = 0f
-        var isDragging = false
 
-        fab.setOnTouchListener { v, event ->
-            val parent = v.parent as? View ?: return@setOnTouchListener false
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    downRawX = event.rawX
-                    downRawY = event.rawY
-                    startX = v.x
-                    startY = v.y
-                    isDragging = false
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val dx = event.rawX - downRawX
-                    val dy = event.rawY - downRawY
-                    if (!isDragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
-                        isDragging = true
+        fun attachDragAndTap(target: View, onTap: () -> Unit) {
+            var downRawX = 0f
+            var downRawY = 0f
+            var startX = 0f
+            var startY = 0f
+            var isDragging = false
+
+            target.setOnTouchListener { _, event ->
+                val parent = dock.parent as? View ?: return@setOnTouchListener false
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        downRawX = event.rawX
+                        downRawY = event.rawY
+                        startX = dock.x
+                        startY = dock.y
+                        isDragging = false
+                        true
                     }
-                    if (isDragging) {
-                        val maxX = (parent.width - v.width).coerceAtLeast(0).toFloat()
-                        val maxY = (parent.height - v.height).coerceAtLeast(0).toFloat()
-                        v.x = (startX + dx).coerceIn(0f, maxX)
-                        v.y = (startY + dy).coerceIn(0f, maxY)
-                    }
-                    true
-                }
-                MotionEvent.ACTION_UP -> {
-                    if (!isDragging) {
-                        if (busy) {
-                            toast("正在囤入中，请稍候...")
-                        } else {
-                            scanVisibleAttachments()
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = event.rawX - downRawX
+                        val dy = event.rawY - downRawY
+                        if (!isDragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
+                            isDragging = true
                         }
+                        if (isDragging) {
+                            val maxX = (parent.width - dock.width).coerceAtLeast(0).toFloat()
+                            val maxY = (parent.height - dock.height).coerceAtLeast(0).toFloat()
+                            dock.x = (startX + dx).coerceIn(0f, maxX)
+                            dock.y = (startY + dy).coerceIn(0f, maxY)
+                        }
+                        true
                     }
-                    true
+                    MotionEvent.ACTION_UP -> {
+                        if (!isDragging) onTap()
+                        true
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        isDragging = false
+                        true
+                    }
+                    else -> false
                 }
-                MotionEvent.ACTION_CANCEL -> {
-                    isDragging = false
-                    true
-                }
-                else -> false
             }
+        }
+
+        attachDragAndTap(binding.fabHoard) {
+            if (busy) {
+                toast("正在囤入中，请稍候...")
+            } else {
+                scanVisibleAttachments()
+            }
+        }
+
+        attachDragAndTap(binding.btnQuickCmd) {
+            val active = getActiveQuickCommand()
+            if (active.isBlank()) {
+                showQuickCommandsSheet()
+            } else {
+                sendDiscordCommand(active)
+            }
+        }
+    }
+
+    private fun hideSoftKeyboard() {
+        try {
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            imm?.hideSoftInputFromWindow(binding.webDiscord.windowToken, 0)
+        } catch (_: Exception) {
         }
     }
 
@@ -366,17 +390,42 @@ class DiscordBrowserActivity : AppCompatActivity() {
             .apply()
     }
 
+    private fun getActiveQuickCommand(): String {
+        val saved = getSharedPreferences("st_inbox_prefs", Context.MODE_PRIVATE)
+            .getString("dc_active_command", "").orEmpty().trim()
+        if (saved.isNotEmpty()) return saved
+        return loadQuickCommands().firstOrNull().orEmpty()
+    }
+
+    private fun setActiveQuickCommand(cmd: String) {
+        getSharedPreferences("st_inbox_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .putString("dc_active_command", cmd.trim())
+            .apply()
+        refreshActiveQuickCmdLabel()
+    }
+
+    private fun refreshActiveQuickCmdLabel() {
+        val active = getActiveQuickCommand()
+        binding.btnQuickCmd.text = if (active.isNotBlank()) "⚡ $active" else "⚡ 指令"
+    }
+
     private fun showQuickCommandsSheet() {
         val cmds = loadQuickCommands()
         if (cmds.isEmpty()) {
             showAddQuickCommandDialog()
             return
         }
-        val items = cmds.map { PickerItem(id = it, title = it, subtitle = "点击自动填入并发送") }
+        val active = getActiveQuickCommand()
+        val items = cmds.map {
+            val sub = if (it == active) "当前悬浮快捷键 · 点击立即触发" else "点击立即触发并设为悬浮快捷键"
+            PickerItem(id = it, title = it, subtitle = sub)
+        }
         VaultSheets.searchablePicker(
             ctx = this,
             title = "快捷机器人指令",
             items = items,
+            selectedId = active,
             searchHint = "搜索指令...",
             headerAction = "+ 添加 / 管理" to {
                 VaultSheets.actionList(
@@ -395,6 +444,9 @@ class DiscordBrowserActivity : AppCompatActivity() {
                             ) { toDel ->
                                 cmds.remove(toDel.id)
                                 saveQuickCommands(cmds)
+                                if (getActiveQuickCommand() == toDel.id) {
+                                    setActiveQuickCommand(cmds.firstOrNull().orEmpty())
+                                }
                                 toast("已删除：${toDel.id}")
                             }
                         }
@@ -402,6 +454,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 )
             }
         ) { picked ->
+            setActiveQuickCommand(picked.id)
             sendDiscordCommand(picked.id)
         }
     }
@@ -410,7 +463,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
         VaultSheets.input(
             ctx = this,
             title = "添加快捷指令",
-            message = "输入社区 Bot 使用的指令（如 /下载、/get），点击即可自动填入并尝试发送。",
+            message = "输入社区 Bot 使用的指令（如 /下载、/get），支持一键触发真实斜杠指令。",
             hint = "例如：/下载",
             confirmText = "添加"
         ) { raw ->
@@ -424,49 +477,80 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 cmds.add(0, clean)
                 saveQuickCommands(cmds)
             }
-            toast("已添加指令：$clean")
+            setActiveQuickCommand(clean)
+            toast("已添加并设为快捷键：$clean")
             showQuickCommandsSheet()
         }
     }
 
     private fun sendDiscordCommand(cmd: String) {
+        hideSoftKeyboard()
         val escaped = JSONObject.quote(cmd)
+        val bareName = JSONObject.quote(cmd.trimStart('/').trim().lowercase())
         val js = """
             (function() {
               try {
                 var box = document.querySelector('div[role="textbox"][contenteditable="true"]');
                 if (!box) return 'NO_BOX';
+                box.setAttribute('inputmode', 'none');
                 box.focus();
                 var sel = window.getSelection();
                 if (sel) {
                   var range = document.createRange();
                   range.selectNodeContents(box);
-                  range.collapse(false);
                   sel.removeAllRanges();
                   sel.addRange(range);
                 }
+                document.execCommand('delete', false, null);
                 document.execCommand('insertText', false, $escaped);
-                function fireEnter() {
-                  var evDown = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
-                  var evPress = new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
-                  var evUp = new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
-                  box.dispatchEvent(evDown);
-                  box.dispatchEvent(evPress);
-                  box.dispatchEvent(evUp);
+                function fireKey(keyName, codeName, keyCode) {
+                  var opts = { key: keyName, code: codeName, keyCode: keyCode, which: keyCode, bubbles: true, cancelable: true };
+                  box.dispatchEvent(new KeyboardEvent('keydown', opts));
+                  box.dispatchEvent(new KeyboardEvent('keypress', opts));
+                  box.dispatchEvent(new KeyboardEvent('keyup', opts));
                 }
                 var isSlash = ($escaped).indexOf('/') === 0;
                 if (isSlash) {
-                  setTimeout(function() {
-                    var opt = document.querySelector('div[class*="autocomplete_"] div[role="option"], div[class*="autocompleteRow_"]');
-                    if (opt) {
-                      opt.click();
-                      setTimeout(fireEnter, 260);
-                    } else {
-                      fireEnter();
+                  var tries = 0;
+                  var targetName = $bareName;
+                  var timer = setInterval(function() {
+                    tries++;
+                    var rows = document.querySelectorAll('div[class*="autocomplete_"] [role="option"], div[class*="autocomplete_"] div[class*="autocompleteRow_"], div[class*="autocomplete_"] div[class*="clickable_"]');
+                    var matched = null;
+                    if (rows && rows.length > 0) {
+                      for (var i = 0; i < rows.length; i++) {
+                        var t = (rows[i].textContent || '').toLowerCase();
+                        if (targetName && t.indexOf(targetName) !== -1) {
+                          matched = rows[i];
+                          break;
+                        }
+                      }
+                      if (!matched) matched = rows[0];
                     }
-                  }, 420);
+                    if (matched) {
+                      clearInterval(timer);
+                      matched.click();
+                      setTimeout(function() {
+                        box.focus();
+                        fireKey('Enter', 'Enter', 13);
+                      }, 320);
+                    } else if (tries >= 30) {
+                      clearInterval(timer);
+                      // NEVER fall back to sending /command as plain text!
+                      try {
+                        var s2 = window.getSelection();
+                        if (s2) {
+                          var r2 = document.createRange();
+                          r2.selectNodeContents(box);
+                          s2.removeAllRanges();
+                          s2.addRange(r2);
+                        }
+                        document.execCommand('delete', false, null);
+                      } catch (e2) {}
+                    }
+                  }, 100);
                 } else {
-                  setTimeout(fireEnter, 160);
+                  setTimeout(function() { fireKey('Enter', 'Enter', 13); }, 180);
                 }
                 return 'OK';
               } catch (e) {
@@ -475,10 +559,11 @@ class DiscordBrowserActivity : AppCompatActivity() {
             })();
         """.trimIndent()
         binding.webDiscord.evaluateJavascript(js) { res ->
+            hideSoftKeyboard()
             if (res?.contains("NO_BOX") == true) {
                 toast("当前页面未找到消息输入框，请先进入频道或帖子")
             } else {
-                toast("已触发指令：$cmd")
+                toast("正在触发机器人指令：$cmd")
             }
         }
     }
@@ -580,6 +665,18 @@ class DiscordBrowserActivity : AppCompatActivity() {
               };
               if (!window.__stSidebarAutoBound) {
                 window.__stSidebarAutoBound = true;
+                // Suppress Android soft keyboard on Discord chat Slate textboxes (never affects /login <input> fields)
+                function lockChatKeyboard() {
+                  if (location.pathname.indexOf('/channels/') !== 0) return;
+                  var boxes = document.querySelectorAll('div[role="textbox"][contenteditable="true"]');
+                  for (var i = 0; i < boxes.length; i++) {
+                    if (boxes[i].getAttribute('inputmode') !== 'none') {
+                      boxes[i].setAttribute('inputmode', 'none');
+                    }
+                  }
+                }
+                lockChatKeyboard();
+                setInterval(lockChatKeyboard, 1200);
                 document.addEventListener('click', function(e) {
                   var a = e.target && e.target.closest ? e.target.closest('a[href*="/channels/"]') : null;
                   if (!a) return;

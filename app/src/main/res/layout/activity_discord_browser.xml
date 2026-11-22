@@ -164,23 +164,51 @@
             android:layout_gravity="center"
             android:indeterminateTint="@color/text_muted" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/fabHoard"
+        <!-- Draggable Minimalist Floating Pill: [⚡ Command | 囤囤] -->
+        <LinearLayout
+            android:id="@+id/fabHoardDock"
             android:layout_width="wrap_content"
-            android:layout_height="44dp"
+            android:layout_height="42dp"
             android:layout_gravity="bottom|end"
-            android:layout_marginEnd="16dp"
+            android:layout_marginEnd="14dp"
             android:layout_marginBottom="22dp"
+            android:background="@drawable/bg_dock_item_active"
             android:elevation="8dp"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:paddingHorizontal="18dp"
-            android:text="囤囤"
-            android:textColor="@color/on_accent"
-            android:textSize="13.5sp"
-            android:textStyle="bold"
-            app:backgroundTint="@color/accent"
-            app:cornerRadius="22dp" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="4dp">
+
+            <TextView
+                android:id="@+id/btnQuickCmd"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:ellipsize="end"
+                android:gravity="center"
+                android:maxWidth="120dp"
+                android:paddingHorizontal="12dp"
+                android:singleLine="true"
+                android:text="⚡ 指令"
+                android:textColor="@color/on_accent"
+                android:textSize="12.5sp"
+                android:textStyle="bold" />
+
+            <View
+                android:layout_width="1dp"
+                android:layout_height="18dp"
+                android:alpha="0.28"
+                android:background="@color/on_accent" />
+
+            <TextView
+                android:id="@+id/fabHoard"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:paddingHorizontal="14dp"
+                android:text="囤囤"
+                android:textColor="@color/on_accent"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+        </LinearLayout>
     </FrameLayout>
 
 </LinearLayout>
