@@ -160,8 +160,20 @@ class DiscordBrowserActivity : AppCompatActivity() {
             fun requestNativeEnter(delayMs: Long) {
                 runOnUiThread {
                     binding.webDiscord.postDelayed({
-                        dispatchNativeEnterKey()
+                        dispatchNativeKey(KeyEvent.KEYCODE_ENTER)
                     }, delayMs.coerceIn(80L, 1200L))
+                }
+            }
+
+            @JavascriptInterface
+            fun requestNativeTabThenEnter(tabDelayMs: Long, enterDelayMs: Long) {
+                runOnUiThread {
+                    binding.webDiscord.postDelayed({
+                        dispatchNativeKey(KeyEvent.KEYCODE_TAB)
+                        binding.webDiscord.postDelayed({
+                            dispatchNativeKey(KeyEvent.KEYCODE_ENTER)
+                        }, enterDelayMs.coerceIn(150L, 1200L))
+                    }, tabDelayMs.coerceIn(60L, 1000L))
                 }
             }
         }, "STHoardBridge")
@@ -169,11 +181,12 @@ class DiscordBrowserActivity : AppCompatActivity() {
         web.loadUrl("https://discord.com/app")
     }
 
-    private fun dispatchNativeEnterKey() {
+    private fun dispatchNativeKey(keyCode: Int) {
         try {
+            binding.webDiscord.requestFocus()
             hideSoftKeyboard()
-            binding.webDiscord.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
-            binding.webDiscord.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+            binding.webDiscord.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+            binding.webDiscord.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
         } catch (_: Exception) {
         }
     }
@@ -595,62 +608,61 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 } catch (e0) {}
                 document.execCommand('delete', false, null);
 
-                // Slate.js prefers InputEvent('beforeinput', insertText); fall back to execCommand if needed
-                var textToInsert = $escaped;
-                try {
-                  box.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: textToInsert, bubbles: true, cancelable: true }));
-                } catch (e1) {}
-                if ((box.textContent || '').trim().indexOf(textToInsert.slice(0, 2)) === -1) {
-                  document.execCommand('insertText', false, textToInsert);
+                function insertSlateText(txt) {
+                  var before = (box.textContent || '').trim();
+                  try {
+                    box.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: txt, bubbles: true, cancelable: true }));
+                  } catch (e1) {}
+                  if ((box.textContent || '').trim() === before) {
+                    document.execCommand('insertText', false, txt);
+                  }
                 }
 
-                function fireKey(keyName, codeName, keyCode) {
-                  var opts = { key: keyName, code: codeName, keyCode: keyCode, which: keyCode, bubbles: true, cancelable: true };
-                  box.dispatchEvent(new KeyboardEvent('keydown', opts));
-                  box.dispatchEvent(new KeyboardEvent('keypress', opts));
-                  box.dispatchEvent(new KeyboardEvent('keyup', opts));
-                }
+                var textToInsert = $escaped;
                 var isSlash = textToInsert.indexOf('/') === 0;
                 if (isSlash) {
-                  var tries = 0;
-                  var targetName = $bareName;
-                  var timer = setInterval(function() {
-                    tries++;
-                    var popup = document.querySelector('div[class*="autocomplete_"], div[class*="autocompleteInner_"]');
-                    if (popup) {
-                      var rows = popup.querySelectorAll('[role="option"], div[class*="autocompleteRow_"], div[class*="clickable_"], div[class*="selectable_"]');
-                      var matched = null;
-                      if (rows && rows.length > 0) {
-                        for (var i = 0; i < rows.length; i++) {
-                          var t = (rows[i].textContent || '').toLowerCase();
-                          if (targetName && t.indexOf(targetName) !== -1) {
-                            matched = rows[i];
-                            break;
+                  // Type '/' first so Discord's slash-command detector reliably opens the autocomplete popup
+                  insertSlateText('/');
+                  var rest = textToInsert.slice(1);
+                  setTimeout(function() {
+                    box.focus();
+                    if (rest) insertSlateText(rest);
+                    var tries = 0;
+                    var targetName = $bareName;
+                    var timer = setInterval(function() {
+                      tries++;
+                      var popup = document.querySelector('div[class*="autocomplete"], [role="listbox"]');
+                      if (popup && popup.getBoundingClientRect().height > 20) {
+                        clearInterval(timer);
+                        var rows = popup.querySelectorAll('[role="option"], div[class*="autocompleteRow"], div[class*="clickable_"], div[class*="selectable_"]');
+                        var firstText = (rows && rows.length > 0) ? (rows[0].textContent || '').toLowerCase() : '';
+                        var matched = null;
+                        if (rows && rows.length > 1 && targetName && firstText.indexOf(targetName) === -1) {
+                          for (var i = 1; i < rows.length; i++) {
+                            if ((rows[i].textContent || '').toLowerCase().indexOf(targetName) !== -1) {
+                              matched = rows[i];
+                              break;
+                            }
                           }
                         }
-                        if (!matched) matched = rows[0];
+                        if (matched) {
+                          matched.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                          matched.click();
+                          if (window.STHoardBridge && window.STHoardBridge.requestNativeEnter) {
+                            window.STHoardBridge.requestNativeEnter(420);
+                          }
+                        } else if (window.STHoardBridge && window.STHoardBridge.requestNativeTabThenEnter) {
+                          window.STHoardBridge.requestNativeTabThenEnter(120, 420);
+                        }
+                      } else if (tries >= 28) {
+                        clearInterval(timer);
                       }
-                      clearInterval(timer);
-                      if (matched) {
-                        matched.click();
-                      } else {
-                        fireKey('Tab', 'Tab', 9);
-                      }
-                      if (window.STHoardBridge && window.STHoardBridge.requestNativeEnter) {
-                        window.STHoardBridge.requestNativeEnter(380);
-                      } else {
-                        setTimeout(function() { box.focus(); fireKey('Enter', 'Enter', 13); }, 380);
-                      }
-                    } else if (tries >= 28) {
-                      clearInterval(timer);
-                      // Do not send as plain text if slash menu did not open
-                    }
-                  }, 120);
+                    }, 120);
+                  }, 180);
                 } else {
+                  insertSlateText(textToInsert);
                   if (window.STHoardBridge && window.STHoardBridge.requestNativeEnter) {
-                    window.STHoardBridge.requestNativeEnter(200);
-                  } else {
-                    setTimeout(function() { fireKey('Enter', 'Enter', 13); }, 200);
+                    window.STHoardBridge.requestNativeEnter(220);
                   }
                 }
                 return 'OK';
