@@ -369,6 +369,7 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
 
             "stvault_pull_poll" -> {
                 val kind = pendingPullKind
+                if (kind.isNotEmpty()) pendingPullKind = ""
                 JSONObject().apply {
                     put("ok", true)
                     put("pullKind", kind)
@@ -454,6 +455,7 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                 var imported = 0
                 var overwritten = 0
                 var conflicts = 0
+                var touchedThemes = false
                 for (i in 0 until arr.length()) {
                     val o = arr.optJSONObject(i) ?: continue
                     val kind = o.optString("kind", "")
@@ -462,7 +464,8 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                     if (b64.isEmpty()) continue
                     try {
                         val bytes = Base64.decode(b64, Base64.DEFAULT)
-                        when (ingestIncomingFromTavern(kind, fileName, bytes, embeddedWbKeys)) {
+                        if (kind == "theme") touchedThemes = true
+                        when (ingestIncomingFromTavern(kind, fileName, bytes, embeddedWbKeys, deferThemeSave = true)) {
                             "imported" -> imported++
                             "overwritten" -> overwritten++
                             "conflict" -> conflicts++
@@ -470,6 +473,9 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                         }
                     } catch (_: Exception) {
                     }
+                }
+                if (touchedThemes) {
+                    VaultRepository.getInstance(appContext).saveIndex()
                 }
                 val totalOk = imported + overwritten + conflicts
                 val parts = mutableListOf<String>()
@@ -509,7 +515,8 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
         kind: String,
         fileName: String,
         bytes: ByteArray,
-        precomputedEmbeddedWbKeys: Set<String>? = null
+        precomputedEmbeddedWbKeys: Set<String>? = null,
+        deferThemeSave: Boolean = false
     ): String {
         if (bytes.isEmpty()) return "empty"
         val vaultRepo = VaultRepository.getInstance(appContext)
@@ -546,7 +553,7 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
             normKey(n) == normKey(incomingDisplayName)
         }
         if (exactMatch != null) {
-            overwriteMatchedItem(module, exactMatch.first, fileName, bytes, vaultRepo, libRepo)
+            overwriteMatchedItem(module, exactMatch.first, fileName, bytes, vaultRepo, libRepo, deferThemeSave)
             return "overwritten"
         }
 
@@ -593,7 +600,7 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
         }
 
         // 3. Brand new -> Import directly!
-        importAndGetId(module, fileName, bytes, vaultRepo, libRepo)
+        importAndGetId(module, fileName, bytes, vaultRepo, libRepo, deferThemeSave)
         return "imported"
     }
 
@@ -622,12 +629,13 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
         fileName: String,
         bytes: ByteArray,
         vaultRepo: VaultRepository,
-        libRepo: ResourceLibraryRepository
+        libRepo: ResourceLibraryRepository,
+        deferThemeSave: Boolean = false
     ) {
         when (module) {
             "themes" -> {
                 val raw = String(bytes, Charsets.UTF_8)
-                vaultRepo.overwriteSourceContent(existingId, raw, fileName)
+                vaultRepo.overwriteSourceContent(existingId, raw, fileName, deferSave = deferThemeSave)
             }
             "characters" -> {
                 val oldCats = libRepo.getCharacterById(existingId)?.categories ?: emptyList()
@@ -659,11 +667,12 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
         fileName: String,
         bytes: ByteArray,
         vaultRepo: VaultRepository,
-        libRepo: ResourceLibraryRepository
+        libRepo: ResourceLibraryRepository,
+        deferThemeSave: Boolean = false
     ): String? {
         return when (module) {
             "themes" -> {
-                vaultRepo.importRawThemeText(String(bytes, Charsets.UTF_8), fileName, "酒馆同步")
+                vaultRepo.importRawThemeText(String(bytes, Charsets.UTF_8), fileName, "酒馆同步", deferSave = deferThemeSave)
                 null
             }
             "characters" -> libRepo.importCharacterFromBytes(bytes, fileName).first?.id

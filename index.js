@@ -715,43 +715,56 @@
 </div>`;
     }
 
+    async function runExclusive(task) {
+        if (state.busy) {
+            log('当前有同步任务正在进行，请稍候...');
+            return;
+        }
+        state.busy = true;
+        try {
+            await task();
+        } finally {
+            state.busy = false;
+        }
+    }
+
     function bindPanelButtons(root) {
         const byId = (id) => root.querySelector('#' + id);
         const btnConn = byId('stv_btn_connect');
-        if (btnConn) btnConn.addEventListener('click', async () => {
+        if (btnConn) btnConn.addEventListener('click', () => runExclusive(async () => {
             setStatus('正在连接酒馆匣...', '');
             try { await connect(); } catch (e) { log(e.message); }
-        });
+        }));
         const btnSync = byId('stv_btn_sync');
-        if (btnSync) btnSync.addEventListener('click', async () => {
+        if (btnSync) btnSync.addEventListener('click', () => runExclusive(async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await syncInventory();
-        });
+        }));
         const btnThemes = byId('stv_btn_push_themes');
-        if (btnThemes) btnThemes.addEventListener('click', async () => {
+        if (btnThemes) btnThemes.addEventListener('click', () => runExclusive(async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await handlePull('theme');
-        });
+        }));
         const btnChars = byId('stv_btn_push_chars');
-        if (btnChars) btnChars.addEventListener('click', async () => {
+        if (btnChars) btnChars.addEventListener('click', () => runExclusive(async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await handlePull('character');
-        });
+        }));
         const btnWbs = byId('stv_btn_push_wbs');
-        if (btnWbs) btnWbs.addEventListener('click', async () => {
+        if (btnWbs) btnWbs.addEventListener('click', () => runExclusive(async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await handlePull('worldbook');
-        });
+        }));
         const btnPresets = byId('stv_btn_push_presets');
-        if (btnPresets) btnPresets.addEventListener('click', async () => {
+        if (btnPresets) btnPresets.addEventListener('click', () => runExclusive(async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await handlePull('preset');
-        });
+        }));
         const btnRecv = byId('stv_btn_receive');
-        if (btnRecv) btnRecv.addEventListener('click', async () => {
+        if (btnRecv) btnRecv.addEventListener('click', () => runExclusive(async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await processOutbox();
-        });
+        }));
     }
 
     function mount() {

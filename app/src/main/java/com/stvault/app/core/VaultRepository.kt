@@ -540,7 +540,8 @@ class VaultRepository private constructor(private val appContext: Context) {
     fun importRawThemeText(
         rawText: String,
         fileName: String,
-        folderName: String = "导入"
+        folderName: String = "导入",
+        deferSave: Boolean = false
     ): Pair<Int, Boolean>? {
         if (rawText.isBlank()) return null
         val (urls, isJson) = UrlExtractor.extract(rawText)
@@ -557,7 +558,7 @@ class VaultRepository private constructor(private val appContext: Context) {
                 allowEmptyUrls = true
             )
         }
-        saveIndex()
+        if (!deferSave) saveIndex()
         return res
     }
 
@@ -980,7 +981,12 @@ class VaultRepository private constructor(private val appContext: Context) {
      * Overwrites an existing theme's stored raw content & extracted URLs while preserving
      * its ID, categories, and folder metadata (used when pulling updated themes from Tavern).
      */
-    fun overwriteSourceContent(id: String, rawText: String, newFileName: String = ""): Boolean {
+    fun overwriteSourceContent(
+        id: String,
+        rawText: String,
+        newFileName: String = "",
+        deferSave: Boolean = false
+    ): Boolean {
         if (rawText.isBlank()) return false
         val (urls, isJson) = UrlExtractor.extract(rawText)
         val contentHash = sha256Short(rawText.trim().toByteArray(Charsets.UTF_8))
@@ -1009,7 +1015,7 @@ class VaultRepository private constructor(private val appContext: Context) {
                 }
             }
         }
-        saveIndex()
+        if (!deferSave) saveIndex()
         return true
     }
 
