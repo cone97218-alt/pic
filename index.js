@@ -706,7 +706,7 @@
         return `
 <div class="inline-drawer">
   <div class="inline-drawer-toggle inline-drawer-header">
-    <b>酒馆匣互联</b>
+    <b>酒馆匣互联 <span style="font-weight:normal;opacity:.55;font-size:11px;">v1.9.11</span></b>
     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
   </div>
   <div class="inline-drawer-content">
