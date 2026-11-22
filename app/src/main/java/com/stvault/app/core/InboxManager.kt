@@ -191,16 +191,32 @@ object InboxManager {
         val extraTags: List<String> = emptyList()
     )
 
-    private fun extractHashTags(text: String): List<String> {
+    private fun extractForwardTags(text: String, isForwardOrAttachment: Boolean): List<String> {
         if (text.isBlank()) return emptyList()
         // Ignore URL fragments (http://...#anchor) by stripping URLs first
-        val noUrls = URL_REGEX.replace(text, " ")
-        return HASHTAG_REGEX.findAll(noUrls)
+        val noUrls = URL_REGEX.replace(text, " ").trim()
+        if (noUrls.isEmpty()) return emptyList()
+
+        // 1. Explicit #hashtag syntax always works
+        val hashTags = HASHTAG_REGEX.findAll(noUrls)
             .map { it.groupValues[1].trim('/') }
             .filter { it.isNotBlank() }
             .distinct()
             .take(5)
             .toList()
+        if (hashTags.isNotEmpty()) return hashTags
+
+        // 2. For forwarded messages or direct file uploads in the private relay channel,
+        //    allow bare shorthand tags without '#' (e.g. "某某老师" or "某某老师 古风")
+        //    as long as the note is short (<= 40 chars) so pasted prose isn't mistaken for tags.
+        if (isForwardOrAttachment && noUrls.length <= 40 && !noUrls.contains('\n')) {
+            return noUrls.split(Regex("""[\s,，、;；]+"""))
+                .map { it.trim().trimStart('#').trim('/') }
+                .filter { it.isNotBlank() && it.length <= 24 }
+                .distinct()
+                .take(5)
+        }
+        return emptyList()
     }
 
     fun syncDiscordChannel(
@@ -352,11 +368,13 @@ object InboxManager {
                 maxSnowflakeId = idNum
                 maxSnowflakeStr = idStr
             }
-            // Parse optional #tag / #作者名 written by the user in the forwarding comment
-            val userTags = extractHashTags(msg.optString("content", ""))
+            val snapshots = msg.optJSONArray("message_snapshots")
+            val hasSnapshots = snapshots != null && snapshots.length() > 0
+            val hasAttachments = (msg.optJSONArray("attachments")?.length() ?: 0) > 0
+            // Parse optional tags / author shorthand written by the user (with or without '#')
+            val userTags = extractForwardTags(msg.optString("content", ""), hasSnapshots || hasAttachments)
             collectFromMessageLike(msg, userTags)
             // Forwarded message snapshots (Discord Forward feature)
-            val snapshots = msg.optJSONArray("message_snapshots")
             if (snapshots != null) {
                 for (i in 0 until snapshots.length()) {
                     val snapMsg = snapshots.optJSONObject(i)?.optJSONObject("message") ?: continue
