@@ -3,6 +3,7 @@ package com.stvault.app.ui
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.os.Bundle
 import android.view.View
 import android.webkit.ConsoleMessage
@@ -46,6 +47,7 @@ class ComponentPreviewActivity : AppCompatActivity() {
     private var regexListJson: String = ""
     private var charId: String = ""
     private var showingSource: Boolean = false
+    private var previewDark: Boolean = false
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -56,25 +58,42 @@ class ComponentPreviewActivity : AppCompatActivity() {
         vaultRepo = VaultRepository.getInstance(this)
         libRepo = ResourceLibraryRepository.getInstance(this)
 
-        mode = intent.getStringExtra(EXTRA_MODE) ?: MODE_REGEX
-        titleText = intent.getStringExtra(EXTRA_TITLE) ?: "沙盒预览"
-        findRegex = intent.getStringExtra(EXTRA_FIND_REGEX) ?: ""
-        replaceString = intent.getStringExtra(EXTRA_REPLACE_STR) ?: ""
-        scriptCode = intent.getStringExtra(EXTRA_SCRIPT_CODE) ?: ""
-        rawSource = intent.getStringExtra(EXTRA_RAW_SOURCE) ?: ""
-        greetingText = intent.getStringExtra(EXTRA_GREETING_TEXT) ?: ""
-        regexListJson = intent.getStringExtra(EXTRA_REGEX_LIST_JSON) ?: ""
-        charId = intent.getStringExtra(EXTRA_CHAR_ID) ?: ""
+        val payload = pendingPayload
+        mode = payload?.mode ?: intent.getStringExtra(EXTRA_MODE) ?: MODE_REGEX
+        titleText = payload?.title ?: intent.getStringExtra(EXTRA_TITLE) ?: "沙盒预览"
+        findRegex = payload?.findRegex ?: ""
+        replaceString = payload?.replaceString ?: ""
+        scriptCode = payload?.scriptCode ?: ""
+        rawSource = payload?.rawSource ?: ""
+        greetingText = payload?.greetingText ?: ""
+        regexListJson = payload?.regexListJson ?: ""
+        charId = payload?.charId ?: ""
+
+        val uiMode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+        previewDark = (uiMode == Configuration.UI_MODE_NIGHT_YES)
+        updateDayNightLabel()
 
         binding.tvPreviewName.text = titleText
         binding.btnCloseCompPreview.setOnClickListener { finish() }
 
-        binding.tvSourceCode.text = rawSource.ifBlank {
+        binding.btnPreviewDayNight.setOnClickListener {
+            previewDark = !previewDark
+            updateDayNightLabel()
+            renderCurrentMode()
+        }
+
+        // Cap displayed source text at 200k chars to keep TextView layout fast for huge scripts
+        val fullSource = rawSource.ifBlank {
             when (mode) {
                 MODE_REGEX -> "查找正则：\n$findRegex\n\n替换内容：\n$replaceString"
                 MODE_HELPER -> scriptCode
                 else -> greetingText
             }
+        }
+        binding.tvSourceCode.text = if (fullSource.length > 150_000) {
+            fullSource.take(150_000) + "\n\n...（源码较长，已截断前 150,000 字符）"
+        } else {
+            fullSource
         }
 
         binding.btnPreviewModeToggle.setOnClickListener {
@@ -168,7 +187,14 @@ class ComponentPreviewActivity : AppCompatActivity() {
         }
     }
 
+    private fun updateDayNightLabel() {
+        binding.btnPreviewDayNight.text = if (previewDark) "深底" else "浅底"
+    }
+
     private fun renderCurrentMode() {
+        binding.webCompPreview.setBackgroundColor(
+            android.graphics.Color.parseColor(if (previewDark) "#111114" else "#F7F7F5")
+        )
         val html = when (mode) {
             MODE_REGEX -> buildRegexPreviewHtml()
             MODE_HELPER -> buildHelperPreviewHtml()
@@ -360,6 +386,12 @@ class ComponentPreviewActivity : AppCompatActivity() {
             """<img src="${LOCAL_ORIGIN}__char_avatar__" style="width:42px;height:42px;border-radius:50%;object-fit:cover;margin-right:10px;flex-shrink:0;" />"""
         } else ""
 
+        val bgCol = if (previewDark) "#111114" else "#F7F7F5"
+        val mesBg = if (previewDark) "#18181C" else "#FFFFFF"
+        val mesBorder = if (previewDark) "#27272C" else "#E6E4DD"
+        val textCol = if (previewDark) "#E4E4E7" else "#18181B"
+        val mutedBg = if (previewDark) "rgba(255,255,255,0.05)" else "rgba(24,24,27,0.05)"
+
         return """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -373,20 +405,21 @@ class ComponentPreviewActivity : AppCompatActivity() {
   * { box-sizing: border-box; }
   html, body {
     margin: 0; padding: 0;
-    background: #111114; color: #F4F4F5;
+    background: $bgCol; color: $textCol;
     font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", sans-serif;
     font-size: 14.5px; line-height: 1.65;
   }
   #chat { padding: 14px; max-width: 100%; overflow-x: hidden; }
   .mes {
     display: flex; align-items: flex-start;
-    background: #18181C; border: 1px solid #27272C;
+    background: $mesBg; border: 1px solid $mesBorder;
     border-radius: 14px; padding: 14px;
   }
   .mes_block { flex: 1; min-width: 0; overflow-x: auto; }
-  .name_text { font-weight: 700; font-size: 13.5px; color: #E4E4E7; margin-bottom: 6px; }
-  .mes_text { color: #E4E4E7; word-break: break-word; }
+  .name_text { font-weight: 700; font-size: 13.5px; color: $textCol; margin-bottom: 6px; }
+  .mes_text { color: $textCol; word-break: break-word; }
   .mes_text img { max-width: 100%; height: auto; border-radius: 8px; }
+  #sandbox-console { background: $mutedBg !important; }
   #mock-toast {
     position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
     background: #18181B; color: #F4F4F5; border: 1px solid #323238;
@@ -508,6 +541,18 @@ class ComponentPreviewActivity : AppCompatActivity() {
         else -> "application/octet-stream"
     }
 
+    private data class PreviewPayload(
+        val mode: String,
+        val title: String,
+        val findRegex: String = "",
+        val replaceString: String = "",
+        val scriptCode: String = "",
+        val rawSource: String = "",
+        val greetingText: String = "",
+        val regexListJson: String = "",
+        val charId: String = ""
+    )
+
     companion object {
         private const val LOCAL_ORIGIN = "https://st.local/"
         const val MODE_REGEX = "regex"
@@ -516,13 +561,9 @@ class ComponentPreviewActivity : AppCompatActivity() {
 
         private const val EXTRA_MODE = "mode"
         private const val EXTRA_TITLE = "title"
-        private const val EXTRA_FIND_REGEX = "find_regex"
-        private const val EXTRA_REPLACE_STR = "replace_str"
-        private const val EXTRA_SCRIPT_CODE = "script_code"
-        private const val EXTRA_RAW_SOURCE = "raw_source"
-        private const val EXTRA_GREETING_TEXT = "greeting_text"
-        private const val EXTRA_REGEX_LIST_JSON = "regex_list_json"
-        private const val EXTRA_CHAR_ID = "char_id"
+
+        @Volatile
+        private var pendingPayload: PreviewPayload? = null
 
         fun openRegex(
             ctx: Context,
@@ -532,13 +573,17 @@ class ComponentPreviewActivity : AppCompatActivity() {
             rawSource: String = "",
             sampleInput: String = ""
         ) {
+            pendingPayload = PreviewPayload(
+                mode = MODE_REGEX,
+                title = title,
+                findRegex = findRegex,
+                replaceString = replaceString,
+                rawSource = rawSource,
+                greetingText = sampleInput
+            )
             ctx.startActivity(Intent(ctx, ComponentPreviewActivity::class.java).apply {
                 putExtra(EXTRA_MODE, MODE_REGEX)
                 putExtra(EXTRA_TITLE, title)
-                putExtra(EXTRA_FIND_REGEX, findRegex)
-                putExtra(EXTRA_REPLACE_STR, replaceString)
-                putExtra(EXTRA_RAW_SOURCE, rawSource)
-                putExtra(EXTRA_GREETING_TEXT, sampleInput)
             })
         }
 
@@ -548,11 +593,15 @@ class ComponentPreviewActivity : AppCompatActivity() {
             scriptCode: String,
             rawSource: String = ""
         ) {
+            pendingPayload = PreviewPayload(
+                mode = MODE_HELPER,
+                title = title,
+                scriptCode = scriptCode,
+                rawSource = rawSource
+            )
             ctx.startActivity(Intent(ctx, ComponentPreviewActivity::class.java).apply {
                 putExtra(EXTRA_MODE, MODE_HELPER)
                 putExtra(EXTRA_TITLE, title)
-                putExtra(EXTRA_SCRIPT_CODE, scriptCode)
-                putExtra(EXTRA_RAW_SOURCE, rawSource)
             })
         }
 
@@ -561,7 +610,7 @@ class ComponentPreviewActivity : AppCompatActivity() {
             charId: String,
             charName: String,
             greeting: String,
-            regexRules: List<Triple<String, String, Boolean>> // (findRegex, replaceString, disabled)
+            regexRules: List<Triple<String, String, Boolean>>
         ) {
             val arr = JSONArray()
             for ((find, rep, dis) in regexRules) {
@@ -571,12 +620,16 @@ class ComponentPreviewActivity : AppCompatActivity() {
                     put("disabled", dis)
                 })
             }
+            pendingPayload = PreviewPayload(
+                mode = MODE_GREETING_RENDER,
+                title = charName,
+                charId = charId,
+                greetingText = greeting,
+                regexListJson = arr.toString()
+            )
             ctx.startActivity(Intent(ctx, ComponentPreviewActivity::class.java).apply {
                 putExtra(EXTRA_MODE, MODE_GREETING_RENDER)
                 putExtra(EXTRA_TITLE, charName)
-                putExtra(EXTRA_CHAR_ID, charId)
-                putExtra(EXTRA_GREETING_TEXT, greeting)
-                putExtra(EXTRA_REGEX_LIST_JSON, arr.toString())
             })
         }
     }

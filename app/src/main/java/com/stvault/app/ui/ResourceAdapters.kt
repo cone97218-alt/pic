@@ -123,7 +123,7 @@ class ComponentsAdapter(
         val b = holder.binding
         b.tvResBadge.visibility = View.VISIBLE
         val typeLabel = when (c.type) {
-            "helper" -> "助手"
+            "helper" -> "酒馆助手"
             "qr" -> "QR"
             else -> "正则"
         }

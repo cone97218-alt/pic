@@ -28,6 +28,20 @@
             android:textStyle="bold" />
 
         <TextView
+            android:id="@+id/btnPreviewDayNight"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/bg_pill_accent"
+            android:clickable="true"
+            android:focusable="true"
+            android:paddingHorizontal="9dp"
+            android:paddingVertical="4dp"
+            android:text="浅色"
+            android:textColor="@color/text_muted"
+            android:textSize="11.5sp" />
+
+        <TextView
             android:id="@+id/btnPreviewModeToggle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"

@@ -22,7 +22,7 @@
             android:layout_height="match_parent"
             android:layout_weight="1"
             android:background="@android:color/transparent"
-            android:hint="搜索正则、助手脚本或关联宿主"
+            android:hint="搜索正则、酒馆助手或关联宿主"
             android:imeOptions="actionSearch"
             android:inputType="text"
             android:textColor="@color/text_primary"

@@ -74,7 +74,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var worldBooksAdapter: WorldBooksAdapter
     private lateinit var presetsAdapter: PresetsAdapter
     private lateinit var componentsAdapter: ComponentsAdapter
-    private lateinit var presetComponentsAdapter: ComponentsAdapter
 
     private var activeWorkspace = "themes" // "themes" | "characters" | "worldbooks" | "presets" | "components"
     private var activeCharFilter = "all"
@@ -440,7 +439,7 @@ class MainActivity : AppCompatActivity() {
             refreshWorldBooksList()
         }
 
-        // 4. Presets & Linked Components
+        // 4. Presets
         binding.wsPresets.rvPresets.layoutManager = LinearLayoutManager(this)
         presetsAdapter = PresetsAdapter(
             onClick = { p -> ResourceDetailActivity.open(this, ResourceDetailActivity.TYPE_PRESET, p.id) },
@@ -448,14 +447,7 @@ class MainActivity : AppCompatActivity() {
         )
         binding.wsPresets.rvPresets.adapter = presetsAdapter
 
-        binding.wsPresets.rvPresetComponents.layoutManager = LinearLayoutManager(this)
-        presetComponentsAdapter = ComponentsAdapter(
-            onClick = { c -> showComponentDetailDialog(c) },
-            onDeleteClick = { c -> confirmDeleteComponent(c) }
-        )
-        binding.wsPresets.rvPresetComponents.adapter = presetComponentsAdapter
-
-        // 5. Components (Regex / Helper / QR)
+        // 5. Components (Regex / Tavern Helper / QR)
         binding.wsComponents.rvComponents.layoutManager = LinearLayoutManager(this)
         componentsAdapter = ComponentsAdapter(
             onClick = { c -> showComponentDetailDialog(c) },
@@ -464,7 +456,7 @@ class MainActivity : AppCompatActivity() {
         binding.wsComponents.rvComponents.adapter = componentsAdapter
         buildSimpleChips(
             binding.wsComponents.chipGroupCompFilter,
-            listOf("all" to "全部", "regex" to "正则", "helper" to "助手脚本", "qr" to "快速回复", "global" to "全局", "linked" to "已关联"),
+            listOf("all" to "全部", "regex" to "正则", "helper" to "酒馆助手", "qr" to "快速回复", "global" to "全局", "linked" to "已关联"),
             activeCompFilter
         ) { key ->
             activeCompFilter = key
@@ -566,8 +558,6 @@ class MainActivity : AppCompatActivity() {
         binding.floatingBottomDock.visibility = if (workspace == "themes") View.VISIBLE else View.GONE
         if (workspace == "themes") {
             selectThemeDockTab("cache")
-        } else if (workspace == "presets") {
-            selectPresetSubMode(showList = true)
         }
         refreshActiveWorkspace()
     }
@@ -591,28 +581,6 @@ class MainActivity : AppCompatActivity() {
             pair.first.imageTintList = ColorStateList.valueOf(if (active) onAccent else muted)
             pair.second.setTextColor(if (active) onAccent else muted)
             pair.second.setTypeface(null, if (active) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
-        }
-    }
-
-    private fun selectPresetSubMode(showList: Boolean) {
-        val accent = ContextCompat.getColor(this, R.color.accent)
-        val onAccent = ContextCompat.getColor(this, R.color.on_accent)
-        val muted = ContextCompat.getColor(this, R.color.text_muted)
-        val transparent = android.graphics.Color.TRANSPARENT
-
-        binding.wsPresets.tabPresetList.visibility = if (showList) View.VISIBLE else View.GONE
-        binding.wsPresets.tabPresetComponents.visibility = if (showList) View.GONE else View.VISIBLE
-
-        if (showList) {
-            binding.wsPresets.btnPresetModeList.backgroundTintList = ColorStateList.valueOf(accent)
-            binding.wsPresets.btnPresetModeList.setTextColor(onAccent)
-            binding.wsPresets.btnPresetModeComps.backgroundTintList = ColorStateList.valueOf(transparent)
-            binding.wsPresets.btnPresetModeComps.setTextColor(muted)
-        } else {
-            binding.wsPresets.btnPresetModeComps.backgroundTintList = ColorStateList.valueOf(accent)
-            binding.wsPresets.btnPresetModeComps.setTextColor(onAccent)
-            binding.wsPresets.btnPresetModeList.backgroundTintList = ColorStateList.valueOf(transparent)
-            binding.wsPresets.btnPresetModeList.setTextColor(muted)
         }
     }
 
@@ -802,11 +770,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Workspace 4: Presets Listeners
-        binding.wsPresets.btnPresetModeList.setOnClickListener { selectPresetSubMode(showList = true) }
-        binding.wsPresets.btnPresetModeComps.setOnClickListener {
-            selectPresetSubMode(showList = false)
-            refreshPresetsList()
-        }
         binding.wsPresets.btnPresetSearch.setOnClickListener { refreshPresetsList() }
         binding.wsPresets.etPresetSearch.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEARCH) { refreshPresetsList(); true } else false
@@ -1832,17 +1795,14 @@ class MainActivity : AppCompatActivity() {
         val q = binding.wsPresets.etPresetSearch.text?.toString().orEmpty()
         val groupVersions = prefs.getBoolean("group_versions", true)
         lifecycleScope.launch {
-            val (groupedPresets, totalRaw, groupedComps) = withContext(Dispatchers.IO) {
+            val (groupedPresets, totalRaw) = withContext(Dispatchers.IO) {
                 val p = libRepo.searchPresets(q)
                 val gp = VersionGrouper.groupBySeries(p, groupVersions, { it.seriesKey }, { it.addedAt })
-                val c = libRepo.searchComponents("", "linked").filter { it.linkedTargetType == "preset" }
-                val gc = VersionGrouper.groupBySeries(c, groupVersions, { it.seriesKey }, { it.addedAt })
-                Triple(gp, p.size, gc)
+                gp to p.size
             }
             presetsAdapter.submitList(groupedPresets)
             binding.wsPresets.tvPresetCount.text =
                 if (groupVersions && groupedPresets.size < totalRaw) "共 ${groupedPresets.size} 套 ($totalRaw 版)" else "共 ${groupedPresets.size} 个"
-            presetComponentsAdapter.submitList(groupedComps)
         }
     }
 
