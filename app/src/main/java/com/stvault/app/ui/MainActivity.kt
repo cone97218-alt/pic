@@ -2201,18 +2201,18 @@ class MainActivity : AppCompatActivity() {
                 }
                 VaultSheets.actionList(this, title = "切换变体 (${variants.size})", actions = items)
             })
-            actions.add(SheetAction("修改系列名", "统一修改整套系列的显示名称，并自动刷新变体标签") {
-                showRenameDialog("修改系列名", source.seriesName.ifBlank { source.name }) { newName ->
-                    if (repo.renameThemeSeries(source.seriesKey, newName)) {
-                        toast("系列名已更新")
-                        refreshVaultList()
-                    }
-                }
-            })
             actions.add(SheetAction("重命名当前美化", "修改当前这一条美化的原名") {
                 showRenameDialog("重命名美化", source.name) { newName ->
                     if (repo.renameSource(source.id, newName)) {
                         toast("已重命名")
+                        refreshVaultList()
+                    }
+                }
+            })
+            actions.add(SheetAction("修改系列名", "统一修改整套系列的显示名称，并自动刷新变体标签") {
+                showRenameDialog("修改系列名", source.seriesName.ifBlank { source.name }) { newName ->
+                    if (repo.renameThemeSeries(source.seriesKey, newName)) {
+                        toast("系列名已更新")
                         refreshVaultList()
                     }
                 }
