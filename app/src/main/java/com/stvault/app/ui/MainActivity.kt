@@ -869,19 +869,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun <T> sortGroupedItems(
-        groups: List<com.stvault.app.core.GroupedItem<T>>,
+        groups: List<com.stvault.app.model.GroupedItem<T>>,
         sortBy: String,
-        getDisplayName: (com.stvault.app.core.GroupedItem<T>) -> String,
+        getDisplayName: (com.stvault.app.model.GroupedItem<T>) -> String,
         getTime: (T) -> Long,
         getMetric: (T) -> Long = { 0L }
-    ): List<com.stvault.app.core.GroupedItem<T>> {
+    ): List<com.stvault.app.model.GroupedItem<T>> {
         val zhCollator = java.text.Collator.getInstance(Locale.CHINA)
         return when (sortBy) {
             "oldest" -> groups.sortedBy { getTime(it.primary) }
             "name_asc" -> groups.sortedWith { a, b -> zhCollator.compare(getDisplayName(a), getDisplayName(b)) }
             "name_desc" -> groups.sortedWith { a, b -> zhCollator.compare(getDisplayName(b), getDisplayName(a)) }
             "largest", "most_entries", "most_prompts" -> groups.sortedWith(
-                compareByDescending<com.stvault.app.core.GroupedItem<T>> { getMetric(it.primary) }
+                compareByDescending<com.stvault.app.model.GroupedItem<T>> { getMetric(it.primary) }
                     .thenByDescending { getTime(it.primary) }
             )
             else -> groups.sortedByDescending { getTime(it.primary) }
