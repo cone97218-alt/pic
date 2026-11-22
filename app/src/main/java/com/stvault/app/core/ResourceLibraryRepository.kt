@@ -237,6 +237,18 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         return count
     }
 
+    fun batchDeltaUpdateCharacterCategories(ids: List<String>, added: Set<String>, removed: Set<String>) {
+        if (ids.isEmpty() || (added.isEmpty() && removed.isEmpty())) return
+        synchronized(lock) {
+            for (id in ids) {
+                val cur = charactersMap[id] ?: continue
+                val next = ((cur.categories - removed) + added).distinct()
+                charactersMap[id] = cur.copy(categories = next)
+            }
+        }
+        saveCharactersIndex()
+    }
+
     fun batchSetCharacterCategories(ids: List<String>, categories: List<String>, append: Boolean) {
         if (ids.isEmpty()) return
         synchronized(lock) {

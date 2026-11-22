@@ -3089,42 +3089,61 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val items = allCats.map { PickerItem(it, catManager.formatIndentedLabel(it)) }
+        // Pre-select tags shared by ALL currently selected items (e.g. "待整理") so unchecking removes them in 1 tap
+        val selectedCatLists: List<Set<String>> = if (activeWorkspace == "themes") {
+            val map = repo.getSources().associateBy { it.id }
+            ids.mapNotNull { map[it]?.categories?.toSet() }
+        } else {
+            val map = libRepo.getCharacters().associateBy { it.id }
+            ids.mapNotNull { map[it]?.categories?.toSet() }
+        }
+        val commonCats: Set<String> = if (selectedCatLists.isEmpty()) {
+            emptySet()
+        } else {
+            selectedCatLists.reduce { acc, set -> acc intersect set }
+        }
+
         VaultSheets.multiSelect(
             ctx = this,
             title = "批量分类（已选 ${ids.size} 项）",
             items = items,
-            preselectedIds = emptySet(),
-            headerAction = "+ 新建" to { showQuickAddCategoryDialog(scope) { runBatchCategorize() } }
+            preselectedIds = commonCats,
+            headerAction = "+ 新建" to { showQuickAddCategoryDialog(scope) { runBatchCategorize() } },
+            primaryConfirmText = "应用",
+            secondaryConfirm = "移除所选" to { picked ->
+                if (picked.isEmpty()) {
+                    toast("请先勾选要移除的分类")
+                } else {
+                    applyBatchCategoryDelta(ids, emptySet(), picked.toSet())
+                }
+            }
         ) { picked ->
-            if (picked.isEmpty()) {
-                toast("未勾选任何分类")
+            val pickedSet = picked.toSet()
+            val added = pickedSet - commonCats
+            val removed = commonCats - pickedSet
+            if (added.isEmpty() && removed.isEmpty()) {
+                toast("分类无变更")
                 return@multiSelect
             }
-            VaultSheets.actionList(
-                ctx = this,
-                title = "应用方式",
-                actions = listOf(
-                    SheetAction("追加分类", "保留原有分类并添加新分类") {
-                        applyBatchCategory(ids, picked, append = true)
-                    },
-                    SheetAction("覆盖分类", "替换为当前选中的分类") {
-                        applyBatchCategory(ids, picked, append = false)
-                    }
-                )
-            )
+            applyBatchCategoryDelta(ids, added, removed)
         }
     }
 
-    private fun applyBatchCategory(ids: List<String>, categories: List<String>, append: Boolean) {
+    private fun applyBatchCategoryDelta(ids: List<String>, added: Set<String>, removed: Set<String>) {
         lifecycleScope.launch {
             withContext(Dispatchers.IO) {
                 if (activeWorkspace == "themes") {
-                    repo.batchSetSourceCategories(ids, categories, append)
+                    repo.batchDeltaUpdateSourceCategories(ids, added, removed)
                 } else {
-                    libRepo.batchSetCharacterCategories(ids, categories, append)
+                    libRepo.batchDeltaUpdateCharacterCategories(ids, added, removed)
                 }
             }
-            toast("已为 ${ids.size} 项更新分类")
+            val msg = when {
+                added.isEmpty() && removed.isNotEmpty() -> "已从 ${ids.size} 项移除 ${removed.size} 个分类"
+                added.isNotEmpty() && removed.isEmpty() -> "已为 ${ids.size} 项添加 ${added.size} 个分类"
+                else -> "已为 ${ids.size} 项更新分类"
+            }
+            toast(msg)
             batchSelectedIds.clear()
             syncBatchUi()
             refreshActiveWorkspace()
