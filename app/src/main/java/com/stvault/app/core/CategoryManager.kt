@@ -132,6 +132,43 @@ class CategoryManager private constructor(context: Context) {
     }
 
     /**
+     * Renames or moves a category (and all its descendant sub-categories) to a new path,
+     * automatically ensuring parent levels exist and merging cleanly if target already exists.
+     */
+    fun renameOrMoveCategory(scope: String, oldPath: String, newRawPath: String): String? {
+        val newPath = normalizePath(newRawPath)
+        if (newPath.isEmpty() || newPath == oldPath) return null
+        // Prevent moving a parent into its own child
+        if (newPath.startsWith("$oldPath/")) return null
+
+        synchronized(lock) {
+            val list = scopeMap.getOrPut(scope) { mutableListOf() }
+            val updated = mutableListOf<String>()
+            // Ensure newPath and its parents exist
+            val newParts = newPath.split("/")
+            var prefix = ""
+            for (part in newParts) {
+                prefix = if (prefix.isEmpty()) part else "$prefix/$part"
+                if (prefix !in updated) updated.add(prefix)
+            }
+            for (item in list) {
+                val mapped = when {
+                    item == oldPath -> newPath
+                    item.startsWith("$oldPath/") -> normalizePath(newPath + item.removePrefix(oldPath))
+                    else -> item
+                }
+                if (mapped.isNotEmpty() && mapped !in updated) {
+                    updated.add(mapped)
+                }
+            }
+            list.clear()
+            list.addAll(updated)
+        }
+        save()
+        return newPath
+    }
+
+    /**
      * Hierarchical match: selecting "古风" matches items tagged with "古风", "古风/仙侠", "古风/仙侠/师尊".
      */
     fun matchesFilter(itemCategories: List<String>, selectedFilter: String): Boolean {

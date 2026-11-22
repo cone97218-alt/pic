@@ -153,7 +153,7 @@ class SettingsActivity : AppCompatActivity() {
             showAddCategoryDialog(scope, title)
             return
         }
-        val items = cats.map { PickerItem(id = it, title = catManager.formatIndentedLabel(it), subtitle = "点击删除") }
+        val items = cats.map { PickerItem(id = it, title = catManager.formatIndentedLabel(it), subtitle = "点击编辑或删除") }
         VaultSheets.searchablePicker(
             ctx = this,
             title = title,
@@ -161,17 +161,53 @@ class SettingsActivity : AppCompatActivity() {
             searchHint = "搜索分类...",
             headerAction = "+ 新建" to { showAddCategoryDialog(scope, title) }
         ) { picked ->
-            VaultSheets.confirm(
+            VaultSheets.actionList(
                 ctx = this,
-                title = "删除分类",
-                message = "确定删除「${picked.id}」及其子分类？",
-                confirmText = "删除",
-                destructive = true
-            ) {
-                catManager.deleteCategory(scope, picked.id)
-                toast("已删除分类")
-                showCategoryManagerDialog(scope, title)
-            }
+                title = picked.id,
+                actions = listOf(
+                    SheetAction("重命名 / 移动层级", "修改名称或移入其他父级目录，已打标资源自动迁移") {
+                        VaultSheets.input(
+                            ctx = this,
+                            title = "重命名 / 移动分类",
+                            message = "用斜杠 / 分隔层级（如 作者/某某），输入已有路径可自动合并。",
+                            initial = picked.id,
+                            hint = "例如：作者/某某",
+                            confirmText = "保存"
+                        ) { raw ->
+                            val newPath = catManager.renameOrMoveCategory(scope, picked.id, raw)
+                            if (newPath != null) {
+                                val migrated = if (scope == CategoryManager.SCOPE_THEMES) {
+                                    VaultRepository.getInstance(this).renameSourceCategoryPrefix(picked.id, newPath)
+                                } else {
+                                    com.stvault.app.core.ResourceLibraryRepository.getInstance(this).renameCharacterCategoryPrefix(picked.id, newPath)
+                                }
+                                toast("已更新为「$newPath」（同步迁移 $migrated 项）")
+                                showCategoryManagerDialog(scope, title)
+                            } else {
+                                toast("路径无效或未变化")
+                            }
+                        }
+                    },
+                    SheetAction("删除分类", "同时清理所有资源上的该标签", destructive = true) {
+                        VaultSheets.confirm(
+                            ctx = this,
+                            title = "删除分类",
+                            message = "确定删除「${picked.id}」及其子分类？所有资源上的该标签也会一并移除。",
+                            confirmText = "删除",
+                            destructive = true
+                        ) {
+                            catManager.deleteCategory(scope, picked.id)
+                            val cleaned = if (scope == CategoryManager.SCOPE_THEMES) {
+                                VaultRepository.getInstance(this).removeSourceCategoryPrefix(picked.id)
+                            } else {
+                                com.stvault.app.core.ResourceLibraryRepository.getInstance(this).removeCharacterCategoryPrefix(picked.id)
+                            }
+                            toast("已删除分类（清理 $cleaned 项标签）")
+                            showCategoryManagerDialog(scope, title)
+                        }
+                    }
+                )
+            )
         }
     }
 

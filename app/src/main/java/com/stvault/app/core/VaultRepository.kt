@@ -992,6 +992,45 @@ class VaultRepository private constructor(private val appContext: Context) {
         saveIndex()
     }
 
+    fun renameSourceCategoryPrefix(oldPath: String, newPath: String): Int {
+        if (oldPath.isBlank() || newPath.isBlank() || oldPath == newPath) return 0
+        var changed = 0
+        synchronized(lock) {
+            for ((id, cur) in sourcesMap) {
+                if (cur.categories.any { it == oldPath || it.startsWith("$oldPath/") }) {
+                    val next = cur.categories.map { cat ->
+                        when {
+                            cat == oldPath -> newPath
+                            cat.startsWith("$oldPath/") -> (newPath + cat.removePrefix(oldPath))
+                                .split("/").filter { it.isNotBlank() }.take(3).joinToString("/")
+                            else -> cat
+                        }
+                    }.distinct()
+                    sourcesMap[id] = cur.copy(categories = next)
+                    changed++
+                }
+            }
+        }
+        if (changed > 0) saveIndex()
+        return changed
+    }
+
+    fun removeSourceCategoryPrefix(oldPath: String): Int {
+        if (oldPath.isBlank()) return 0
+        var changed = 0
+        synchronized(lock) {
+            for ((id, cur) in sourcesMap) {
+                val next = cur.categories.filterNot { it == oldPath || it.startsWith("$oldPath/") }
+                if (next.size != cur.categories.size) {
+                    sourcesMap[id] = cur.copy(categories = next)
+                    changed++
+                }
+            }
+        }
+        if (changed > 0) saveIndex()
+        return changed
+    }
+
     fun batchSetSourceCategories(ids: List<String>, categories: List<String>, append: Boolean) {
         if (ids.isEmpty()) return
         synchronized(lock) {

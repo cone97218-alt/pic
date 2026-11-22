@@ -2329,13 +2329,89 @@ class MainActivity : AppCompatActivity() {
             items = items,
             selectedId = current,
             searchHint = "搜索分类...",
-            headerAction = "+ 新建" to {
-                showQuickAddCategoryDialog(scope) {
-                    showCategoryFilterPicker(scope, current, onPicked)
-                }
+            headerAction = "管理分类" to {
+                showInlineCategoryManager(scope, current, onPicked)
             }
         ) { picked ->
             onPicked(picked.id)
+        }
+    }
+
+    private fun showInlineCategoryManager(scope: String, currentFilter: String, onFilterChanged: (String) -> Unit) {
+        val cats = catManager.getCategories(scope)
+        if (cats.isEmpty()) {
+            showQuickAddCategoryDialog(scope) {
+                showCategoryFilterPicker(scope, currentFilter, onFilterChanged)
+            }
+            return
+        }
+        val items = cats.map { PickerItem(it, catManager.formatIndentedLabel(it), "点击编辑或删除") }
+        VaultSheets.searchablePicker(
+            ctx = this,
+            title = "管理分类",
+            items = items,
+            searchHint = "搜索分类...",
+            headerAction = "+ 新建" to {
+                showQuickAddCategoryDialog(scope) {
+                    showInlineCategoryManager(scope, currentFilter, onFilterChanged)
+                }
+            }
+        ) { picked ->
+            VaultSheets.actionList(
+                ctx = this,
+                title = picked.id,
+                actions = listOf(
+                    SheetAction("重命名 / 移动层级", "移入其他目录或改名，资源自动迁移") {
+                        VaultSheets.input(
+                            ctx = this,
+                            title = "重命名 / 移动分类",
+                            message = "用 / 分隔层级（如 作者/某某），输入已有路径自动合并。",
+                            initial = picked.id,
+                            hint = "例如：作者/某某",
+                            confirmText = "保存"
+                        ) { raw ->
+                            val newPath = catManager.renameOrMoveCategory(scope, picked.id, raw)
+                            if (newPath != null) {
+                                val migrated = if (scope == CategoryManager.SCOPE_THEMES) {
+                                    repo.renameSourceCategoryPrefix(picked.id, newPath)
+                                } else {
+                                    libRepo.renameCharacterCategoryPrefix(picked.id, newPath)
+                                }
+                                if (currentFilter == picked.id || currentFilter.startsWith("${picked.id}/")) {
+                                    onFilterChanged(newPath)
+                                } else {
+                                    refreshActiveWorkspace()
+                                }
+                                toast("已更新为「$newPath」（迁移 $migrated 项）")
+                            } else {
+                                toast("路径无效或未变化")
+                            }
+                        }
+                    },
+                    SheetAction("删除分类", "同时清理所有资源上的该标签", destructive = true) {
+                        VaultSheets.confirm(
+                            ctx = this,
+                            title = "删除分类",
+                            message = "确定删除「${picked.id}」及其子分类？所有资源上的该标签也会一并移除。",
+                            confirmText = "删除",
+                            destructive = true
+                        ) {
+                            catManager.deleteCategory(scope, picked.id)
+                            val cleaned = if (scope == CategoryManager.SCOPE_THEMES) {
+                                repo.removeSourceCategoryPrefix(picked.id)
+                            } else {
+                                libRepo.removeCharacterCategoryPrefix(picked.id)
+                            }
+                            if (currentFilter == picked.id || currentFilter.startsWith("${picked.id}/")) {
+                                onFilterChanged("")
+                            } else {
+                                refreshActiveWorkspace()
+                            }
+                            toast("已删除分类（清理 $cleaned 项标签）")
+                        }
+                    }
+                )
+            )
         }
     }
 

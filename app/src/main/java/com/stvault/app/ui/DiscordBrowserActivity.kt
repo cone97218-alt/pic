@@ -17,6 +17,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.stvault.app.R
+import com.stvault.app.core.CategoryManager
 import com.stvault.app.core.InboxManager
 import com.stvault.app.core.SmartImportSummary
 import com.stvault.app.databinding.ActivityDiscordBrowserBinding
@@ -24,6 +25,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import org.json.JSONObject
 import org.json.JSONTokener
 import kotlin.math.abs
 
@@ -63,6 +65,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
             if (binding.webDiscord.canGoBack()) binding.webDiscord.goBack() else finish()
         }
         binding.btnWebReload.setOnClickListener { binding.webDiscord.reload() }
+        binding.btnWebCommands.setOnClickListener { showQuickCommandsSheet() }
         binding.btnWebSidebar.setOnClickListener {
             binding.webDiscord.evaluateJavascript(
                 "(function(){ if(!window.__stSetSidebarHidden) return false; var next = !document.documentElement.classList.contains('st-hide-sidebar'); window.__stSetSidebarHidden(next); return next; })();"
@@ -264,31 +267,55 @@ class DiscordBrowserActivity : AppCompatActivity() {
             PickerItem(id = att.id, title = att.fileName, subtitle = sub)
         }
         val allIds = found.map { it.id }.toSet()
-        val hasAnyAuthor = found.any { it.author.isNotBlank() }
+        val firstAuthor = found.firstOrNull { it.author.isNotBlank() }?.author.orEmpty()
 
         VaultSheets.multiSelect(
             ctx = this,
             title = "发现 ${found.size} 个附件",
             items = pickerItems,
             preselectedIds = allIds,
-            primaryConfirmText = if (hasAnyAuthor) "带作者囤入" else "全部囤入",
-            secondaryConfirm = if (hasAnyAuthor) {
-                "仅囤入" to { picked ->
-                    val chosen = picked.mapNotNull { byId[it] }
-                    if (chosen.isNotEmpty()) runBatchHoard(chosen, includeAuthorTag = false)
-                }
-            } else null
+            primaryConfirmText = "带标签囤入",
+            secondaryConfirm = "仅囤入" to { picked ->
+                val chosen = picked.mapNotNull { byId[it] }
+                if (chosen.isNotEmpty()) runBatchHoard(chosen, overrideTags = emptyList())
+            }
         ) { picked ->
             val chosen = picked.mapNotNull { byId[it] }
             if (chosen.isEmpty()) {
                 toast("未勾选任何附件")
                 return@multiSelect
             }
-            runBatchHoard(chosen, includeAuthorTag = hasAnyAuthor)
+            val suggested = suggestAuthorTagPath(chosen.firstOrNull { it.author.isNotBlank() }?.author ?: firstAuthor)
+            VaultSheets.input(
+                ctx = this,
+                title = "确认分类标签",
+                message = "可改名或指定目录（如 作者/某某，多个标签用空格隔开；留空则仅囤入）。",
+                initial = suggested,
+                hint = "例如：作者/某某 古风",
+                confirmText = "确认囤入"
+            ) { raw ->
+                val tags = raw.trim()
+                    .split(Regex("""[\s,，、;；]+"""))
+                    .map { it.trim().trimStart('#').trim('/') }
+                    .filter { it.isNotBlank() }
+                    .distinct()
+                runBatchHoard(chosen, overrideTags = tags)
+            }
         }
     }
 
-    private fun runBatchHoard(items: List<PageAttachment>, includeAuthorTag: Boolean) {
+    private fun suggestAuthorTagPath(rawAuthor: String): String {
+        val clean = rawAuthor.trim()
+        if (clean.isEmpty()) return ""
+        val cm = CategoryManager.getInstance(this)
+        val themeMatch = cm.resolveTagPath(CategoryManager.SCOPE_THEMES, clean)
+        if (themeMatch.contains('/')) return themeMatch
+        val charMatch = cm.resolveTagPath(CategoryManager.SCOPE_CHARACTERS, clean)
+        if (charMatch.contains('/')) return charMatch
+        return "作者/$clean"
+    }
+
+    private fun runBatchHoard(items: List<PageAttachment>, overrideTags: List<String>) {
         setBusy(true, "正在囤入 (1/${items.size})：${items.first().fileName}")
         lifecycleScope.launch(Dispatchers.IO) {
             val summary = SmartImportSummary()
@@ -296,18 +323,162 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 runOnUiThread {
                     binding.tvHoardProgress.text = "正在囤入 (${idx + 1}/${items.size})：${item.fileName}"
                 }
-                val tags = if (includeAuthorTag && item.author.isNotBlank()) listOf(item.author) else emptyList()
                 InboxManager.downloadAndImportSingleUrl(
                     context = this@DiscordBrowserActivity,
                     url = item.url,
                     fallbackName = item.fileName,
-                    extraTags = tags,
+                    extraTags = overrideTags,
                     summary = summary
                 )
             }
             withContext(Dispatchers.Main) {
                 setBusy(false)
                 toast(summary.formatMessage())
+            }
+        }
+    }
+
+    // ================== Custom Quick Bot Commands ==================
+
+    private fun loadQuickCommands(): MutableList<String> {
+        val prefs = getSharedPreferences("st_inbox_prefs", Context.MODE_PRIVATE)
+        val raw = prefs.getString("dc_quick_commands", "").orEmpty()
+        val list = mutableListOf<String>()
+        if (raw.isNotBlank()) {
+            try {
+                val arr = JSONArray(raw)
+                for (i in 0 until arr.length()) {
+                    val s = arr.optString(i).trim()
+                    if (s.isNotEmpty() && s !in list) list.add(s)
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return list
+    }
+
+    private fun saveQuickCommands(list: List<String>) {
+        val arr = JSONArray()
+        list.forEach { arr.put(it) }
+        getSharedPreferences("st_inbox_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .putString("dc_quick_commands", arr.toString())
+            .apply()
+    }
+
+    private fun showQuickCommandsSheet() {
+        val cmds = loadQuickCommands()
+        if (cmds.isEmpty()) {
+            showAddQuickCommandDialog()
+            return
+        }
+        val items = cmds.map { PickerItem(id = it, title = it, subtitle = "点击自动填入并发送") }
+        VaultSheets.searchablePicker(
+            ctx = this,
+            title = "快捷机器人指令",
+            items = items,
+            searchHint = "搜索指令...",
+            headerAction = "+ 添加 / 管理" to {
+                VaultSheets.actionList(
+                    ctx = this,
+                    title = "管理快捷指令",
+                    actions = listOf(
+                        SheetAction("添加新指令", "例如 /下载、/get、/领卡 等") {
+                            showAddQuickCommandDialog()
+                        },
+                        SheetAction("删除已有指令", "移除不需要的快捷指令", destructive = true) {
+                            val delItems = cmds.map { PickerItem(it, it, "点击删除") }
+                            VaultSheets.searchablePicker(
+                                ctx = this,
+                                title = "选择要删除的指令",
+                                items = delItems
+                            ) { toDel ->
+                                cmds.remove(toDel.id)
+                                saveQuickCommands(cmds)
+                                toast("已删除：${toDel.id}")
+                            }
+                        }
+                    )
+                )
+            }
+        ) { picked ->
+            sendDiscordCommand(picked.id)
+        }
+    }
+
+    private fun showAddQuickCommandDialog() {
+        VaultSheets.input(
+            ctx = this,
+            title = "添加快捷指令",
+            message = "输入社区 Bot 使用的指令（如 /下载、/get），点击即可自动填入并尝试发送。",
+            hint = "例如：/下载",
+            confirmText = "添加"
+        ) { raw ->
+            val clean = raw.trim()
+            if (clean.isEmpty()) {
+                toast("指令不能为空")
+                return@input
+            }
+            val cmds = loadQuickCommands()
+            if (clean !in cmds) {
+                cmds.add(0, clean)
+                saveQuickCommands(cmds)
+            }
+            toast("已添加指令：$clean")
+            showQuickCommandsSheet()
+        }
+    }
+
+    private fun sendDiscordCommand(cmd: String) {
+        val escaped = JSONObject.quote(cmd)
+        val js = """
+            (function() {
+              try {
+                var box = document.querySelector('div[role="textbox"][contenteditable="true"]');
+                if (!box) return 'NO_BOX';
+                box.focus();
+                var sel = window.getSelection();
+                if (sel) {
+                  var range = document.createRange();
+                  range.selectNodeContents(box);
+                  range.collapse(false);
+                  sel.removeAllRanges();
+                  sel.addRange(range);
+                }
+                document.execCommand('insertText', false, $escaped);
+                function fireEnter() {
+                  var evDown = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
+                  var evPress = new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
+                  var evUp = new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
+                  box.dispatchEvent(evDown);
+                  box.dispatchEvent(evPress);
+                  box.dispatchEvent(evUp);
+                }
+                var isSlash = ($escaped).indexOf('/') === 0;
+                if (isSlash) {
+                  setTimeout(function() {
+                    var opt = document.querySelector('div[class*="autocomplete_"] div[role="option"], div[class*="autocompleteRow_"]');
+                    if (opt) {
+                      opt.click();
+                      setTimeout(fireEnter, 260);
+                    } else {
+                      fireEnter();
+                    }
+                  }, 420);
+                } else {
+                  setTimeout(fireEnter, 160);
+                }
+                return 'OK';
+              } catch (e) {
+                return 'ERR:' + e.message;
+              }
+            })();
+        """.trimIndent()
+        binding.webDiscord.evaluateJavascript(js) { res ->
+            if (res?.contains("NO_BOX") == true) {
+                toast("当前页面未找到消息输入框，请先进入频道或帖子")
+            } else {
+                toast("已触发指令：$cmd")
             }
         }
     }

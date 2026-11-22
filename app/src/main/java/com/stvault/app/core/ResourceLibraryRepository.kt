@@ -249,6 +249,45 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         saveCharactersIndex()
     }
 
+    fun renameCharacterCategoryPrefix(oldPath: String, newPath: String): Int {
+        if (oldPath.isBlank() || newPath.isBlank() || oldPath == newPath) return 0
+        var changed = 0
+        synchronized(lock) {
+            for ((id, cur) in charactersMap) {
+                if (cur.categories.any { it == oldPath || it.startsWith("$oldPath/") }) {
+                    val next = cur.categories.map { cat ->
+                        when {
+                            cat == oldPath -> newPath
+                            cat.startsWith("$oldPath/") -> (newPath + cat.removePrefix(oldPath))
+                                .split("/").filter { it.isNotBlank() }.take(3).joinToString("/")
+                            else -> cat
+                        }
+                    }.distinct()
+                    charactersMap[id] = cur.copy(categories = next)
+                    changed++
+                }
+            }
+        }
+        if (changed > 0) saveCharactersIndex()
+        return changed
+    }
+
+    fun removeCharacterCategoryPrefix(oldPath: String): Int {
+        if (oldPath.isBlank()) return 0
+        var changed = 0
+        synchronized(lock) {
+            for ((id, cur) in charactersMap) {
+                val next = cur.categories.filterNot { it == oldPath || it.startsWith("$oldPath/") }
+                if (next.size != cur.categories.size) {
+                    charactersMap[id] = cur.copy(categories = next)
+                    changed++
+                }
+            }
+        }
+        if (changed > 0) saveCharactersIndex()
+        return changed
+    }
+
     fun batchSetCharacterCategories(ids: List<String>, categories: List<String>, append: Boolean) {
         if (ids.isEmpty()) return
         synchronized(lock) {
