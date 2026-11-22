@@ -49,7 +49,26 @@ class CharactersAdapter(
         val d = ctx.resources.displayMetrics.density
         val isSelected = selectionMode && c.id in selectedIds
 
-        b.tvCharName.text = if (isSelected) "✓ ${c.name}" else c.name
+        val prefix = if (isSelected) "✓ " else ""
+        if (grouped.versionCount > 1) {
+            val sTitle = c.seriesName.ifBlank { com.stvault.app.core.VersionGrouper.extractDisplaySeriesName(c.name) }
+            val vTag = c.versionTag.trim()
+            if (vTag.isNotEmpty() && !sTitle.equals(vTag, ignoreCase = true)) {
+                val sb = android.text.SpannableStringBuilder(prefix + sTitle + "  ")
+                val start = sb.length
+                sb.append(vTag)
+                val end = sb.length
+                val muted = ContextCompat.getColor(ctx, R.color.text_muted)
+                sb.setSpan(android.text.style.RelativeSizeSpan(0.78f), start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                sb.setSpan(android.text.style.ForegroundColorSpan(muted), start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                sb.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.NORMAL), start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                b.tvCharName.text = sb
+            } else {
+                b.tvCharName.text = prefix + sTitle
+            }
+        } else {
+            b.tvCharName.text = prefix + c.name
+        }
 
         if (isSelected) {
             b.tvCharSpecBadge.visibility = View.VISIBLE

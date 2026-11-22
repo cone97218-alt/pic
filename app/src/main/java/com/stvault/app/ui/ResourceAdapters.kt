@@ -12,6 +12,30 @@ import com.stvault.app.model.GroupedItem
 import com.stvault.app.model.PresetRecord
 import com.stvault.app.model.WorldBookRecord
 
+private fun formatSeriesTitle(
+    ctx: android.content.Context,
+    isSelected: Boolean,
+    versionCount: Int,
+    rawName: String,
+    seriesName: String,
+    versionTag: String
+): CharSequence {
+    val prefix = if (isSelected) "✓  " else ""
+    if (versionCount <= 1) return prefix + rawName
+    val sTitle = seriesName.ifBlank { com.stvault.app.core.VersionGrouper.extractDisplaySeriesName(rawName) }
+    val vTag = versionTag.trim()
+    if (vTag.isEmpty() || sTitle.equals(vTag, ignoreCase = true)) return prefix + sTitle
+    val sb = android.text.SpannableStringBuilder(prefix + sTitle + "  ")
+    val start = sb.length
+    sb.append(vTag)
+    val end = sb.length
+    val muted = ContextCompat.getColor(ctx, R.color.text_muted)
+    sb.setSpan(android.text.style.RelativeSizeSpan(0.78f), start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    sb.setSpan(android.text.style.ForegroundColorSpan(muted), start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    sb.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.NORMAL), start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    return sb
+}
+
 class WorldBooksAdapter(
     private val onClick: (WorldBookRecord) -> Unit,
     private val onDeleteClick: (WorldBookRecord) -> Unit,
@@ -47,7 +71,7 @@ class WorldBooksAdapter(
         val d = ctx.resources.displayMetrics.density
         val isSelected = selectionMode && w.id in selectedIds
 
-        b.tvResTitle.text = if (isSelected) "✓  ${w.name}" else w.name
+        b.tvResTitle.text = formatSeriesTitle(ctx, isSelected, grouped.versionCount, w.name, w.seriesName, w.versionTag)
         b.root.setStrokeColor(ContextCompat.getColor(ctx, if (isSelected) R.color.accent else R.color.border))
         b.root.strokeWidth = ((if (isSelected) 2 else 1) * d).toInt()
         b.btnResDelete.visibility = if (selectionMode) View.GONE else View.VISIBLE
@@ -124,7 +148,7 @@ class PresetsAdapter(
         val d = ctx.resources.displayMetrics.density
         val isSelected = selectionMode && p.id in selectedIds
 
-        b.tvResTitle.text = if (isSelected) "✓  ${p.name}" else p.name
+        b.tvResTitle.text = formatSeriesTitle(ctx, isSelected, grouped.versionCount, p.name, p.seriesName, p.versionTag)
         b.root.setStrokeColor(ContextCompat.getColor(ctx, if (isSelected) R.color.accent else R.color.border))
         b.root.strokeWidth = ((if (isSelected) 2 else 1) * d).toInt()
         b.btnResDelete.visibility = if (selectionMode) View.GONE else View.VISIBLE
@@ -198,7 +222,7 @@ class ComponentsAdapter(
         val d = ctx.resources.displayMetrics.density
         val isSelected = selectionMode && c.id in selectedIds
 
-        b.tvResTitle.text = if (isSelected) "✓  ${c.name}" else c.name
+        b.tvResTitle.text = formatSeriesTitle(ctx, isSelected, grouped.versionCount, c.name, c.seriesName, c.versionTag)
         b.root.setStrokeColor(ContextCompat.getColor(ctx, if (isSelected) R.color.accent else R.color.border))
         b.root.strokeWidth = ((if (isSelected) 2 else 1) * d).toInt()
         b.btnResDelete.visibility = if (selectionMode) View.GONE else View.VISIBLE

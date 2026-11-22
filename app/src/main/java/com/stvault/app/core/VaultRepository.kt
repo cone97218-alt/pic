@@ -977,7 +977,31 @@ class VaultRepository private constructor(private val appContext: Context) {
         if (clean.isEmpty()) return false
         synchronized(lock) {
             val cur = sourcesMap[id] ?: return false
-            sourcesMap[id] = cur.copy(name = clean)
+            val variantsCount = if (cur.seriesKey.isNotEmpty()) {
+                sourcesMap.values.count { it.seriesKey == cur.seriesKey }
+            } else 1
+            sourcesMap[id] = if (variantsCount <= 1) {
+                cur.copy(name = clean, seriesName = clean)
+            } else {
+                cur.copy(name = clean)
+            }
+        }
+        saveIndex()
+        return true
+    }
+
+    fun renameThemeSeries(seriesKey: String, newSeriesName: String): Boolean {
+        val clean = newSeriesName.trim()
+        if (seriesKey.isBlank() || clean.isEmpty()) return false
+        synchronized(lock) {
+            var changed = false
+            for ((id, cur) in sourcesMap) {
+                if (cur.seriesKey == seriesKey) {
+                    sourcesMap[id] = cur.copy(seriesName = clean)
+                    changed = true
+                }
+            }
+            if (!changed) return false
         }
         saveIndex()
         return true

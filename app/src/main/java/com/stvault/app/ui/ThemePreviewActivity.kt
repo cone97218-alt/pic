@@ -233,7 +233,15 @@ class ThemePreviewActivity : AppCompatActivity() {
         binding.btnVariantPrev.visibility = View.VISIBLE
         binding.btnVariantNext.visibility = View.VISIBLE
         val idx = siblingVariants.indexOfFirst { it.id == currentSourceId }.coerceAtLeast(0)
-        binding.tvPreviewTitle.text = "$currentTitle (${idx + 1}/${siblingVariants.size}) ▾"
+        val cur = siblingVariants[idx]
+        val sTitle = cur.seriesName.ifBlank { currentTitle }
+        val vTag = cur.variantTag.trim()
+        val label = if (vTag.isNotEmpty() && !sTitle.equals(vTag, ignoreCase = true)) {
+            "$sTitle · $vTag (${idx + 1}/${siblingVariants.size}) ▾"
+        } else {
+            "$sTitle (${idx + 1}/${siblingVariants.size}) ▾"
+        }
+        binding.tvPreviewTitle.text = label
     }
 
     private fun stepVariant(delta: Int) {

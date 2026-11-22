@@ -1569,16 +1569,24 @@ class MainActivity : AppCompatActivity() {
         )
         dBinding.rvDialogUrls.adapter = detailAdapter
 
+        val variants = repo.getVariantsForTheme(initialSource.seriesKey)
         fun bindActiveSource(target: SourceRecord) {
             activeSource = target
-            dBinding.tvDialogSourceTitle.text = target.name
+            if (variants.size > 1) {
+                val sTitle = target.seriesName.ifBlank { target.name }
+                val vTag = target.variantTag.trim()
+                dBinding.tvDialogSourceTitle.text = if (vTag.isNotEmpty() && !sTitle.equals(vTag, ignoreCase = true)) {
+                    "$sTitle · $vTag"
+                } else sTitle
+            } else {
+                dBinding.tvDialogSourceTitle.text = target.name
+            }
             detailAdapter.submitList(repo.getUrlRecordsForSource(target))
         }
 
         bindActiveSource(initialSource)
 
         // Populate Sibling Variant Pills when >1 variant exists (updates in-place with zero flicker!)
-        val variants = repo.getVariantsForTheme(initialSource.seriesKey)
         if (variants.size > 1) {
             dBinding.scrollDialogVariants.visibility = View.VISIBLE
             val opts = variants.map { v ->
@@ -2193,18 +2201,24 @@ class MainActivity : AppCompatActivity() {
                 }
                 VaultSheets.actionList(this, title = "切换变体 (${variants.size})", actions = items)
             })
-        }
-        actions.add(SheetAction("装入酒馆", "推送到 TT 酒馆，支持原版或图床修复版") {
-            pushThemeToTavern(source)
-        })
-        actions.add(SheetAction("重命名", "修改显示名称") {
-            showRenameDialog("重命名美化", source.name) { newName ->
-                if (repo.renameSource(source.id, newName)) {
-                    toast("已重命名")
-                    refreshVaultList()
+            actions.add(SheetAction("修改系列名", "统一修改整套系列的显示名称") {
+                showRenameDialog("修改系列名", source.seriesName.ifBlank { source.name }) { newName ->
+                    if (repo.renameThemeSeries(source.seriesKey, newName)) {
+                        toast("系列名已更新")
+                        refreshVaultList()
+                    }
                 }
-            }
-        })
+            })
+        } else {
+            actions.add(SheetAction("重命名", "修改显示名称") {
+                showRenameDialog("重命名美化", source.name) { newName ->
+                    if (repo.renameSource(source.id, newName)) {
+                        toast("已重命名")
+                        refreshVaultList()
+                    }
+                }
+            })
+        }
         actions.add(SheetAction("修改变体标签", "例如 宽黑、窄白、夜间蓝") {
             VaultSheets.input(
                 ctx = this,
@@ -2218,25 +2232,41 @@ class MainActivity : AppCompatActivity() {
                 refreshVaultList()
             }
         })
-        actions.add(SheetAction("归入同系列", "与另一款美化收纳为同系列变体") {
-            val others = repo.getAllSources().filter { it.id != source.id }.map { PickerItem(it.id, it.name, it.variantTag) }
+        actions.add(SheetAction("归入同系列", "按名称匹配度排序，自动排除已在同系列的美化") {
+            val all = repo.getAllSources()
+            val others = all.filter { other ->
+                other.id != source.id &&
+                    (source.seriesKey.isBlank() || other.seriesKey != source.seriesKey)
+            }.sortedByDescending { other ->
+                com.stvault.app.core.SimilarityDeduplicator.computeNameSimilarity(source.name, other.name)
+            }.map { other ->
+                val pct = (com.stvault.app.core.SimilarityDeduplicator.computeNameSimilarity(source.name, other.name) * 100).toInt()
+                val sub = if (pct >= 45) "匹配度 $pct%" else other.variantTag
+                PickerItem(other.id, other.name, sub)
+            }
             if (others.isEmpty()) {
-                toast("暂无其他美化可归入")
+                toast("暂无其他可归入的美化")
             } else {
                 VaultSheets.searchablePicker(this, "选择同系列美化", others) { picked ->
-                    VaultSheets.input(this, "设置系列名称", hint = "输入系列名", initialValue = source.name, confirmText = "归入") { sName ->
+                    val defaultSeries = source.seriesName.ifBlank { source.name }
+                    VaultSheets.input(this, "设置系列名称", hint = "输入系列名", initialValue = defaultSeries, confirmText = "归入") { sName ->
                         if (sName.trim().isNotEmpty()) {
-                            repo.mergeThemeSeries(listOf(source.id, picked.id), sName.trim())
-                            toast("已归入同系列")
+                            val idsToMerge = (variants.map { it.id } + source.id + picked.id).distinct()
+                            repo.mergeThemeSeries(idsToMerge, sName.trim())
+                            toast("已归入「${sName.trim()}」系列")
                             refreshVaultList()
                         }
                     }
                 }
             }
         })
+        actions.add(SheetAction("装入酒馆", "推送到 TT 酒馆，支持原版或图床修复版") {
+            pushThemeToTavern(source)
+        })
         actions.add(SheetAction("设置分类标签", "多选 1~3 级分类") { showThemeCategoryAssignDialog(source) })
         actions.add(SheetAction("删除美化", destructive = true) { confirmDeleteSource(source) })
-        VaultSheets.actionList(ctx = this, title = source.name, actions = actions)
+        val sheetTitle = if (variants.size > 1) source.seriesName.ifBlank { source.name } else source.name
+        VaultSheets.actionList(ctx = this, title = sheetTitle, actions = actions)
     }
 
     private fun pushThemeToTavern(source: SourceRecord) {
@@ -2440,9 +2470,27 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val candidates = withContext(Dispatchers.IO) {
                 when (module) {
-                    "characters" -> libRepo.getAllCharacters().filter { it.id != firstId }.map { PickerItem(it.id, it.name, it.fileName) }
-                    "worldbooks" -> libRepo.getAllWorldBooks().filter { it.id != firstId }.map { PickerItem(it.id, it.name, "${it.entryCount} 条目") }
-                    "presets" -> libRepo.getAllPresets().filter { it.id != firstId }.map { PickerItem(it.id, it.name, "启用 ${it.enabledPromptCount}/${it.promptCount}") }
+                    "characters" -> {
+                        val curSeries = libRepo.getCharacterById(firstId)?.seriesKey.orEmpty()
+                        libRepo.getAllCharacters()
+                            .filter { it.id != firstId && (curSeries.isBlank() || it.seriesKey != curSeries) }
+                            .sortedByDescending { com.stvault.app.core.SimilarityDeduplicator.computeNameSimilarity(firstName, it.name) }
+                            .map { PickerItem(it.id, it.name, it.fileName) }
+                    }
+                    "worldbooks" -> {
+                        val curSeries = libRepo.getWorldBookById(firstId)?.seriesKey.orEmpty()
+                        libRepo.getAllWorldBooks()
+                            .filter { it.id != firstId && (curSeries.isBlank() || it.seriesKey != curSeries) }
+                            .sortedByDescending { com.stvault.app.core.SimilarityDeduplicator.computeNameSimilarity(firstName, it.name) }
+                            .map { PickerItem(it.id, it.name, "${it.entryCount} 条目") }
+                    }
+                    "presets" -> {
+                        val curSeries = libRepo.getPresetById(firstId)?.seriesKey.orEmpty()
+                        libRepo.getAllPresets()
+                            .filter { it.id != firstId && (curSeries.isBlank() || it.seriesKey != curSeries) }
+                            .sortedByDescending { com.stvault.app.core.SimilarityDeduplicator.computeNameSimilarity(firstName, it.name) }
+                            .map { PickerItem(it.id, it.name, "启用 ${it.enabledPromptCount}/${it.promptCount}") }
+                    }
                     else -> emptyList()
                 }
             }

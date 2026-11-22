@@ -36,6 +36,23 @@ object VersionGrouper {
         Regex("""[\s_\-\(\[\【]*((?:最终|修复|优化|重制|完整|测试|正式|更新|精简|魔改|第[一二三四五六七八九十\d]+)版?\d*)[\)\]\】\s]*$""")
     )
 
+    fun extractDisplaySeriesName(rawName: String): String {
+        var base = rawName.substringAfterLast('/').substringBeforeLast('.').trim()
+        for (pass in 0 until 2) {
+            var matched = false
+            for (pat in VERSION_PATTERNS) {
+                val m = pat.find(base)
+                if (m != null && m.range.first > 0) {
+                    base = base.substring(0, m.range.first).trimEnd(' ', '_', '-', '.', '(', '[', '【')
+                    matched = true
+                    break
+                }
+            }
+            if (!matched) break
+        }
+        return base.ifBlank { rawName.substringAfterLast('/').substringBeforeLast('.').trim() }
+    }
+
     /**
      * Returns Pair(seriesKey, versionTag)
      */

@@ -112,6 +112,7 @@ data class CharacterRecord(
     val sourceType: String = "local",
     val sourceRef: String = "",
     val seriesKey: String = "",
+    val seriesName: String = "",
     val versionTag: String = "",
     val addedAt: Long = System.currentTimeMillis()
 )
@@ -130,6 +131,7 @@ data class WorldBookRecord(
     val originCardId: String = "",
     val originCardName: String = "",
     val seriesKey: String = "",
+    val seriesName: String = "",
     val versionTag: String = "",
     val addedAt: Long = System.currentTimeMillis()
 )
@@ -149,6 +151,7 @@ data class PresetRecord(
     val fileSize: Long = 0L,
     val contentHash: String = "",
     val seriesKey: String = "",
+    val seriesName: String = "",
     val versionTag: String = "",
     val addedAt: Long = System.currentTimeMillis()
 )
@@ -167,6 +170,7 @@ data class ComponentRecord(
     val fileSize: Long = 0L,
     val contentHash: String = "",
     val seriesKey: String = "",
+    val seriesName: String = "",
     val versionTag: String = "",
     val addedAt: Long = System.currentTimeMillis()
 )

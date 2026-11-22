@@ -345,7 +345,9 @@ class ResourceDetailActivity : AppCompatActivity() {
             val (rec, parsed, versions) = data
             currentCharacter = rec
             currentParsedChar = parsed
-            binding.tvDetailTitle.text = rec.name
+            binding.tvDetailTitle.text = if (versions.size > 1) {
+                rec.seriesName.ifBlank { com.stvault.app.core.VersionGrouper.extractDisplaySeriesName(rec.name) }
+            } else rec.name
 
             setupVersionSwitcher(
                 rec.id,
@@ -423,7 +425,9 @@ class ResourceDetailActivity : AppCompatActivity() {
             val (rec, parsed, versions) = data
             currentWorldBook = rec
             currentParsedWb = parsed
-            binding.tvDetailTitle.text = rec.name
+            binding.tvDetailTitle.text = if (versions.size > 1) {
+                rec.seriesName.ifBlank { com.stvault.app.core.VersionGrouper.extractDisplaySeriesName(rec.name) }
+            } else rec.name
 
             setupVersionSwitcher(
                 rec.id,
@@ -476,7 +480,9 @@ class ResourceDetailActivity : AppCompatActivity() {
 
             currentPreset = rec
             currentParsedPreset = parsed
-            binding.tvDetailTitle.text = rec.name
+            binding.tvDetailTitle.text = if (versions.size > 1) {
+                rec.seriesName.ifBlank { com.stvault.app.core.VersionGrouper.extractDisplaySeriesName(rec.name) }
+            } else rec.name
 
             setupVersionSwitcher(
                 rec.id,

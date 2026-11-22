@@ -138,6 +138,7 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     sourceType = o.optString("sourceType", "local"),
                     sourceRef = o.optString("sourceRef", ""),
                     seriesKey = o.optString("seriesKey", "").ifBlank { autoSeries },
+                    seriesName = o.optString("seriesName", ""),
                     versionTag = o.optString("versionTag", "").ifBlank { autoVer },
                     addedAt = o.optLong("addedAt", 0L)
                 )
@@ -172,6 +173,7 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     put("sourceType", c.sourceType)
                     put("sourceRef", c.sourceRef)
                     put("seriesKey", c.seriesKey)
+                    if (c.seriesName.isNotEmpty()) put("seriesName", c.seriesName)
                     put("versionTag", c.versionTag)
                     put("addedAt", c.addedAt)
                 })
@@ -228,11 +230,12 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
 
     fun mergeCharacterVersions(ids: List<String>, seriesName: String) {
         if (ids.size < 2) return
-        val key = VersionGrouper.extractSeriesAndVersion(seriesName).first
+        val clean = seriesName.trim()
+        val key = VersionGrouper.extractSeriesAndVersion(clean).first
         synchronized(lock) {
             for (id in ids) {
                 val cur = charactersMap[id] ?: continue
-                charactersMap[id] = cur.copy(seriesKey = key)
+                charactersMap[id] = cur.copy(seriesKey = key, seriesName = clean)
             }
         }
         saveCharactersIndex()
@@ -240,11 +243,12 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
 
     fun mergeWorldBookVersions(ids: List<String>, seriesName: String) {
         if (ids.size < 2) return
-        val key = VersionGrouper.extractSeriesAndVersion(seriesName).first
+        val clean = seriesName.trim()
+        val key = VersionGrouper.extractSeriesAndVersion(clean).first
         synchronized(lock) {
             for (id in ids) {
                 val cur = worldBooksMap[id] ?: continue
-                worldBooksMap[id] = cur.copy(seriesKey = key)
+                worldBooksMap[id] = cur.copy(seriesKey = key, seriesName = clean)
             }
         }
         saveWorldBooksIndex()
@@ -252,11 +256,12 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
 
     fun mergePresetVersions(ids: List<String>, seriesName: String) {
         if (ids.size < 2) return
-        val key = VersionGrouper.extractSeriesAndVersion(seriesName).first
+        val clean = seriesName.trim()
+        val key = VersionGrouper.extractSeriesAndVersion(clean).first
         synchronized(lock) {
             for (id in ids) {
                 val cur = presetsMap[id] ?: continue
-                presetsMap[id] = cur.copy(seriesKey = key)
+                presetsMap[id] = cur.copy(seriesKey = key, seriesName = clean)
             }
         }
         savePresetsIndex()
@@ -264,14 +269,56 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
 
     fun mergeComponentVersions(ids: List<String>, seriesName: String) {
         if (ids.size < 2) return
-        val key = VersionGrouper.extractSeriesAndVersion(seriesName).first
+        val clean = seriesName.trim()
+        val key = VersionGrouper.extractSeriesAndVersion(clean).first
         synchronized(lock) {
             for (id in ids) {
                 val cur = componentsMap[id] ?: continue
-                componentsMap[id] = cur.copy(seriesKey = key)
+                componentsMap[id] = cur.copy(seriesKey = key, seriesName = clean)
             }
         }
         saveComponentsIndex()
+    }
+
+    fun renameSeries(module: String, seriesKey: String, newSeriesName: String): Boolean {
+        val clean = newSeriesName.trim()
+        if (seriesKey.isBlank() || clean.isEmpty()) return false
+        when (module) {
+            "characters" -> {
+                synchronized(lock) {
+                    charactersMap.entries.forEach { (id, cur) ->
+                        if (cur.seriesKey == seriesKey) charactersMap[id] = cur.copy(seriesName = clean)
+                    }
+                }
+                saveCharactersIndex()
+            }
+            "worldbooks" -> {
+                synchronized(lock) {
+                    worldBooksMap.entries.forEach { (id, cur) ->
+                        if (cur.seriesKey == seriesKey) worldBooksMap[id] = cur.copy(seriesName = clean)
+                    }
+                }
+                saveWorldBooksIndex()
+            }
+            "presets" -> {
+                synchronized(lock) {
+                    presetsMap.entries.forEach { (id, cur) ->
+                        if (cur.seriesKey == seriesKey) presetsMap[id] = cur.copy(seriesName = clean)
+                    }
+                }
+                savePresetsIndex()
+            }
+            "components" -> {
+                synchronized(lock) {
+                    componentsMap.entries.forEach { (id, cur) ->
+                        if (cur.seriesKey == seriesKey) componentsMap[id] = cur.copy(seriesName = clean)
+                    }
+                }
+                saveComponentsIndex()
+            }
+            else -> return false
+        }
+        return true
     }
 
     // ==================== RENAME & GLOBAL ACCESS ====================
@@ -822,6 +869,7 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     originCardId = o.optString("originCardId", ""),
                     originCardName = o.optString("originCardName", ""),
                     seriesKey = o.optString("seriesKey", "").ifBlank { autoSeries },
+                    seriesName = o.optString("seriesName", ""),
                     versionTag = o.optString("versionTag", "").ifBlank { autoVer },
                     addedAt = o.optLong("addedAt", 0L)
                 )
@@ -849,6 +897,7 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     put("originCardId", b.originCardId)
                     put("originCardName", b.originCardName)
                     put("seriesKey", b.seriesKey)
+                    if (b.seriesName.isNotEmpty()) put("seriesName", b.seriesName)
                     put("versionTag", b.versionTag)
                     put("addedAt", b.addedAt)
                 })
@@ -1087,6 +1136,7 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     fileSize = o.optLong("fileSize", 0L),
                     contentHash = o.optString("contentHash", ""),
                     seriesKey = o.optString("seriesKey", "").ifBlank { autoSeries },
+                    seriesName = o.optString("seriesName", ""),
                     versionTag = o.optString("versionTag", "").ifBlank { autoVer },
                     addedAt = o.optLong("addedAt", 0L)
                 )
@@ -1115,6 +1165,7 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     put("fileSize", p.fileSize)
                     put("contentHash", p.contentHash)
                     put("seriesKey", p.seriesKey)
+                    if (p.seriesName.isNotEmpty()) put("seriesName", p.seriesName)
                     put("versionTag", p.versionTag)
                     put("addedAt", p.addedAt)
                 })
@@ -1316,6 +1367,7 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     fileSize = o.optLong("fileSize", 0L),
                     contentHash = o.optString("contentHash", ""),
                     seriesKey = o.optString("seriesKey", "").ifBlank { autoSeries },
+                    seriesName = o.optString("seriesName", ""),
                     versionTag = o.optString("versionTag", "").ifBlank { autoVer },
                     addedAt = o.optLong("addedAt", 0L)
                 )
@@ -1343,6 +1395,7 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     put("fileSize", c.fileSize)
                     put("contentHash", c.contentHash)
                     put("seriesKey", c.seriesKey)
+                    if (c.seriesName.isNotEmpty()) put("seriesName", c.seriesName)
                     put("versionTag", c.versionTag)
                     put("addedAt", c.addedAt)
                 })
