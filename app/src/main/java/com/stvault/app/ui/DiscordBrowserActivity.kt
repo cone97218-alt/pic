@@ -297,12 +297,18 @@ class DiscordBrowserActivity : AppCompatActivity() {
             ctx = this,
             title = "发现 ${found.size} 个附件",
             items = pickerItems,
-            preselectedIds = allIds,
+            preselectedIds = emptySet(),
             primaryConfirmText = "带标签囤入",
             secondaryConfirm = "仅囤入" to { picked ->
                 val chosen = picked.mapNotNull { byId[it] }
-                if (chosen.isNotEmpty()) runBatchHoard(chosen, overrideTags = emptyList())
-            }
+                if (chosen.isEmpty()) {
+                    toast("请先勾选要囤入的附件")
+                } else {
+                    runBatchHoard(chosen, overrideTags = emptyList())
+                }
+            },
+            showSelectionTools = true,
+            searchHint = "搜索文件名..."
         ) { picked ->
             val chosen = picked.mapNotNull { byId[it] }
             if (chosen.isEmpty()) {
@@ -412,18 +418,17 @@ class DiscordBrowserActivity : AppCompatActivity() {
 
     private fun showQuickCommandsSheet() {
         val cmds = loadQuickCommands()
-        if (cmds.isEmpty()) {
-            showAddQuickCommandDialog()
-            return
-        }
         val active = getActiveQuickCommand()
-        val items = cmds.map {
+        val items = mutableListOf(
+            PickerItem(id = "__SEND_CUSTOM_TEXT__", title = "发送口令 / 文字", subtitle = "用原生输入框安全发送口令，不弹网页键盘")
+        )
+        cmds.forEach {
             val sub = if (it == active) "当前悬浮快捷键 · 点击立即触发" else "点击立即触发并设为悬浮快捷键"
-            PickerItem(id = it, title = it, subtitle = sub)
+            items.add(PickerItem(id = it, title = it, subtitle = sub))
         }
         VaultSheets.searchablePicker(
             ctx = this,
-            title = "快捷机器人指令",
+            title = "指令与口令",
             items = items,
             selectedId = active,
             searchHint = "搜索指令...",
@@ -436,26 +441,49 @@ class DiscordBrowserActivity : AppCompatActivity() {
                             showAddQuickCommandDialog()
                         },
                         SheetAction("删除已有指令", "移除不需要的快捷指令", destructive = true) {
-                            val delItems = cmds.map { PickerItem(it, it, "点击删除") }
-                            VaultSheets.searchablePicker(
-                                ctx = this,
-                                title = "选择要删除的指令",
-                                items = delItems
-                            ) { toDel ->
-                                cmds.remove(toDel.id)
-                                saveQuickCommands(cmds)
-                                if (getActiveQuickCommand() == toDel.id) {
-                                    setActiveQuickCommand(cmds.firstOrNull().orEmpty())
+                            if (cmds.isEmpty()) {
+                                toast("暂无可删除的快捷指令")
+                            } else {
+                                val delItems = cmds.map { PickerItem(it, it, "点击删除") }
+                                VaultSheets.searchablePicker(
+                                    ctx = this,
+                                    title = "选择要删除的指令",
+                                    items = delItems
+                                ) { toDel ->
+                                    cmds.remove(toDel.id)
+                                    saveQuickCommands(cmds)
+                                    if (getActiveQuickCommand() == toDel.id) {
+                                        setActiveQuickCommand(cmds.firstOrNull().orEmpty())
+                                    }
+                                    toast("已删除：${toDel.id}")
                                 }
-                                toast("已删除：${toDel.id}")
                             }
                         }
                     )
                 )
             }
         ) { picked ->
-            setActiveQuickCommand(picked.id)
-            sendDiscordCommand(picked.id)
+            if (picked.id == "__SEND_CUSTOM_TEXT__") {
+                showSendPasscodeDialog()
+            } else {
+                setActiveQuickCommand(picked.id)
+                sendDiscordCommand(picked.id)
+            }
+        }
+    }
+
+    private fun showSendPasscodeDialog() {
+        VaultSheets.input(
+            ctx = this,
+            title = "发送口令 / 文字",
+            message = "安全填入当前频道并发送，避免网页键盘触发闪退。",
+            hint = "输入口令或要发送的文字...",
+            confirmText = "发送"
+        ) { raw ->
+            val clean = raw.trim()
+            if (clean.isNotEmpty()) {
+                sendDiscordCommand(clean)
+            }
         }
     }
 

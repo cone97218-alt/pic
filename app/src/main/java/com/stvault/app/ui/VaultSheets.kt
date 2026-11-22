@@ -472,6 +472,8 @@ object VaultSheets {
         headerAction: Pair<String, () -> Unit>? = null,
         primaryConfirmText: String = "保存",
         secondaryConfirm: Pair<String, (List<String>) -> Unit>? = null,
+        showSelectionTools: Boolean = false,
+        searchHint: String = "搜索分类...",
         onConfirm: (List<String>) -> Unit
     ) {
         val (sheet, root) = createSheet(ctx)
@@ -498,6 +500,21 @@ object VaultSheets {
 
         val selected = preselectedIds.toMutableSet()
         val filtered = items.toMutableList()
+        var rangeMode = false
+        var rangeAnchorPos = -1
+        var tvSelCount: TextView? = null
+        var btnRangeToggle: TextView? = null
+
+        fun refreshToolStatus() {
+            tvSelCount?.text = "已选 ${selected.size} / ${items.size}"
+            btnRangeToggle?.apply {
+                text = if (rangeMode) {
+                    if (rangeAnchorPos >= 0) "连选(点终点)" else "连选中"
+                } else "连选"
+                setTextColor(col(ctx, if (rangeMode) R.color.on_accent else R.color.text_primary))
+                setBackgroundResource(if (rangeMode) R.drawable.bg_dock_item_active else R.drawable.bg_input)
+            }
+        }
 
         val adapter = object : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
             override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
@@ -516,30 +533,122 @@ object VaultSheets {
                 val item = filtered[position]
                 val cb = CheckBox(ctx).apply {
                     isChecked = item.id in selected
+                    isClickable = false
+                    isFocusable = false
                     buttonTintList = ColorStateList.valueOf(col(ctx, R.color.accent))
-                    setOnCheckedChangeListener { _, isChecked ->
-                        if (isChecked) selected.add(item.id) else selected.remove(item.id)
-                    }
                 }
-                val tv = TextView(ctx).apply {
-                    text = item.title
-                    setTextColor(col(ctx, R.color.text_primary))
-                    textSize = 14f
+                val textBox = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                         marginStart = dp(ctx, 6)
                     }
                 }
+                textBox.addView(TextView(ctx).apply {
+                    text = item.title
+                    setTextColor(col(ctx, R.color.text_primary))
+                    textSize = 14f
+                })
+                if (item.subtitle.isNotBlank()) {
+                    textBox.addView(TextView(ctx).apply {
+                        text = item.subtitle
+                        setTextColor(col(ctx, R.color.text_muted))
+                        textSize = 11.5f
+                    })
+                }
                 row.addView(cb)
-                row.addView(tv)
-                row.setOnClickListener { cb.toggle() }
+                row.addView(textBox)
+                row.setOnClickListener {
+                    val pos = holder.bindingAdapterPosition
+                    if (pos == RecyclerView.NO_POSITION || pos >= filtered.size) return@setOnClickListener
+                    if (rangeMode) {
+                        if (rangeAnchorPos < 0) {
+                            rangeAnchorPos = pos
+                            selected.add(filtered[pos].id)
+                            notifyItemChanged(pos)
+                            refreshToolStatus()
+                        } else {
+                            val lo = minOf(rangeAnchorPos, pos)
+                            val hi = maxOf(rangeAnchorPos, pos)
+                            for (k in lo..hi) {
+                                selected.add(filtered[k].id)
+                            }
+                            rangeAnchorPos = -1
+                            notifyItemRangeChanged(lo, hi - lo + 1)
+                            refreshToolStatus()
+                        }
+                    } else {
+                        val id = filtered[pos].id
+                        if (id in selected) selected.remove(id) else selected.add(id)
+                        cb.isChecked = id in selected
+                        refreshToolStatus()
+                    }
+                }
             }
 
             override fun getItemCount(): Int = filtered.size
         }
 
+        if (showSelectionTools) {
+            val toolsRow = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = dp(ctx, 10)
+                    bottomMargin = dp(ctx, 2)
+                }
+            }
+            tvSelCount = TextView(ctx).apply {
+                setTextColor(col(ctx, R.color.text_muted))
+                textSize = 12f
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            toolsRow.addView(tvSelCount)
+
+            fun makeToolChip(label: String, onTap: () -> Unit): TextView = TextView(ctx).apply {
+                text = label
+                setTextColor(col(ctx, R.color.text_primary))
+                textSize = 11.5f
+                setTypeface(null, Typeface.BOLD)
+                setBackgroundResource(R.drawable.bg_input)
+                setPadding(dp(ctx, 10), dp(ctx, 5), dp(ctx, 10), dp(ctx, 5))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    marginStart = dp(ctx, 6)
+                }
+                setOnClickListener { onTap() }
+            }
+
+            toolsRow.addView(makeToolChip("全选") {
+                val allFilteredSelected = filtered.isNotEmpty() && filtered.all { it.id in selected }
+                if (allFilteredSelected) {
+                    filtered.forEach { selected.remove(it.id) }
+                } else {
+                    filtered.forEach { selected.add(it.id) }
+                }
+                rangeAnchorPos = -1
+                adapter.notifyDataSetChanged()
+                refreshToolStatus()
+            })
+            toolsRow.addView(makeToolChip("反选") {
+                filtered.forEach {
+                    if (it.id in selected) selected.remove(it.id) else selected.add(it.id)
+                }
+                rangeAnchorPos = -1
+                adapter.notifyDataSetChanged()
+                refreshToolStatus()
+            })
+            btnRangeToggle = makeToolChip("连选") {
+                rangeMode = !rangeMode
+                rangeAnchorPos = -1
+                refreshToolStatus()
+            }
+            toolsRow.addView(btnRangeToggle)
+            root.addView(toolsRow)
+            refreshToolStatus()
+        }
+
         if (items.size > 6) {
             val etSearch = EditText(ctx).apply {
-                hint = "搜索分类..."
+                hint = searchHint
                 isSingleLine = true
                 setBackgroundResource(R.drawable.bg_input)
                 setPadding(dp(ctx, 14), dp(ctx, 10), dp(ctx, 14), dp(ctx, 10))
