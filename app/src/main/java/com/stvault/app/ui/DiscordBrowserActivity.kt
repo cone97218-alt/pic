@@ -413,7 +413,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
 
     private fun refreshActiveQuickCmdLabel() {
         val active = getActiveQuickCommand()
-        binding.btnQuickCmd.text = if (active.isNotBlank()) "⚡ $active" else "⚡ 指令"
+        binding.btnQuickCmd.text = if (active.isNotBlank()) active else "指令"
     }
 
     private fun showQuickCommandsSheet() {
@@ -518,7 +518,20 @@ class DiscordBrowserActivity : AppCompatActivity() {
         val js = """
             (function() {
               try {
-                var box = document.querySelector('div[role="textbox"][contenteditable="true"]');
+                function findVisibleBox() {
+                  var layer = document.querySelector('div[class*="chatLayerWrapper_"]');
+                  if (layer) {
+                    var lb = layer.querySelector('div[role="textbox"][contenteditable="true"]');
+                    if (lb && lb.getBoundingClientRect().width > 40) return lb;
+                  }
+                  var all = document.querySelectorAll('div[role="textbox"][contenteditable="true"]');
+                  for (var i = all.length - 1; i >= 0; i--) {
+                    var r = all[i].getBoundingClientRect();
+                    if (r.width > 40 && r.height > 10) return all[i];
+                  }
+                  return null;
+                }
+                var box = findVisibleBox();
                 if (!box) return 'NO_BOX';
                 box.setAttribute('inputmode', 'none');
                 box.focus();
@@ -529,56 +542,63 @@ class DiscordBrowserActivity : AppCompatActivity() {
                   sel.removeAllRanges();
                   sel.addRange(range);
                 }
+                try {
+                  box.dispatchEvent(new InputEvent('beforeinput', { inputType: 'deleteContentBackward', bubbles: true, cancelable: true }));
+                } catch (e0) {}
                 document.execCommand('delete', false, null);
-                document.execCommand('insertText', false, $escaped);
+
+                // Slate.js prefers InputEvent('beforeinput', insertText); fall back to execCommand if needed
+                var textToInsert = $escaped;
+                try {
+                  box.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: textToInsert, bubbles: true, cancelable: true }));
+                } catch (e1) {}
+                if ((box.textContent || '').trim().indexOf(textToInsert.slice(0, 2)) === -1) {
+                  document.execCommand('insertText', false, textToInsert);
+                }
+
                 function fireKey(keyName, codeName, keyCode) {
                   var opts = { key: keyName, code: codeName, keyCode: keyCode, which: keyCode, bubbles: true, cancelable: true };
                   box.dispatchEvent(new KeyboardEvent('keydown', opts));
                   box.dispatchEvent(new KeyboardEvent('keypress', opts));
                   box.dispatchEvent(new KeyboardEvent('keyup', opts));
                 }
-                var isSlash = ($escaped).indexOf('/') === 0;
+                var isSlash = textToInsert.indexOf('/') === 0;
                 if (isSlash) {
                   var tries = 0;
                   var targetName = $bareName;
                   var timer = setInterval(function() {
                     tries++;
-                    var rows = document.querySelectorAll('div[class*="autocomplete_"] [role="option"], div[class*="autocomplete_"] div[class*="autocompleteRow_"], div[class*="autocomplete_"] div[class*="clickable_"]');
-                    var matched = null;
-                    if (rows && rows.length > 0) {
-                      for (var i = 0; i < rows.length; i++) {
-                        var t = (rows[i].textContent || '').toLowerCase();
-                        if (targetName && t.indexOf(targetName) !== -1) {
-                          matched = rows[i];
-                          break;
+                    var popup = document.querySelector('div[class*="autocomplete_"], div[class*="autocompleteInner_"]');
+                    if (popup) {
+                      var rows = popup.querySelectorAll('[role="option"], div[class*="autocompleteRow_"], div[class*="clickable_"], div[class*="selectable_"]');
+                      var matched = null;
+                      if (rows && rows.length > 0) {
+                        for (var i = 0; i < rows.length; i++) {
+                          var t = (rows[i].textContent || '').toLowerCase();
+                          if (targetName && t.indexOf(targetName) !== -1) {
+                            matched = rows[i];
+                            break;
+                          }
                         }
+                        if (!matched) matched = rows[0];
                       }
-                      if (!matched) matched = rows[0];
-                    }
-                    if (matched) {
                       clearInterval(timer);
-                      matched.click();
+                      if (matched) {
+                        matched.click();
+                      } else {
+                        fireKey('Tab', 'Tab', 9);
+                      }
                       setTimeout(function() {
                         box.focus();
                         fireKey('Enter', 'Enter', 13);
-                      }, 320);
-                    } else if (tries >= 30) {
+                      }, 360);
+                    } else if (tries >= 28) {
                       clearInterval(timer);
-                      // NEVER fall back to sending /command as plain text!
-                      try {
-                        var s2 = window.getSelection();
-                        if (s2) {
-                          var r2 = document.createRange();
-                          r2.selectNodeContents(box);
-                          s2.removeAllRanges();
-                          s2.addRange(r2);
-                        }
-                        document.execCommand('delete', false, null);
-                      } catch (e2) {}
+                      // Do not send as plain text if slash menu did not open
                     }
-                  }, 100);
+                  }, 120);
                 } else {
-                  setTimeout(function() { fireKey('Enter', 'Enter', 13); }, 180);
+                  setTimeout(function() { fireKey('Enter', 'Enter', 13); }, 200);
                 }
                 return 'OK';
               } catch (e) {
@@ -591,7 +611,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
             if (res?.contains("NO_BOX") == true) {
                 toast("当前页面未找到消息输入框，请先进入频道或帖子")
             } else {
-                toast("正在触发机器人指令：$cmd")
+                toast("已触发指令：$cmd")
             }
         }
     }

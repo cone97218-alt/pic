@@ -164,11 +164,11 @@
             android:layout_gravity="center"
             android:indeterminateTint="@color/text_muted" />
 
-        <!-- Draggable Minimalist Floating Pill: [⚡ Command | 囤囤] -->
+        <!-- Draggable Minimalist Floating Pill: [指令 | 囤囤] -->
         <LinearLayout
             android:id="@+id/fabHoardDock"
             android:layout_width="wrap_content"
-            android:layout_height="42dp"
+            android:layout_height="38dp"
             android:layout_gravity="bottom|end"
             android:layout_marginEnd="14dp"
             android:layout_marginBottom="22dp"
@@ -176,7 +176,7 @@
             android:elevation="8dp"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingHorizontal="4dp">
+            android:paddingHorizontal="2dp">
 
             <TextView
                 android:id="@+id/btnQuickCmd"
@@ -184,17 +184,17 @@
                 android:layout_height="match_parent"
                 android:ellipsize="end"
                 android:gravity="center"
-                android:maxWidth="120dp"
-                android:paddingHorizontal="12dp"
+                android:maxWidth="84dp"
+                android:paddingHorizontal="10dp"
                 android:singleLine="true"
-                android:text="⚡ 指令"
+                android:text="指令"
                 android:textColor="@color/on_accent"
-                android:textSize="12.5sp"
+                android:textSize="12sp"
                 android:textStyle="bold" />
 
             <View
                 android:layout_width="1dp"
-                android:layout_height="18dp"
+                android:layout_height="15dp"
                 android:alpha="0.28"
                 android:background="@color/on_accent" />
 
@@ -203,10 +203,10 @@
                 android:layout_width="wrap_content"
                 android:layout_height="match_parent"
                 android:gravity="center"
-                android:paddingHorizontal="14dp"
+                android:paddingHorizontal="12dp"
                 android:text="囤囤"
                 android:textColor="@color/on_accent"
-                android:textSize="13sp"
+                android:textSize="12.5sp"
                 android:textStyle="bold" />
         </LinearLayout>
     </FrameLayout>
