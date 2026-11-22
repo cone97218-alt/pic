@@ -538,8 +538,8 @@ class DiscordBrowserActivity : AppCompatActivity() {
         val cmds = loadQuickCommands()
         val active = getActiveQuickCommand()
         val items = mutableListOf(
-            PickerItem(id = "__PRESS_ENTER__", title = "发送当前输入框（回车）", subtitle = "直接触发回车键发送输入框里的内容/已选指令"),
-            PickerItem(id = "__SEND_CUSTOM_TEXT__", title = "发送口令 / 文字", subtitle = "用原生输入框安全发送口令，不弹网页键盘")
+            PickerItem(id = "__PRESS_ENTER__", title = "发送输入框", subtitle = "发送当前输入框里的已选指令或内容"),
+            PickerItem(id = "__SEND_CUSTOM_TEXT__", title = "发送口令", subtitle = "用原生输入框安全发送口令")
         )
         cmds.forEach {
             val sub = if (it == active) "当前悬浮快捷键 · 点击立即触发" else "点击立即触发并设为悬浮快捷键"
@@ -946,11 +946,44 @@ class DiscordBrowserActivity : AppCompatActivity() {
                   return { name: '', uid: '', isBot: false };
                 }
                 function findThreadOp() {
-                  var root = document.querySelector('div[class*="chatLayerWrapper_"]') || document;
+                  var layer = document.querySelector('div[class*="chatLayerWrapper_"]');
+                  var root = layer || document;
+                  // 1. Prefer any message explicitly badged as OP / 楼主 by Discord
                   var msgs = root.querySelectorAll('li[id^="chat-messages-"], div[id^="chat-messages-"]');
-                  for (var i = 0; i < Math.min(msgs.length, 6); i++) {
-                    var meta = readMsgMeta(msgs[i]);
-                    if (meta.name && !meta.isBot) return meta;
+                  for (var i = 0; i < msgs.length; i++) {
+                    var opBadge = msgs[i].querySelector('[class*="opTag"], [class*="ownerIcon"]');
+                    if (!opBadge) {
+                      var tags = msgs[i].querySelectorAll('span[class*="botText"], span[class*="tagText"]');
+                      for (var t = 0; t < tags.length; t++) {
+                        var tt = (tags[t].textContent || '').trim().toUpperCase();
+                        if (tt === 'OP' || tt === '楼主') { opBadge = tags[t]; break; }
+                      }
+                    }
+                    if (opBadge) {
+                      var opMeta = readMsgMeta(msgs[i]);
+                      if (opMeta.name && !opMeta.isBot) return opMeta;
+                    }
+                  }
+                  // 2. Check Discord's active Forum Post card in the background forum list (always holds the real OP even when scrolled down!)
+                  var activeCard = document.querySelector('li[class*="card_"][class*="isOpen_"], div[class*="mainCard_"][class*="isOpen_"], [class*="card_"][aria-selected="true"]');
+                  if (activeCard) {
+                    var cardAuthor = activeCard.querySelector('[class*="author_"] [class*="username"], [class*="userName"], span[class*="username_"]');
+                    if (cardAuthor && cardAuthor.textContent && cardAuthor.textContent.trim()) {
+                      var cUid = '';
+                      var cAv = activeCard.querySelector('img[src*="/avatars/"]');
+                      if (cAv && cAv.src) {
+                        var cm = cAv.src.match(/\/avatars\/(\d+)\//);
+                        if (cm && cm[1]) cUid = cm[1];
+                      }
+                      return { name: cardAuthor.textContent.trim().slice(0, 28), uid: cUid, isBot: false };
+                    }
+                  }
+                  // 3. Only use the first message in the scroller if we are near the very top (scrollTop < 350) so we never mistake a reply for the OP
+                  var scroller = root.querySelector('div[class*="scroller_"][class*="managedReactiveScroller_"], div[class*="scroller_"]');
+                  var nearTop = !scroller || scroller.scrollTop < 350;
+                  if (nearTop && msgs.length > 0) {
+                    var firstMeta = readMsgMeta(msgs[0]);
+                    if (firstMeta.name && !firstMeta.isBot) return firstMeta;
                   }
                   return { name: '', uid: '', isBot: false };
                 }
