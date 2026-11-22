@@ -7,9 +7,8 @@
     'use strict';
 
     function getMainWin() {
-        try { if (window.__TAURITAVERN__ || window.SillyTavern) return window; } catch (_) {}
-        try { if (window.parent && window.parent !== window && (window.parent.__TAURITAVERN__ || window.parent.SillyTavern)) return window.parent; } catch (_) {}
-        try { if (window.top && window.top !== window && (window.top.__TAURITAVERN__ || window.top.SillyTavern)) return window.top; } catch (_) {}
+        try { if (window.parent && window.parent !== window && window.parent.document) return window.parent; } catch (_) {}
+        try { if (window.top && window.top !== window && window.top.document) return window.top; } catch (_) {}
         return window;
     }
 
@@ -17,7 +16,7 @@
     const mainDoc = mainWin.document;
 
     // Prevent double mounting when hot-reloaded or when both extension & helper are active
-    if (mainWin.__STVAULT_BRIDGE_LOADED__ && mainDoc.getElementById('stv_bridge_status')) {
+    if (mainWin.__STVAULT_BRIDGE_LOADED__ && mainDoc.getElementById('stv_drawer_wrap')) {
         return;
     }
     mainWin.__STVAULT_BRIDGE_LOADED__ = true;
@@ -689,61 +688,8 @@
         });
     }
 
-    function openFloatingModal() {
-        let modal = mainDoc.getElementById('stv_bridge_modal');
-        if (modal) {
-            modal.style.display = 'flex';
-            return;
-        }
-        modal = mainDoc.createElement('div');
-        modal.id = 'stv_bridge_modal';
-        modal.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;';
-        modal.innerHTML = `
-<div style="width:100%;max-width:420px;background:var(--SmartThemeBlurTintColor,#18181b);color:var(--SmartThemeBodyColor,#f4f4f5);border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:14px 16px;box-shadow:0 12px 32px rgba(0,0,0,.45);">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-    <b style="font-size:15px;">酒馆匣互联</b>
-    <span id="stv_modal_close" style="cursor:pointer;padding:4px 8px;opacity:.75;font-size:14px;">✕</span>
-  </div>
-  <div class="stv-bridge-box">
-    <div class="stv-bridge-status" id="stv_bridge_status">未连接 · 请先在酒馆匣打开「酒馆互联 → 开启连接」</div>
-    <div class="stv-bridge-row">
-      <div class="menu_button" id="stv_btn_connect">连接酒馆匣</div>
-      <div class="menu_button" id="stv_btn_sync">同步清单</div>
-      <div class="menu_button" id="stv_btn_push_themes">推美化</div>
-      <div class="menu_button" id="stv_btn_push_chars">推角色卡</div>
-      <div class="menu_button" id="stv_btn_push_wbs">推世界书</div>
-      <div class="menu_button" id="stv_btn_push_presets">推预设</div>
-      <div class="menu_button" id="stv_btn_receive">接收待装入</div>
-    </div>
-    <div class="stv-bridge-log" id="stv_bridge_log"></div>
-  </div>
-</div>`;
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) modal.style.display = 'none';
-        });
-        mainDoc.body.appendChild(modal);
-        const closeBtn = modal.querySelector('#stv_modal_close');
-        if (closeBtn) closeBtn.addEventListener('click', () => { modal.style.display = 'none'; });
-        bindPanelButtons(modal);
-    }
-
-    function mountWandMenu() {
-        const menu = mainDoc.getElementById('extensionsMenu');
-        if (!menu || mainDoc.getElementById('stv_wand_item')) return;
-        const item = mainDoc.createElement('div');
-        item.id = 'stv_wand_item';
-        item.className = 'list-group-item flex-container flexGap5 interactable';
-        item.tabIndex = 0;
-        item.innerHTML = '<div class="fa-solid fa-plug extensionsMenuExtensionButton"></div><span>酒馆匣互联</span>';
-        item.addEventListener('click', () => {
-            openFloatingModal();
-        });
-        menu.appendChild(item);
-    }
-
     function mount() {
         injectStyles();
-        mountWandMenu();
         const container = mainDoc.getElementById('extensions_settings2') || mainDoc.getElementById('extensions_settings');
         if (container && !mainDoc.getElementById('stv_drawer_wrap')) {
             const wrap = mainDoc.createElement('div');
@@ -758,7 +704,7 @@
         mount();
         const timer = setInterval(() => {
             mount();
-            if (mainDoc.getElementById('stv_wand_item') && mainDoc.getElementById('stv_drawer_wrap')) {
+            if (mainDoc.getElementById('stv_drawer_wrap')) {
                 clearInterval(timer);
             }
         }, 800);
