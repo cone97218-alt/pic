@@ -75,10 +75,6 @@
         if (typeof ctx.getRequestHeaders === 'function') {
             return Object.assign({}, ctx.getRequestHeaders());
         }
-        try {
-            const mod = await import('../../../../script.js');
-            if (typeof mod.getRequestHeaders === 'function') return Object.assign({}, mod.getRequestHeaders());
-        } catch (_) {}
         return {};
     }
 
@@ -86,12 +82,7 @@
         const ctx = contextApi();
         if (typeof ctx.saveSettingsDebounced === 'function') {
             ctx.saveSettingsDebounced();
-            return;
         }
-        try {
-            const mod = await import('../../../../script.js');
-            if (typeof mod.saveSettingsDebounced === 'function') mod.saveSettingsDebounced();
-        } catch (_) {}
     }
 
     function mainFetch(url, opts) {
@@ -99,18 +90,18 @@
     }
 
     function setStatus(text, cls) {
-        const el = mainDoc.getElementById('stv_bridge_status');
-        if (!el) return;
-        el.textContent = text;
-        el.classList.remove('stv-ok', 'stv-err');
-        if (cls) el.classList.add(cls);
+        mainDoc.querySelectorAll('.stv-bridge-status').forEach((el) => {
+            el.textContent = text;
+            el.classList.remove('stv-ok', 'stv-err');
+            if (cls) el.classList.add(cls);
+        });
     }
 
     function log(msg) {
-        const box = mainDoc.getElementById('stv_bridge_log');
-        if (!box) return;
         const line = '[' + new Date().toLocaleTimeString() + '] ' + msg + '\n';
-        box.textContent = (line + box.textContent).slice(0, 6000);
+        mainDoc.querySelectorAll('.stv-bridge-log').forEach((box) => {
+            box.textContent = (line + box.textContent).slice(0, 6000);
+        });
     }
 
     function bytesToBase64(bytes) {
@@ -659,55 +650,118 @@
 </div>`;
     }
 
-    function mount() {
-        const container = mainDoc.getElementById('extensions_settings2') || mainDoc.getElementById('extensions_settings');
-        if (!container || mainDoc.getElementById('stv_bridge_status')) return;
-        injectStyles();
-        const wrap = mainDoc.createElement('div');
-        wrap.innerHTML = buildHtml();
-        container.appendChild(wrap);
-
-        mainDoc.getElementById('stv_btn_connect').addEventListener('click', async () => {
+    function bindPanelButtons(root) {
+        const byId = (id) => root.querySelector('#' + id);
+        const btnConn = byId('stv_btn_connect');
+        if (btnConn) btnConn.addEventListener('click', async () => {
             setStatus('正在连接酒馆匣...', '');
             try { await connect(); } catch (e) { log(e.message); }
         });
-        mainDoc.getElementById('stv_btn_sync').addEventListener('click', async () => {
+        const btnSync = byId('stv_btn_sync');
+        if (btnSync) btnSync.addEventListener('click', async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await syncInventory();
         });
-        mainDoc.getElementById('stv_btn_push_themes').addEventListener('click', async () => {
+        const btnThemes = byId('stv_btn_push_themes');
+        if (btnThemes) btnThemes.addEventListener('click', async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await handlePull('theme');
         });
-        mainDoc.getElementById('stv_btn_push_chars').addEventListener('click', async () => {
+        const btnChars = byId('stv_btn_push_chars');
+        if (btnChars) btnChars.addEventListener('click', async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await handlePull('character');
         });
-        mainDoc.getElementById('stv_btn_push_wbs').addEventListener('click', async () => {
+        const btnWbs = byId('stv_btn_push_wbs');
+        if (btnWbs) btnWbs.addEventListener('click', async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await handlePull('worldbook');
         });
-        mainDoc.getElementById('stv_btn_push_presets').addEventListener('click', async () => {
+        const btnPresets = byId('stv_btn_push_presets');
+        if (btnPresets) btnPresets.addEventListener('click', async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await handlePull('preset');
         });
-        mainDoc.getElementById('stv_btn_receive').addEventListener('click', async () => {
+        const btnRecv = byId('stv_btn_receive');
+        if (btnRecv) btnRecv.addEventListener('click', async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await processOutbox();
         });
     }
 
-    function init() {
-        if (mainDoc.getElementById('extensions_settings2') || mainDoc.getElementById('extensions_settings')) {
-            mount();
+    function openFloatingModal() {
+        let modal = mainDoc.getElementById('stv_bridge_modal');
+        if (modal) {
+            modal.style.display = 'flex';
             return;
         }
+        modal = mainDoc.createElement('div');
+        modal.id = 'stv_bridge_modal';
+        modal.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;';
+        modal.innerHTML = `
+<div style="width:100%;max-width:420px;background:var(--SmartThemeBlurTintColor,#18181b);color:var(--SmartThemeBodyColor,#f4f4f5);border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:14px 16px;box-shadow:0 12px 32px rgba(0,0,0,.45);">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+    <b style="font-size:15px;">酒馆匣互联</b>
+    <span id="stv_modal_close" style="cursor:pointer;padding:4px 8px;opacity:.75;font-size:14px;">✕</span>
+  </div>
+  <div class="stv-bridge-box">
+    <div class="stv-bridge-status" id="stv_bridge_status">未连接 · 请先在酒馆匣打开「酒馆互联 → 开启连接」</div>
+    <div class="stv-bridge-row">
+      <div class="menu_button" id="stv_btn_connect">连接酒馆匣</div>
+      <div class="menu_button" id="stv_btn_sync">同步清单</div>
+      <div class="menu_button" id="stv_btn_push_themes">推美化</div>
+      <div class="menu_button" id="stv_btn_push_chars">推角色卡</div>
+      <div class="menu_button" id="stv_btn_push_wbs">推世界书</div>
+      <div class="menu_button" id="stv_btn_push_presets">推预设</div>
+      <div class="menu_button" id="stv_btn_receive">接收待装入</div>
+    </div>
+    <div class="stv-bridge-log" id="stv_bridge_log"></div>
+  </div>
+</div>`;
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.style.display = 'none';
+        });
+        mainDoc.body.appendChild(modal);
+        const closeBtn = modal.querySelector('#stv_modal_close');
+        if (closeBtn) closeBtn.addEventListener('click', () => { modal.style.display = 'none'; });
+        bindPanelButtons(modal);
+    }
+
+    function mountWandMenu() {
+        const menu = mainDoc.getElementById('extensionsMenu');
+        if (!menu || mainDoc.getElementById('stv_wand_item')) return;
+        const item = mainDoc.createElement('div');
+        item.id = 'stv_wand_item';
+        item.className = 'list-group-item flex-container flexGap5 interactable';
+        item.tabIndex = 0;
+        item.innerHTML = '<div class="fa-solid fa-plug extensionsMenuExtensionButton"></div><span>酒馆匣互联</span>';
+        item.addEventListener('click', () => {
+            openFloatingModal();
+        });
+        menu.appendChild(item);
+    }
+
+    function mount() {
+        injectStyles();
+        mountWandMenu();
+        const container = mainDoc.getElementById('extensions_settings2') || mainDoc.getElementById('extensions_settings');
+        if (container && !mainDoc.getElementById('stv_drawer_wrap')) {
+            const wrap = mainDoc.createElement('div');
+            wrap.id = 'stv_drawer_wrap';
+            wrap.innerHTML = buildHtml();
+            container.appendChild(wrap);
+            bindPanelButtons(wrap);
+        }
+    }
+
+    function init() {
+        mount();
         const timer = setInterval(() => {
-            if (mainDoc.getElementById('extensions_settings2') || mainDoc.getElementById('extensions_settings')) {
+            mount();
+            if (mainDoc.getElementById('stv_wand_item') && mainDoc.getElementById('stv_drawer_wrap')) {
                 clearInterval(timer);
-                mount();
             }
-        }, 600);
+        }, 800);
     }
 
     if (mainDoc.readyState === 'loading') {
