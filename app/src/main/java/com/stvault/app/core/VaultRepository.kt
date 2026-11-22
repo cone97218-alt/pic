@@ -1122,7 +1122,8 @@ class VaultRepository private constructor(private val appContext: Context) {
         query: String,
         filter: String = "all",
         categoryFilter: String = "",
-        groupVariants: Boolean = true
+        groupVariants: Boolean = true,
+        sortBy: String = "newest"
     ): List<SourceRowUi> {
         val q = query.trim().lowercase()
         synchronized(lock) {
@@ -1167,7 +1168,15 @@ class VaultRepository private constructor(private val appContext: Context) {
                 }
             }.toList()
 
+            // Track stable series timestamps (latest & earliest in group) so switching active variant doesn't jump list position
+            val seriesLatestMap = HashMap<String, Long>()
+            val seriesEarliestMap = HashMap<String, Long>()
+
             val grouped = if (!groupVariants) {
+                rawRows.forEach { r ->
+                    seriesLatestMap[r.source.id] = r.source.scannedAt
+                    seriesEarliestMap[r.source.id] = r.source.scannedAt
+                }
                 rawRows
             } else {
                 val buckets = LinkedHashMap<String, MutableList<SourceRowUi>>()
@@ -1183,6 +1192,8 @@ class VaultRepository private constructor(private val appContext: Context) {
                     } else {
                         sorted.first()
                     }
+                    seriesLatestMap[primary.source.id] = sorted.first().source.scannedAt
+                    seriesEarliestMap[primary.source.id] = sorted.last().source.scannedAt
                     val labels = sorted.map { it.source.variantTag.ifBlank { it.source.name } }.distinct()
                     primary.copy(variantCount = sorted.size, variantLabels = labels)
                 }
@@ -1192,13 +1203,33 @@ class VaultRepository private constructor(private val appContext: Context) {
                 grouped.filter { it.variantCount > 1 }
             } else grouped
 
-            return when (filter) {
-                "most_imgs" -> postFiltered.sortedByDescending { it.source.urls.size }
-                "incomplete" -> postFiltered.sortedWith(
-                    compareByDescending<SourceRowUi> { it.errCount > 0 }
-                        .thenByDescending { it.source.scannedAt }
+            val effectiveSort = if (filter == "most_imgs") "most_imgs" else sortBy
+            val zhCollator = java.text.Collator.getInstance(java.util.Locale.CHINA)
+            fun displayKey(row: SourceRowUi): String {
+                return if (row.variantCount > 1) {
+                    row.source.seriesName.ifBlank { row.source.name }
+                } else {
+                    row.source.name
+                }
+            }
+
+            val baseComparator: Comparator<SourceRowUi> = when (effectiveSort) {
+                "oldest" -> compareBy<SourceRowUi> { seriesEarliestMap[it.source.id] ?: it.source.scannedAt }
+                "name_asc" -> Comparator { a, b -> zhCollator.compare(displayKey(a), displayKey(b)) }
+                "name_desc" -> Comparator { a, b -> zhCollator.compare(displayKey(b), displayKey(a)) }
+                "most_imgs" -> compareByDescending<SourceRowUi> { it.source.urls.size }
+                    .thenByDescending { seriesLatestMap[it.source.id] ?: it.source.scannedAt }
+                "most_variants" -> compareByDescending<SourceRowUi> { it.variantCount }
+                    .thenByDescending { seriesLatestMap[it.source.id] ?: it.source.scannedAt }
+                else -> compareByDescending<SourceRowUi> { seriesLatestMap[it.source.id] ?: it.source.scannedAt }
+            }
+
+            return if (filter == "incomplete") {
+                postFiltered.sortedWith(
+                    compareByDescending<SourceRowUi> { it.errCount > 0 }.then(baseComparator)
                 )
-                else -> postFiltered.sortedByDescending { it.source.scannedAt }
+            } else {
+                postFiltered.sortedWith(baseComparator)
             }
         }
     }

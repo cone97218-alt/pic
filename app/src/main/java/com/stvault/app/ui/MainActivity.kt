@@ -93,6 +93,10 @@ class MainActivity : AppCompatActivity() {
     private var vaultSearchModeSources = true
     private var activeSourceFilter = "all"
     private var activeUrlFilter = "all"
+    private var activeThemeSort = "newest"
+    private var activeCharSort = "newest"
+    private var activeWbSort = "newest"
+    private var activePresetSort = "newest"
     private var downloadConcurrency = 16
 
     private var pendingReplaceUrl: String? = null
@@ -453,6 +457,30 @@ class MainActivity : AppCompatActivity() {
             }
         )
         binding.rvVault.adapter = sourcesAdapter
+        activeThemeSort = prefs.getString("sort_themes", "newest") ?: "newest"
+        activeCharSort = prefs.getString("sort_characters", "newest") ?: "newest"
+        activeWbSort = prefs.getString("sort_worldbooks", "newest") ?: "newest"
+        activePresetSort = prefs.getString("sort_presets", "newest") ?: "newest"
+        binding.btnThemeSort.text = sortPillLabel(activeThemeSort)
+        binding.btnThemeSort.setOnClickListener {
+            showSortSheet(
+                title = "美化排序方式",
+                currentKey = activeThemeSort,
+                options = listOf(
+                    "newest" to ("最新入库" to "按导入时间从新到旧"),
+                    "oldest" to ("最早入库" to "按导入时间从旧到新"),
+                    "name_asc" to ("名称 A → Z" to "按系列名 / 标题拼音正序"),
+                    "name_desc" to ("名称 Z → A" to "按系列名 / 标题拼音倒序"),
+                    "most_imgs" to ("图床最多" to "按外链图片数量从多到少"),
+                    "most_variants" to ("变体最多" to "多变体系列优先排前")
+                )
+            ) { key ->
+                activeThemeSort = key
+                prefs.edit().putString("sort_themes", key).apply()
+                binding.btnThemeSort.text = sortPillLabel(key)
+                refreshVaultList()
+            }
+        }
         updateSegmentedStyle()
         rebuildFilterChips()
 
@@ -465,9 +493,28 @@ class MainActivity : AppCompatActivity() {
             onToggleSelect = { id -> toggleBatchSelection(id) }
         )
         binding.wsCharacters.rvCharacters.adapter = charactersAdapter
+        binding.wsCharacters.btnCharSort.text = sortPillLabel(activeCharSort)
+        binding.wsCharacters.btnCharSort.setOnClickListener {
+            showSortSheet(
+                title = "角色卡排序方式",
+                currentKey = activeCharSort,
+                options = listOf(
+                    "newest" to ("最新入库" to "按导入时间从新到旧"),
+                    "oldest" to ("最早入库" to "按导入时间从旧到新"),
+                    "name_asc" to ("名称 A → Z" to "按标题拼音正序"),
+                    "name_desc" to ("名称 Z → A" to "按标题拼音倒序"),
+                    "largest" to ("体积最大" to "按文件大小从大到小")
+                )
+            ) { key ->
+                activeCharSort = key
+                prefs.edit().putString("sort_characters", key).apply()
+                binding.wsCharacters.btnCharSort.text = sortPillLabel(key)
+                refreshCharactersList()
+            }
+        }
         buildSimpleChips(
             binding.wsCharacters.chipGroupCharFilter,
-            listOf("all" to "最新导入", "multi_version" to "多版本", "has_book" to "带世界书", "has_script" to "带脚本", "has_urls" to "含外链图"),
+            listOf("all" to "全部", "multi_version" to "多版本", "has_book" to "带世界书", "has_script" to "带脚本", "has_urls" to "含外链图"),
             activeCharFilter
         ) { key ->
             activeCharFilter = key
@@ -483,6 +530,25 @@ class MainActivity : AppCompatActivity() {
             onLongClick = { w -> showWorldBookActionMenu(w) }
         )
         binding.wsWorldBooks.rvWorldBooks.adapter = worldBooksAdapter
+        binding.wsWorldBooks.btnWbSort.text = sortPillLabel(activeWbSort)
+        binding.wsWorldBooks.btnWbSort.setOnClickListener {
+            showSortSheet(
+                title = "世界书排序方式",
+                currentKey = activeWbSort,
+                options = listOf(
+                    "newest" to ("最新入库" to "按导入时间从新到旧"),
+                    "oldest" to ("最早入库" to "按导入时间从旧到新"),
+                    "name_asc" to ("名称 A → Z" to "按标题拼音正序"),
+                    "name_desc" to ("名称 Z → A" to "按标题拼音倒序"),
+                    "most_entries" to ("条目最多" to "按世界书条目数从多到少")
+                )
+            ) { key ->
+                activeWbSort = key
+                prefs.edit().putString("sort_worldbooks", key).apply()
+                binding.wsWorldBooks.btnWbSort.text = sortPillLabel(key)
+                refreshWorldBooksList()
+            }
+        }
         buildSimpleChips(
             binding.wsWorldBooks.chipGroupWbFilter,
             listOf("all" to "全部", "multi_version" to "多版本", "standalone" to "独立世界书", "from_card" to "来自角色卡", "has_urls" to "含外链图"),
@@ -501,6 +567,25 @@ class MainActivity : AppCompatActivity() {
             onLongClick = { p -> showPresetActionMenu(p) }
         )
         binding.wsPresets.rvPresets.adapter = presetsAdapter
+        binding.wsPresets.btnPresetSort.text = sortPillLabel(activePresetSort)
+        binding.wsPresets.btnPresetSort.setOnClickListener {
+            showSortSheet(
+                title = "预设排序方式",
+                currentKey = activePresetSort,
+                options = listOf(
+                    "newest" to ("最新入库" to "按导入时间从新到旧"),
+                    "oldest" to ("最早入库" to "按导入时间从旧到新"),
+                    "name_asc" to ("名称 A → Z" to "按标题拼音正序"),
+                    "name_desc" to ("名称 Z → A" to "按标题拼音倒序"),
+                    "most_prompts" to ("提示词最多" to "按预设条目数从多到少")
+                )
+            ) { key ->
+                activePresetSort = key
+                prefs.edit().putString("sort_presets", key).apply()
+                binding.wsPresets.btnPresetSort.text = sortPillLabel(key)
+                refreshPresetsList()
+            }
+        }
 
         // 5. Components (Regex / Tavern Helper / QR)
         binding.wsComponents.rvComponents.layoutManager = LinearLayoutManager(this)
@@ -753,18 +838,69 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun sortPillLabel(key: String): String = when (key) {
+        "oldest" -> "最早 ▾"
+        "name_asc" -> "名称↑ ▾"
+        "name_desc" -> "名称↓ ▾"
+        "most_imgs" -> "图最多 ▾"
+        "most_variants" -> "变体多 ▾"
+        "largest" -> "体积大 ▾"
+        "most_entries" -> "条目多 ▾"
+        "most_prompts" -> "提示词多 ▾"
+        else -> "最新 ▾"
+    }
+
+    private fun showSortSheet(
+        title: String,
+        currentKey: String,
+        options: List<Pair<String, Pair<String, String>>>,
+        onPicked: (String) -> Unit
+    ) {
+        val actions = options.map { (key, labelAndSub) ->
+            SheetAction(
+                label = labelAndSub.first,
+                subtitle = labelAndSub.second,
+                checked = (key == currentKey)
+            ) {
+                onPicked(key)
+            }
+        }
+        VaultSheets.actionList(ctx = this, title = title, actions = actions)
+    }
+
+    private fun <T> sortGroupedItems(
+        groups: List<com.stvault.app.core.GroupedItem<T>>,
+        sortBy: String,
+        getDisplayName: (com.stvault.app.core.GroupedItem<T>) -> String,
+        getTime: (T) -> Long,
+        getMetric: (T) -> Long = { 0L }
+    ): List<com.stvault.app.core.GroupedItem<T>> {
+        val zhCollator = java.text.Collator.getInstance(Locale.CHINA)
+        return when (sortBy) {
+            "oldest" -> groups.sortedBy { getTime(it.primary) }
+            "name_asc" -> groups.sortedWith { a, b -> zhCollator.compare(getDisplayName(a), getDisplayName(b)) }
+            "name_desc" -> groups.sortedWith { a, b -> zhCollator.compare(getDisplayName(b), getDisplayName(a)) }
+            "largest", "most_entries", "most_prompts" -> groups.sortedWith(
+                compareByDescending<com.stvault.app.core.GroupedItem<T>> { getMetric(it.primary) }
+                    .thenByDescending { getTime(it.primary) }
+            )
+            else -> groups.sortedByDescending { getTime(it.primary) }
+        }
+    }
+
     private fun rebuildFilterChips() {
+        val sortVis = if (vaultSearchModeSources) View.VISIBLE else View.GONE
+        binding.btnThemeSort.visibility = sortVis
+        binding.divThemeSort.visibility = sortVis
         val group = binding.chipGroupFilter
         group.removeAllViews()
         val options = if (vaultSearchModeSources) {
             listOf(
-                "all" to "最新扫描",
+                "all" to "全部",
                 "multi_version" to "多版本",
                 "installed" to "已装",
                 "not_installed" to "未装",
-                "incomplete" to "未下完",
-                "completed" to "已全缓存",
-                "most_imgs" to "图最多"
+                "incomplete" to "未下完"
             )
         } else {
             listOf(
@@ -1485,7 +1621,7 @@ class MainActivity : AppCompatActivity() {
             if (vaultSearchModeSources) {
                 val groupVars = prefs.getBoolean("group_theme_variants", true)
                 val list = withContext(Dispatchers.IO) {
-                    repo.searchSourceRows(q, activeSourceFilter, activeThemeCategory, groupVars)
+                    repo.searchSourceRows(q, activeSourceFilter, activeThemeCategory, groupVars, activeThemeSort)
                 }
                 sourcesAdapter.submitList(list)
                 val totalExpanded = list.sumOf { it.variantCount }
@@ -1975,7 +2111,14 @@ class MainActivity : AppCompatActivity() {
                     chars, groupVersions, { it.seriesKey }, { it.addedAt }, { it.id },
                     { key -> VersionGrouper.getPreferredVersion(this@MainActivity, ResourceDetailActivity.TYPE_CHARACTER, key) }
                 )
-                val g = if (activeCharFilter == "multi_version") rawG.filter { it.versionCount > 1 } else rawG
+                val filtered = if (activeCharFilter == "multi_version") rawG.filter { it.versionCount > 1 } else rawG
+                val g = sortGroupedItems(
+                    filtered,
+                    activeCharSort,
+                    getDisplayName = { if (it.versionCount > 1) it.primary.seriesName.ifBlank { it.primary.name } else it.primary.name },
+                    getTime = { it.addedAt },
+                    getMetric = { it.fileSize }
+                )
                 val urls = libRepo.getAllCharacterUrls()
                 val counts = repo.getCountsForUrls(urls)
                 Triple(g, chars.size, counts.third)
@@ -2018,7 +2161,14 @@ class MainActivity : AppCompatActivity() {
                     books, groupVersions, { it.seriesKey }, { it.addedAt }, { it.id },
                     { key -> VersionGrouper.getPreferredVersion(this@MainActivity, ResourceDetailActivity.TYPE_WORLDBOOK, key) }
                 )
-                val g = if (activeWbFilter == "multi_version") rawG.filter { it.versionCount > 1 } else rawG
+                val filtered = if (activeWbFilter == "multi_version") rawG.filter { it.versionCount > 1 } else rawG
+                val g = sortGroupedItems(
+                    filtered,
+                    activeWbSort,
+                    getDisplayName = { if (it.versionCount > 1) it.primary.seriesName.ifBlank { it.primary.name } else it.primary.name },
+                    getTime = { it.addedAt },
+                    getMetric = { it.entryCount.toLong() }
+                )
                 val urls = libRepo.getAllWorldBookUrls()
                 val counts = repo.getCountsForUrls(urls)
                 Triple(g, books.size, counts.third)
@@ -2057,9 +2207,16 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val (groupedPresets, totalRaw) = withContext(Dispatchers.IO) {
                 val p = libRepo.searchPresets(q)
-                val gp = VersionGrouper.groupBySeries(
+                val rawGp = VersionGrouper.groupBySeries(
                     p, groupVersions, { it.seriesKey }, { it.addedAt }, { it.id },
                     { key -> VersionGrouper.getPreferredVersion(this@MainActivity, ResourceDetailActivity.TYPE_PRESET, key) }
+                )
+                val gp = sortGroupedItems(
+                    rawGp,
+                    activePresetSort,
+                    getDisplayName = { if (it.versionCount > 1) it.primary.seriesName.ifBlank { it.primary.name } else it.primary.name },
+                    getTime = { it.addedAt },
+                    getMetric = { it.promptCount.toLong() }
                 )
                 gp to p.size
             }
