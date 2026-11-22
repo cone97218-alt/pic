@@ -318,6 +318,131 @@ class VaultRepository private constructor(private val appContext: Context) {
         return count
     }
 
+    data class DeleteSourceResult(val removedUrls: Int, val freedBytes: Long)
+
+    /**
+     * Deletes a single theme source and cleans up any URLs & cached files
+     * exclusively referenced by this source.
+     */
+    fun deleteSource(sourceId: String): DeleteSourceResult? {
+        val removedFilesToDelete = mutableListOf<File>()
+        var removedUrls = 0
+        var freedBytes = 0L
+
+        synchronized(lock) {
+            val source = sourcesMap.remove(sourceId) ?: return null
+
+            try {
+                resolveSourceFile(sourceId, source.category).delete()
+                File(legacySourcesDir, "$sourceId.txt").delete()
+            } catch (_: Exception) {
+            }
+
+            val orphanUrls = mutableListOf<UrlRecord>()
+            val iter = urlsMap.entries.iterator()
+            while (iter.hasNext()) {
+                val entry = iter.next()
+                val rec = entry.value
+                if (rec.sources.remove(sourceId) && rec.sources.isEmpty()) {
+                    orphanUrls.add(rec)
+                    iter.remove()
+                    removedUrls++
+                }
+            }
+
+            if (orphanUrls.isNotEmpty()) {
+                val stillUsedFiles = HashSet<String>()
+                for (rec in urlsMap.values) {
+                    if (rec.file.isNotEmpty()) stillUsedFiles.add(rec.file)
+                }
+                val scheduledFiles = HashSet<String>()
+                for (orphan in orphanUrls) {
+                    if (orphan.file.isNotEmpty() && orphan.file !in stillUsedFiles && scheduledFiles.add(orphan.file)) {
+                        val f = resolveAssetFile(orphan.file, orphan.mime, orphan.url)
+                        if (f.exists()) {
+                            freedBytes += f.length()
+                            removedFilesToDelete.add(f)
+                        }
+                        val legacy = File(legacyImagesDir, orphan.file)
+                        if (legacy.exists()) {
+                            removedFilesToDelete.add(legacy)
+                        }
+                    }
+                }
+            }
+
+            refreshStatsLocked()
+        }
+
+        for (f in removedFilesToDelete) {
+            try {
+                f.delete()
+            } catch (_: Exception) {
+            }
+        }
+        saveIndex()
+        return DeleteSourceResult(removedUrls = removedUrls, freedBytes = freedBytes)
+    }
+
+    /**
+     * Imports one or more user-selected theme files directly via SAF document URIs.
+     */
+    fun importFileUris(uris: List<Uri>): ScanResult {
+        var scanned = 0
+        var matched = 0
+        var newUrls = 0
+        var duplicateFiles = 0
+
+        for (uri in uris) {
+            val doc = DocumentFile.fromSingleUri(appContext, uri)
+            val fileName = doc?.name?.takeIf { it.isNotBlank() }
+                ?: uri.lastPathSegment?.substringAfterLast('/')
+                ?: "theme_${System.currentTimeMillis()}.json"
+            val ext = fileName.substringAfterLast('.', "").lowercase()
+            scanned++
+
+            try {
+                val content: String = if (ext == "png") {
+                    val bytes = appContext.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                        ?: continue
+                    UrlExtractor.extractCharaFromPng(bytes) ?: continue
+                } else {
+                    appContext.contentResolver.openInputStream(uri)?.use {
+                        it.bufferedReader(Charsets.UTF_8).readText()
+                    } ?: continue
+                }
+                if (content.isBlank()) continue
+                val (urls, isJson) = UrlExtractor.extract(content)
+                if (urls.isNotEmpty()) {
+                    val contentHash = sha256Short(content.trim().toByteArray(Charsets.UTF_8))
+                    synchronized(lock) {
+                        val (added, isDup) = registerSourceLocked(
+                            name = fileName,
+                            docUri = uri.toString(),
+                            urls = urls,
+                            isJson = isJson,
+                            contentHash = contentHash,
+                            rawContent = content,
+                            folderName = "手动导入"
+                        )
+                        if (isDup) {
+                            duplicateFiles++
+                        } else {
+                            matched++
+                            newUrls += added
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        if (matched > 0 || duplicateFiles > 0) {
+            saveIndex()
+        }
+        return ScanResult(scanned, matched, newUrls, duplicateFiles)
+    }
+
     /**
      * Returns Pair(addedUrls, skippedDuplicateSource)
      */

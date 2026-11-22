@@ -10,7 +10,8 @@ import com.stvault.app.model.SourceRecord
 class SourcesAdapter(
     private val repo: VaultRepository,
     private val onClick: (SourceRecord) -> Unit,
-    private val onPreviewClick: (SourceRecord) -> Unit
+    private val onPreviewClick: (SourceRecord) -> Unit,
+    private val onDeleteClick: (SourceRecord) -> Unit
 ) : RecyclerView.Adapter<SourcesAdapter.VH>() {
 
     private var items: List<SourceRecord> = emptyList()
@@ -41,8 +42,8 @@ class SourcesAdapter(
         }
         holder.binding.tvSourceMeta.text = meta
         holder.binding.root.setOnClickListener { onClick(s) }
-        holder.binding.btnOpenSource.setOnClickListener { onClick(s) }
         holder.binding.btnPreviewSource.setOnClickListener { onPreviewClick(s) }
+        holder.binding.btnDeleteSource.setOnClickListener { onDeleteClick(s) }
     }
 
     override fun getItemCount(): Int = items.size

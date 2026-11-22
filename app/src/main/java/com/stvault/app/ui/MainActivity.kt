@@ -217,6 +217,22 @@ class MainActivity : AppCompatActivity() {
             exportVaultArchiveToUri(uri)
         }
 
+    // 11. Import Single or Multiple Theme Files
+    private val importSingleFilesLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+            if (uris.isNullOrEmpty()) return@registerForActivityResult
+            for (uri in uris) {
+                try {
+                    contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                } catch (_: Exception) {
+                }
+            }
+            importSingleFiles(uris)
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -253,7 +269,8 @@ class MainActivity : AppCompatActivity() {
         sourcesAdapter = SourcesAdapter(
             repo = repo,
             onClick = { source -> showSourceDetailDialog(source) },
-            onPreviewClick = { source -> ThemePreviewActivity.open(this, source.id) }
+            onPreviewClick = { source -> ThemePreviewActivity.open(this, source.id) },
+            onDeleteClick = { source -> confirmDeleteSource(source) }
         )
         urlsAdapter = UrlsAdapter(
             repo = repo,
@@ -296,8 +313,8 @@ class MainActivity : AppCompatActivity() {
         val current = if (vaultSearchModeSources) activeSourceFilter else activeUrlFilter
         val surface2 = ContextCompat.getColor(this, R.color.surface_2)
         val accent = ContextCompat.getColor(this, R.color.accent)
+        val onAccent = ContextCompat.getColor(this, R.color.on_accent)
         val border = ContextCompat.getColor(this, R.color.border)
-        val textPrimary = ContextCompat.getColor(this, R.color.text_primary)
         val textMuted = ContextCompat.getColor(this, R.color.text_muted)
 
         val bgState = ColorStateList(
@@ -306,7 +323,11 @@ class MainActivity : AppCompatActivity() {
         )
         val textState = ColorStateList(
             arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-            intArrayOf(android.graphics.Color.WHITE, textMuted)
+            intArrayOf(onAccent, textMuted)
+        )
+        val strokeState = ColorStateList(
+            arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+            intArrayOf(accent, border)
         )
 
         for ((key, label) in options) {
@@ -318,8 +339,8 @@ class MainActivity : AppCompatActivity() {
                 chipBackgroundColor = bgState
                 setTextColor(textState)
                 chipStrokeWidth = 2f
-                chipStrokeColor = ColorStateList.valueOf(border)
-                chipCornerRadius = 24f
+                chipStrokeColor = strokeState
+                chipCornerRadius = 20f
                 textSize = 12f
                 setOnClickListener {
                     if (vaultSearchModeSources) activeSourceFilter = key else activeUrlFilter = key
@@ -360,20 +381,22 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateSegmentedStyle() {
         val accent = ContextCompat.getColor(this, R.color.accent)
+        val onAccent = ContextCompat.getColor(this, R.color.on_accent)
         val transparent = android.graphics.Color.TRANSPARENT
-        val white = android.graphics.Color.WHITE
         val muted = ContextCompat.getColor(this, R.color.text_muted)
 
         if (vaultSearchModeSources) {
             binding.btnModeSources.backgroundTintList = ColorStateList.valueOf(accent)
-            binding.btnModeSources.setTextColor(white)
+            binding.btnModeSources.setTextColor(onAccent)
             binding.btnModeUrls.backgroundTintList = ColorStateList.valueOf(transparent)
             binding.btnModeUrls.setTextColor(muted)
+            binding.btnImportInVault.visibility = View.VISIBLE
         } else {
             binding.btnModeUrls.backgroundTintList = ColorStateList.valueOf(accent)
-            binding.btnModeUrls.setTextColor(white)
+            binding.btnModeUrls.setTextColor(onAccent)
             binding.btnModeSources.backgroundTintList = ColorStateList.valueOf(transparent)
             binding.btnModeSources.setTextColor(muted)
+            binding.btnImportInVault.visibility = View.GONE
         }
     }
 
@@ -397,8 +420,10 @@ class MainActivity : AppCompatActivity() {
             true
         }
 
-        // Tab 1: Folder Pick & Scan
+        // Tab 1: Folder Pick, Single File Import & Scan
         binding.btnPickFolder.setOnClickListener { pickFolderLauncher.launch(savedTreeUri) }
+        binding.btnImportSingleFile.setOnClickListener { importSingleFilesLauncher.launch(arrayOf("*/*")) }
+        binding.btnImportInVault.setOnClickListener { importSingleFilesLauncher.launch(arrayOf("*/*")) }
         binding.btnOpenTTFolder.setOnClickListener { openTauriTavernThemesFolder() }
         binding.btnScanFolder.setOnClickListener {
             val localPath = savedLocalDirPath
@@ -885,6 +910,54 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun importSingleFiles(uris: List<Uri>) {
+        binding.btnImportSingleFile.isEnabled = false
+        showIsland("正在导入美化...")
+        lifecycleScope.launch {
+            try {
+                val res = withContext(Dispatchers.IO) {
+                    repo.importFileUris(uris)
+                }
+                val msg = when {
+                    res.matchedFiles > 0 ->
+                        "已导入 ${res.matchedFiles} 个美化，新增 ${res.newUrls} 个图床"
+                    res.duplicateFiles > 0 ->
+                        "所选美化已在库中"
+                    else ->
+                        "未检测到外链图床"
+                }
+                finishIsland(msg)
+                toast(msg)
+                refreshVaultList()
+            } catch (e: Exception) {
+                finishIsland("导入失败")
+                toast("导入失败：${e.message}")
+            } finally {
+                binding.btnImportSingleFile.isEnabled = true
+            }
+        }
+    }
+
+    private fun confirmDeleteSource(source: SourceRecord) {
+        val cleanName = source.name.substringAfterLast('/')
+        AlertDialog.Builder(this)
+            .setTitle("删除美化")
+            .setMessage("确定删除「$cleanName」？\n\n将同时清理仅由该美化引用的独享图床缓存，不影响其他美化共用的图片。")
+            .setPositiveButton("删除") { _, _ ->
+                lifecycleScope.launch {
+                    val res = withContext(Dispatchers.IO) { repo.deleteSource(source.id) }
+                    activeSourceDialog?.dismiss()
+                    if (res != null) {
+                        val freedStr = if (res.freedBytes > 0L) "，释放 ${formatBytes(res.freedBytes)}" else ""
+                        toast("已删除，清理 ${res.removedUrls} 条独享链接$freedStr")
+                        refreshVaultList()
+                    }
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
     private fun showSourceDetailDialog(source: SourceRecord) {
         val dBinding = DialogSourceDetailBinding.inflate(LayoutInflater.from(this))
         dBinding.tvDialogSourceTitle.text = source.name
@@ -927,6 +1000,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        dBinding.btnDialogDelete.setOnClickListener {
+            confirmDeleteSource(source)
+        }
         dBinding.btnDialogPreview.setOnClickListener {
             activeSourceDialog?.dismiss()
             ThemePreviewActivity.open(this, source.id)
