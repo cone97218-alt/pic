@@ -384,42 +384,47 @@ object VaultSheets {
         root.addView(etSearch)
 
         val filtered = items.toMutableList()
-        val adapter = object : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
-            override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+        class PickerVH(val box: LinearLayout, val tvTitle: TextView, val tvSub: TextView) : RecyclerView.ViewHolder(box)
+        val adapter = object : RecyclerView.Adapter<PickerVH>() {
+            override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): PickerVH {
                 val box = LinearLayout(ctx).apply {
                     orientation = LinearLayout.VERTICAL
                     layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                     setPadding(dp(ctx, 12), dp(ctx, 12), dp(ctx, 12), dp(ctx, 12))
                 }
-                return object : RecyclerView.ViewHolder(box) {}
-            }
-
-            override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
-                val box = holder.itemView as LinearLayout
-                box.removeAllViews()
-                val item = filtered[position]
-                val isSelected = (selectedId != null && item.id == selectedId)
-                if (isSelected) box.setBackgroundResource(R.drawable.bg_input) else box.background = null
-
-                box.addView(TextView(ctx).apply {
-                    text = if (isSelected) "✓  ${item.title}" else item.title
+                val tvTitle = TextView(ctx).apply {
                     setTextColor(col(ctx, R.color.text_primary))
                     textSize = 14f
-                    if (isSelected) setTypeface(null, Typeface.BOLD)
                     maxLines = 2
-                })
-                if (item.subtitle.isNotBlank()) {
-                    box.addView(TextView(ctx).apply {
-                        text = item.subtitle
-                        setTextColor(col(ctx, R.color.text_muted))
-                        textSize = 11.5f
-                        maxLines = 1
-                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                            topMargin = dp(ctx, 2)
-                        }
-                    })
                 }
-                box.setOnClickListener {
+                val tvSub = TextView(ctx).apply {
+                    setTextColor(col(ctx, R.color.text_muted))
+                    textSize = 11.5f
+                    maxLines = 1
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        topMargin = dp(ctx, 2)
+                    }
+                }
+                box.addView(tvTitle)
+                box.addView(tvSub)
+                return PickerVH(box, tvTitle, tvSub)
+            }
+
+            override fun onBindViewHolder(holder: PickerVH, position: Int) {
+                val item = filtered[position]
+                val isSelected = (selectedId != null && item.id == selectedId)
+                if (isSelected) holder.box.setBackgroundResource(R.drawable.bg_input) else holder.box.background = null
+
+                holder.tvTitle.text = if (isSelected) "✓  ${item.title}" else item.title
+                holder.tvTitle.setTypeface(null, if (isSelected) Typeface.BOLD else Typeface.NORMAL)
+
+                if (item.subtitle.isNotBlank()) {
+                    holder.tvSub.text = item.subtitle
+                    holder.tvSub.visibility = View.VISIBLE
+                } else {
+                    holder.tvSub.visibility = View.GONE
+                }
+                holder.box.setOnClickListener {
                     sheet.dismiss()
                     onPicked(item)
                 }

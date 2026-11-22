@@ -2233,28 +2233,36 @@ class MainActivity : AppCompatActivity() {
             }
         })
         actions.add(SheetAction("归入同系列", "按名称匹配度排序，自动排除已在同系列的美化") {
-            val all = repo.getAllSources()
-            val others = all.filter { other ->
-                other.id != source.id &&
-                    (source.seriesKey.isBlank() || other.seriesKey != source.seriesKey)
-            }.sortedByDescending { other ->
-                com.stvault.app.core.SimilarityDeduplicator.computeNameSimilarity(source.name, other.name)
-            }.map { other ->
-                val pct = (com.stvault.app.core.SimilarityDeduplicator.computeNameSimilarity(source.name, other.name) * 100).toInt()
-                val sub = if (pct >= 45) "匹配度 $pct%" else other.variantTag
-                PickerItem(other.id, other.name, sub)
-            }
-            if (others.isEmpty()) {
-                toast("暂无其他可归入的美化")
-            } else {
-                VaultSheets.searchablePicker(this, "选择同系列美化", others) { picked ->
-                    val defaultSeries = source.seriesName.ifBlank { source.name }
-                    VaultSheets.input(this, "设置系列名称", hint = "输入系列名", initialValue = defaultSeries, confirmText = "归入") { sName ->
-                        if (sName.trim().isNotEmpty()) {
-                            val idsToMerge = (variants.map { it.id } + source.id + picked.id).distinct()
-                            repo.mergeThemeSeries(idsToMerge, sName.trim())
-                            toast("已归入「${sName.trim()}」系列")
-                            refreshVaultList()
+            lifecycleScope.launch {
+                val others = withContext(Dispatchers.Default) {
+                    val all = repo.getAllSources()
+                    val matcher = com.stvault.app.core.SimilarityDeduplicator.createNameMatcher(source.name)
+                    all.asSequence()
+                        .filter { other ->
+                            other.id != source.id &&
+                                (source.seriesKey.isBlank() || other.seriesKey != source.seriesKey)
+                        }
+                        .map { other -> other to matcher.score(other.name) }
+                        .sortedByDescending { it.second }
+                        .map { (other, sim) ->
+                            val pct = (sim * 100).toInt()
+                            val sub = if (pct >= 45) "匹配度 $pct%" else other.variantTag
+                            PickerItem(other.id, other.name, sub)
+                        }
+                        .toList()
+                }
+                if (others.isEmpty()) {
+                    toast("暂无其他可归入的美化")
+                } else {
+                    VaultSheets.searchablePicker(this@MainActivity, "选择同系列美化", others) { picked ->
+                        val defaultSeries = source.seriesName.ifBlank { source.name }
+                        VaultSheets.input(this@MainActivity, "设置系列名称", hint = "输入系列名", initialValue = defaultSeries, confirmText = "归入") { sName ->
+                            if (sName.trim().isNotEmpty()) {
+                                val idsToMerge = (variants.map { it.id } + source.id + picked.id).distinct()
+                                repo.mergeThemeSeries(idsToMerge, sName.trim())
+                                toast("已归入「${sName.trim()}」系列")
+                                refreshVaultList()
+                            }
                         }
                     }
                 }
@@ -2469,27 +2477,37 @@ class MainActivity : AppCompatActivity() {
     private fun showQuickMergeVersionPicker(module: String, firstId: String, firstName: String) {
         lifecycleScope.launch {
             val candidates = withContext(Dispatchers.IO) {
+                val matcher = com.stvault.app.core.SimilarityDeduplicator.createNameMatcher(firstName)
                 when (module) {
                     "characters" -> {
                         val curSeries = libRepo.getCharacterById(firstId)?.seriesKey.orEmpty()
                         libRepo.getAllCharacters()
+                            .asSequence()
                             .filter { it.id != firstId && (curSeries.isBlank() || it.seriesKey != curSeries) }
-                            .sortedByDescending { com.stvault.app.core.SimilarityDeduplicator.computeNameSimilarity(firstName, it.name) }
-                            .map { PickerItem(it.id, it.name, it.fileName) }
+                            .map { it to matcher.score(it.name) }
+                            .sortedByDescending { it.second }
+                            .map { (it, _) -> PickerItem(it.id, it.name, it.fileName) }
+                            .toList()
                     }
                     "worldbooks" -> {
                         val curSeries = libRepo.getWorldBookById(firstId)?.seriesKey.orEmpty()
                         libRepo.getAllWorldBooks()
+                            .asSequence()
                             .filter { it.id != firstId && (curSeries.isBlank() || it.seriesKey != curSeries) }
-                            .sortedByDescending { com.stvault.app.core.SimilarityDeduplicator.computeNameSimilarity(firstName, it.name) }
-                            .map { PickerItem(it.id, it.name, "${it.entryCount} 条目") }
+                            .map { it to matcher.score(it.name) }
+                            .sortedByDescending { it.second }
+                            .map { (it, _) -> PickerItem(it.id, it.name, "${it.entryCount} 条目") }
+                            .toList()
                     }
                     "presets" -> {
                         val curSeries = libRepo.getPresetById(firstId)?.seriesKey.orEmpty()
                         libRepo.getAllPresets()
+                            .asSequence()
                             .filter { it.id != firstId && (curSeries.isBlank() || it.seriesKey != curSeries) }
-                            .sortedByDescending { com.stvault.app.core.SimilarityDeduplicator.computeNameSimilarity(firstName, it.name) }
-                            .map { PickerItem(it.id, it.name, "启用 ${it.enabledPromptCount}/${it.promptCount}") }
+                            .map { it to matcher.score(it.name) }
+                            .sortedByDescending { it.second }
+                            .map { (it, _) -> PickerItem(it.id, it.name, "启用 ${it.enabledPromptCount}/${it.promptCount}") }
+                            .toList()
                     }
                     else -> emptyList()
                 }

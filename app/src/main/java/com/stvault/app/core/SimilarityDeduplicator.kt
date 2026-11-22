@@ -204,6 +204,34 @@ object SimilarityDeduplicator {
         return out
     }
 
+    private val EXT_RE = Regex("\\.(json|png|css|html|htm|txt|js)$")
+    private val BRACKET_RE = Regex("[(\\[【（][^)\\]】）]{1,18}[)\\]】）]")
+    private val VERSION_RE = Regex("\\b(v|ver|version|rev|r)[\\s._-]*\\d+(\\.\\d+)*[a-z]?\\b")
+    private val TAG_RE = Regex("(修复版|复活版|自改版|汉化版|测试版|正式版|新版|旧版|备份|副本|copy|fixed|mod|edit)")
+    private val NON_ALNUM_RE = Regex("[^\\p{L}\\p{Nd}]")
+
+    class NameMatcher internal constructor(
+        private val targetTrim: String,
+        private val targetStem: String,
+        private val targetBigrams: Set<String>
+    ) {
+        fun score(candidateName: String): Double {
+            if (targetTrim.equals(candidateName.trim(), ignoreCase = true)) return 1.0
+            if (targetStem.length < 2) return 0.0
+            val sb = normalizeStem(candidateName)
+            if (sb.length < 2) return 0.0
+            if (targetStem == sb) return 0.99
+            return diceSimilarity(targetBigrams, buildBigrams(sb))
+        }
+    }
+
+    fun createNameMatcher(targetName: String): NameMatcher {
+        val trim = targetName.trim()
+        val stem = normalizeStem(trim)
+        val bigrams = if (stem.length >= 2) buildBigrams(stem) else emptySet()
+        return NameMatcher(trim, stem, bigrams)
+    }
+
     fun computeNameSimilarity(a: String, b: String): Double {
         if (a.trim().equals(b.trim(), ignoreCase = true)) return 1.0
         val sa = normalizeStem(a)
@@ -216,14 +244,14 @@ object SimilarityDeduplicator {
     private fun normalizeStem(raw: String): String {
         var s = raw.trim().lowercase()
         // Strip file extensions
-        s = s.replace(Regex("\\.(json|png|css|html|htm|txt|js)$"), "")
+        s = EXT_RE.replace(s, "")
         // Strip bracketed annotations like (修复版), 【自改】, [v2]
-        s = s.replace(Regex("[(\\[【（][^)\\]】）]{1,18}[)\\]】）]"), " ")
+        s = BRACKET_RE.replace(s, " ")
         // Strip version markers like v1.2, V2, rev3, beta, final, 修复, 自改, 汉化, 备份
-        s = s.replace(Regex("\\b(v|ver|version|rev|r)[\\s._-]*\\d+(\\.\\d+)*[a-z]?\\b"), " ")
-        s = s.replace(Regex("(修复版|复活版|自改版|汉化版|测试版|正式版|新版|旧版|备份|副本|copy|fixed|mod|edit)"), " ")
+        s = VERSION_RE.replace(s, " ")
+        s = TAG_RE.replace(s, " ")
         // Keep only CJK, letters, and digits
-        s = s.replace(Regex("[^\\p{L}\\p{Nd}]"), "")
+        s = NON_ALNUM_RE.replace(s, "")
         return s
     }
 

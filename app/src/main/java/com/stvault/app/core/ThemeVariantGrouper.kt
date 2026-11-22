@@ -30,12 +30,14 @@ object ThemeVariantGrouper {
         '暗', '亮', '深', '浅', '宽', '窄', '日', '夜', '简', '繁', '透', '雾', '奶', '茶', '墨', '玄', '素'
     )
 
+    private val EXT_RE = Regex("\\.(json|css|html|htm|txt)$", RegexOption.IGNORE_CASE)
+    private val SPLIT_RE = Regex("[/\\-_·•\\s()（）\\[\\]【】]+")
+    private val NORM_KEY_RE = Regex("[\\s_\\-/·•()（）\\[\\]【】]+")
+
     fun extractDisplaySeriesName(rawName: String): String {
-        val cleaned = rawName.trim()
-            .replace(Regex("\\.(json|css|html|htm|txt)$", RegexOption.IGNORE_CASE), "")
-            .trim()
+        val cleaned = EXT_RE.replace(rawName.trim(), "").trim()
         if (cleaned.isEmpty()) return ""
-        val tokens = cleaned.split(Regex("[/\\-_·•\\s()（）\\[\\]【】]+")).filter { it.isNotBlank() }
+        val tokens = cleaned.split(SPLIT_RE).filter { it.isNotBlank() }
         if (tokens.size >= 2) {
             val baseParts = mutableListOf<String>()
             var hitVar = false
@@ -82,15 +84,13 @@ object ThemeVariantGrouper {
      *          "樱花玻璃-夜间粉" -> ("樱花玻璃", "夜间粉")
      */
     fun extractSeriesAndVariant(rawName: String): Pair<String, String> {
-        val cleaned = rawName.trim()
-            .replace(Regex("\\.(json|css|html|htm|txt)$", RegexOption.IGNORE_CASE), "")
-            .trim()
+        val cleaned = EXT_RE.replace(rawName.trim(), "").trim()
         if (cleaned.isEmpty()) return "" to ""
 
         val foundVariants = mutableListOf<String>()
 
         // 1. Split by common separators (/, -, _, space, ·, parentheses)
-        val tokens = cleaned.split(Regex("[/\\-_·•\\s()（）\\[\\]【】]+")).filter { it.isNotBlank() }
+        val tokens = cleaned.split(SPLIT_RE).filter { it.isNotBlank() }
         if (tokens.size >= 2) {
             val baseParts = mutableListOf<String>()
             for ((idx, tok) in tokens.withIndex()) {
@@ -175,8 +175,7 @@ object ThemeVariantGrouper {
     }
 
     fun normalizeKey(raw: String): String {
-        return raw.trim().lowercase()
-            .replace(Regex("[\\s_\\-/·•()（）\\[\\]【】]+"), "")
+        return NORM_KEY_RE.replace(raw.trim().lowercase(), "")
     }
 
     fun setPreferredVariant(ctx: Context, seriesKey: String, sourceId: String) {
