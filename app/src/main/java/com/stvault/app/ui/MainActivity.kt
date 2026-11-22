@@ -2581,6 +2581,14 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
+        if (variants.size > 1) {
+            actions.add(SheetAction("移出当前系列", "将当前变体从系列中拆出，恢复为独立美化") {
+                if (repo.detachThemeFromSeries(source.id)) {
+                    toast("已从系列中移出")
+                    refreshVaultList()
+                }
+            })
+        }
         actions.add(SheetAction("装入酒馆", "推送到 TT 酒馆，支持原版或图床修复版") {
             pushThemeToTavern(source)
         })

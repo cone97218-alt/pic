@@ -538,6 +538,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
         val cmds = loadQuickCommands()
         val active = getActiveQuickCommand()
         val items = mutableListOf(
+            PickerItem(id = "__PRESS_ENTER__", title = "发送当前输入框（回车）", subtitle = "直接触发回车键发送输入框里的内容/已选指令"),
             PickerItem(id = "__SEND_CUSTOM_TEXT__", title = "发送口令 / 文字", subtitle = "用原生输入框安全发送口令，不弹网页键盘")
         )
         cmds.forEach {
@@ -581,11 +582,19 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 )
             }
         ) { picked ->
-            if (picked.id == "__SEND_CUSTOM_TEXT__") {
-                showSendPasscodeDialog()
-            } else {
-                setActiveQuickCommand(picked.id)
-                sendDiscordCommand(picked.id)
+            when (picked.id) {
+                "__PRESS_ENTER__" -> {
+                    binding.webDiscord.evaluateJavascript(
+                        "(function(){ var l=document.querySelector('div[class*=\"chatLayerWrapper_\"]'); var b=(l&&l.querySelector('div[role=\"textbox\"][contenteditable=\"true\"]'))||document.querySelector('div[role=\"textbox\"][contenteditable=\"true\"]'); if(b) b.focus(); })();"
+                    ) {
+                        binding.webDiscord.postDelayed({ dispatchNativeKey(KeyEvent.KEYCODE_ENTER) }, 120L)
+                    }
+                }
+                "__SEND_CUSTOM_TEXT__" -> showSendPasscodeDialog()
+                else -> {
+                    setActiveQuickCommand(picked.id)
+                    sendDiscordCommand(picked.id)
+                }
             }
         }
     }
@@ -727,7 +736,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
                         var b2 = findVisibleBox();
                         var rawTxt = b2 ? (b2.textContent || '').trim() : '';
                         // If textbox still contains raw unparsed "/..." plain text and no slash pill exists, DO NOT press Enter (prevents AutoMod block!)
-                        var hasSlashPill = !!document.querySelector('[class*="optionPill_"], [class*="commandName_"], [data-slate-void="true"]');
+                        var hasSlashPill = !!document.querySelector('[class*="optionPill_"], [class*="commandName_"], [class*="pill_"], [data-slate-void="true"]');
                         if (hasSlashPill || (rawTxt.indexOf('/') !== 0)) {
                           if (window.STHoardBridge && window.STHoardBridge.requestNativeEnter) {
                             window.STHoardBridge.requestNativeEnter(180);

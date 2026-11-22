@@ -1171,6 +1171,34 @@ class VaultRepository private constructor(private val appContext: Context) {
      * series-subtraction + common-part removal + punctuation cleanup rules.
      * Returns Pair(updatedSeriesCount, updatedThemeCount).
      */
+    fun detachThemeFromSeries(sourceId: String): Boolean {
+        val changed = synchronized(lock) {
+            val cur = sourcesMap[sourceId] ?: return false
+            val oldKey = cur.seriesKey
+            sourcesMap[sourceId] = cur.copy(
+                seriesKey = "solo_${cur.id}",
+                seriesName = cur.name,
+                variantTag = ""
+            )
+            if (oldKey.isNotBlank()) {
+                val remaining = sourcesMap.values.filter { it.seriesKey == oldKey }
+                if (remaining.size == 1) {
+                    val last = remaining.first()
+                    sourcesMap[last.id] = last.copy(variantTag = "")
+                } else if (remaining.size >= 2) {
+                    val sName = remaining.first().seriesName.ifBlank { remaining.first().name }
+                    val derived = ThemeVariantGrouper.deriveVariantTags(sName, remaining.map { it.name })
+                    for ((idx, item) in remaining.withIndex()) {
+                        sourcesMap[item.id] = item.copy(variantTag = derived.getOrElse(idx) { "" })
+                    }
+                }
+            }
+            true
+        }
+        if (changed) saveIndex()
+        return changed
+    }
+
     fun recalculateAllThemeVariantTags(): Pair<Int, Int> {
         var seriesCount = 0
         var themeCount = 0
