@@ -13,6 +13,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.net.URLDecoder
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class DiscordSyncResult(
     val messagesChecked: Int = 0,
@@ -44,6 +45,7 @@ object InboxManager {
     private const val KEY_DC_LAST_MSG = "dc_last_message_id"
     private const val KEY_DC_LAST_SYNC_AT = "dc_last_sync_at"
     private const val KEY_DC_LAST_NOTE = "dc_last_sync_note"
+    private const val KEY_DC_AUTO_SYNC = "dc_auto_sync"
     private const val KEY_AUTO_TAG = "auto_tag_pending"
     private const val KEY_WATCH_DOWNLOAD = "watch_download"
     private const val KEY_WATCH_DISCORD_PICS = "watch_discord_pics"
@@ -54,8 +56,13 @@ object InboxManager {
     private const val MAX_FILE_BYTES = 45L * 1024L * 1024L
 
     private val URL_REGEX = Regex("""https?://[^\s<>"'`)\]}]+""")
+    private val HASHTAG_REGEX = Regex("""#([^\s#\\,，;；]{1,28})""")
     private val DIRECT_EXTS = setOf("png", "json", "zip", "css", "js", "html", "htm", "txt")
     private val LOCAL_EXTS = setOf("png", "json", "zip", "css", "js", "html", "htm")
+
+    private val discordSyncLock = AtomicBoolean(false)
+    @Volatile
+    private var lastAutoSyncAttemptMs = 0L
 
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -96,6 +103,20 @@ object InboxManager {
 
     fun resetDiscordCursor(context: Context) {
         prefs(context).edit().remove(KEY_DC_LAST_MSG).apply()
+    }
+
+    fun isDiscordAutoSyncEnabled(context: Context): Boolean = prefs(context).getBoolean(KEY_DC_AUTO_SYNC, true)
+    fun setDiscordAutoSyncEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_DC_AUTO_SYNC, enabled).apply()
+    }
+
+    fun shouldRunAutoSync(context: Context, cooldownMs: Long = 30_000L): Boolean {
+        if (!isDiscordConfigured(context) || !isDiscordAutoSyncEnabled(context)) return false
+        if (discordSyncLock.get()) return false
+        val now = System.currentTimeMillis()
+        if (now - lastAutoSyncAttemptMs < cooldownMs) return false
+        lastAutoSyncAttemptMs = now
+        return true
     }
 
     fun isAutoTagEnabled(context: Context): Boolean = prefs(context).getBoolean(KEY_AUTO_TAG, true)
@@ -166,13 +187,43 @@ object InboxManager {
         val url: String,
         val fileName: String,
         val sizeHint: Long = 0L,
-        val allowGenericHtml: Boolean = false
+        val allowGenericHtml: Boolean = false,
+        val extraTags: List<String> = emptyList()
     )
+
+    private fun extractHashTags(text: String): List<String> {
+        if (text.isBlank()) return emptyList()
+        // Ignore URL fragments (http://...#anchor) by stripping URLs first
+        val noUrls = URL_REGEX.replace(text, " ")
+        return HASHTAG_REGEX.findAll(noUrls)
+            .map { it.groupValues[1].trim('/') }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .take(5)
+            .toList()
+    }
 
     fun syncDiscordChannel(
         context: Context,
         fullResync: Boolean = false,
+        onDownloadStart: (Int) -> Unit = {},
         onProgress: (String) -> Unit = {}
+    ): DiscordSyncResult {
+        if (!discordSyncLock.compareAndSet(false, true)) {
+            return DiscordSyncResult(error = "正在同步中，请稍候")
+        }
+        return try {
+            syncDiscordChannelLocked(context, fullResync, onDownloadStart, onProgress)
+        } finally {
+            discordSyncLock.set(false)
+        }
+    }
+
+    private fun syncDiscordChannelLocked(
+        context: Context,
+        fullResync: Boolean,
+        onDownloadStart: (Int) -> Unit,
+        onProgress: (String) -> Unit
     ): DiscordSyncResult {
         val token = getBotToken(context)
         val channelId = getChannelId(context)
@@ -244,7 +295,7 @@ object InboxManager {
         // Extract all candidate files from messages, forwarded message_snapshots, embeds & text links
         val candidates = LinkedHashMap<String, CandidateFile>()
 
-        fun collectFromMessageLike(obj: JSONObject) {
+        fun collectFromMessageLike(obj: JSONObject, msgExtraTags: List<String>) {
             // 1. Native attachments
             val atts = obj.optJSONArray("attachments")
             if (atts != null) {
@@ -255,7 +306,10 @@ object InboxManager {
                     val fn = att.optString("filename").ifBlank { inferFileNameFromUrl(u, null) }
                     val sz = att.optLong("size", 0L)
                     val dedupKey = normalizeUrlDedupKey(u)
-                    candidates.putIfAbsent(dedupKey, CandidateFile(u, fn, sz, allowGenericHtml = fn.endsWith(".html", true) || fn.endsWith(".htm", true)))
+                    candidates.putIfAbsent(
+                        dedupKey,
+                        CandidateFile(u, fn, sz, allowGenericHtml = fn.endsWith(".html", true) || fn.endsWith(".htm", true), extraTags = msgExtraTags)
+                    )
                 }
             }
             // 2. Links inside text content
@@ -263,7 +317,7 @@ object InboxManager {
             if (content.isNotBlank()) {
                 for (u in extractDownloadableUrls(content, strictOnly = true)) {
                     val dedupKey = normalizeUrlDedupKey(u)
-                    candidates.putIfAbsent(dedupKey, CandidateFile(u, inferFileNameFromUrl(u, null)))
+                    candidates.putIfAbsent(dedupKey, CandidateFile(u, inferFileNameFromUrl(u, null), extraTags = msgExtraTags))
                 }
             }
             // 3. Embeds (some bots attach card PNGs / files via embeds)
@@ -273,16 +327,16 @@ object InboxManager {
                     val emb = embeds.optJSONObject(i) ?: continue
                     val embUrl = emb.optString("url", "")
                     if (embUrl.isNotBlank() && isDownloadableUrl(embUrl)) {
-                        candidates.putIfAbsent(normalizeUrlDedupKey(embUrl), CandidateFile(embUrl, inferFileNameFromUrl(embUrl, null)))
+                        candidates.putIfAbsent(normalizeUrlDedupKey(embUrl), CandidateFile(embUrl, inferFileNameFromUrl(embUrl, null), extraTags = msgExtraTags))
                     }
                     val imgUrl = emb.optJSONObject("image")?.optString("url", "").orEmpty()
                     if (imgUrl.isNotBlank() && isDownloadableUrl(imgUrl)) {
-                        candidates.putIfAbsent(normalizeUrlDedupKey(imgUrl), CandidateFile(imgUrl, inferFileNameFromUrl(imgUrl, null)))
+                        candidates.putIfAbsent(normalizeUrlDedupKey(imgUrl), CandidateFile(imgUrl, inferFileNameFromUrl(imgUrl, null), extraTags = msgExtraTags))
                     }
                     val desc = emb.optString("description", "")
                     if (desc.isNotBlank()) {
                         for (u in extractDownloadableUrls(desc, strictOnly = true)) {
-                            candidates.putIfAbsent(normalizeUrlDedupKey(u), CandidateFile(u, inferFileNameFromUrl(u, null)))
+                            candidates.putIfAbsent(normalizeUrlDedupKey(u), CandidateFile(u, inferFileNameFromUrl(u, null), extraTags = msgExtraTags))
                         }
                     }
                 }
@@ -298,18 +352,23 @@ object InboxManager {
                 maxSnowflakeId = idNum
                 maxSnowflakeStr = idStr
             }
-            collectFromMessageLike(msg)
+            // Parse optional #tag / #作者名 written by the user in the forwarding comment
+            val userTags = extractHashTags(msg.optString("content", ""))
+            collectFromMessageLike(msg, userTags)
             // Forwarded message snapshots (Discord Forward feature)
             val snapshots = msg.optJSONArray("message_snapshots")
             if (snapshots != null) {
                 for (i in 0 until snapshots.length()) {
                     val snapMsg = snapshots.optJSONObject(i)?.optJSONObject("message") ?: continue
-                    collectFromMessageLike(snapMsg)
+                    collectFromMessageLike(snapMsg, userTags)
                 }
             }
         }
 
         val list = candidates.values.toList()
+        if (list.isNotEmpty()) {
+            onDownloadStart(list.size)
+        }
         val summary = SmartImportSummary()
         val autoTag = getEffectiveAutoTag(context)
         var fetched = 0
@@ -332,6 +391,7 @@ object InboxManager {
                 fileName = dl.second,
                 sourceRef = "discord://$channelId/${dl.second}",
                 autoTag = autoTag,
+                extraTags = item.extraTags,
                 summary = summary
             )
         }

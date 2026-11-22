@@ -546,7 +546,7 @@ class VaultRepository private constructor(private val appContext: Context) {
         fileName: String,
         folderName: String = "导入",
         deferSave: Boolean = false,
-        initialCategory: String = ""
+        initialCategories: List<String> = emptyList()
     ): Pair<Int, Boolean>? {
         if (rawText.isBlank()) return null
         val (urls, isJson) = UrlExtractor.extract(rawText)
@@ -561,7 +561,7 @@ class VaultRepository private constructor(private val appContext: Context) {
                 rawContent = rawText,
                 folderName = folderName,
                 allowEmptyUrls = true,
-                initialCategory = initialCategory
+                initialCategories = initialCategories
             )
         }
         if (!deferSave) saveIndex()
@@ -658,7 +658,7 @@ class VaultRepository private constructor(private val appContext: Context) {
         rawContent: String = "",
         folderName: String = "",
         allowEmptyUrls: Boolean = false,
-        initialCategory: String = ""
+        initialCategories: List<String> = emptyList()
     ): Pair<Int, Boolean> {
         if (urls.isEmpty() && !allowEmptyUrls) return 0 to false
         val sourceId = sha1Short(if (docUri.isNotBlank()) docUri else name)
@@ -703,7 +703,7 @@ class VaultRepository private constructor(private val appContext: Context) {
         val autoSeriesName = ThemeVariantGrouper.extractDisplaySeriesName(displayName)
         val initCats = buildList {
             legacySameName?.categories?.let { addAll(it) }
-            if (initialCategory.isNotBlank()) add(initialCategory)
+            initialCategories.forEach { c -> if (c.isNotBlank()) add(c.trim()) }
         }.distinct()
         sourcesMap[targetId] = SourceRecord(
             id = targetId,

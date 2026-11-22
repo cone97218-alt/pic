@@ -424,9 +424,43 @@ class MainActivity : AppCompatActivity() {
         refreshActiveWorkspace()
         libRepo.refreshCounts()
         binding.drawer.tvDrawerInboxStatus.text = if (com.stvault.app.core.InboxManager.isDiscordConfigured(this)) {
-            "DC 已配"
+            if (com.stvault.app.core.InboxManager.isDiscordAutoSyncEnabled(this)) "DC 自动" else "DC 已配"
         } else {
             "DC · 本地"
+        }
+        maybeAutoSyncDiscordInbox()
+    }
+
+    private fun maybeAutoSyncDiscordInbox() {
+        if (!com.stvault.app.core.InboxManager.shouldRunAutoSync(this)) return
+        lifecycleScope.launch(Dispatchers.IO) {
+            var islandShown = false
+            val res = com.stvault.app.core.InboxManager.syncDiscordChannel(
+                context = this@MainActivity,
+                fullResync = false,
+                onDownloadStart = { total ->
+                    islandShown = true
+                    runOnUiThread { showIsland("收件箱同步中（共 $total 个附件）...") }
+                },
+                onProgress = { msg ->
+                    if (islandShown) {
+                        runOnUiThread { updateIsland(msg) }
+                    }
+                }
+            )
+            withContext(Dispatchers.Main) {
+                if (islandShown) {
+                    if (res.error != null) {
+                        finishIsland("收件箱同步中断")
+                    } else if (res.summary.totalImported > 0) {
+                        finishIsland("收件箱${res.summary.formatMessage()}")
+                        refreshActiveWorkspace()
+                        libRepo.refreshCounts()
+                    } else {
+                        finishIsland("收件箱：${res.summary.formatMessage()}")
+                    }
+                }
+            }
         }
     }
 

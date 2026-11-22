@@ -35,6 +35,7 @@ class InboxActivity : AppCompatActivity() {
         // Restore saved config
         binding.etDcToken.setText(InboxManager.getBotToken(this))
         binding.etDcChannelId.setText(InboxManager.getChannelId(this))
+        binding.swDcAutoSync.isChecked = InboxManager.isDiscordAutoSyncEnabled(this)
         binding.cbWatchDownload.isChecked = InboxManager.isWatchDownload(this)
         binding.cbWatchDiscordPics.isChecked = InboxManager.isWatchDiscordPics(this)
         binding.swDeleteAfterImport.isChecked = InboxManager.isDeleteAfterImport(this)
@@ -43,6 +44,9 @@ class InboxActivity : AppCompatActivity() {
         refreshStatusUi()
 
         // Switches & checkboxes
+        binding.swDcAutoSync.setOnCheckedChangeListener { _, checked ->
+            InboxManager.setDiscordAutoSyncEnabled(this, checked)
+        }
         binding.cbWatchDownload.setOnCheckedChangeListener { _, checked ->
             InboxManager.setWatchDownload(this, checked)
         }
