@@ -249,11 +249,25 @@ class ResourceDetailActivity : AppCompatActivity() {
     ) {
         if (versions.size <= 1) {
             binding.btnDetailVersion.visibility = View.GONE
+            binding.btnDetailDiff.visibility = View.GONE
             return
         }
         val cur = versions.firstOrNull { it.first == currentId } ?: versions.first()
         binding.btnDetailVersion.visibility = View.VISIBLE
         binding.btnDetailVersion.text = "${cur.second} ▾"
+        binding.btnDetailDiff.visibility = View.VISIBLE
+        binding.btnDetailDiff.setOnClickListener {
+            val sKey = when (resType) {
+                TYPE_CHARACTER -> currentCharacter?.seriesKey.orEmpty()
+                TYPE_WORLDBOOK -> currentWorldBook?.seriesKey.orEmpty()
+                TYPE_PRESET -> currentPreset?.seriesKey.orEmpty()
+                else -> ""
+            }
+            if (sKey.isNotEmpty()) {
+                val otherId = versions.firstOrNull { it.first != currentId }?.first.orEmpty()
+                VersionDiffActivity.open(this, resType, sKey, currentId, otherId)
+            }
+        }
         binding.btnDetailVersion.setOnClickListener {
             val actions = versions.map { (id, ver, fname) ->
                 SheetAction(

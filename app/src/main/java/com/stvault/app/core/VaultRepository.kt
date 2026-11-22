@@ -955,6 +955,21 @@ class VaultRepository private constructor(private val appContext: Context) {
         return deleted
     }
 
+    fun renameSource(id: String, newName: String): Boolean {
+        val clean = newName.trim()
+        if (clean.isEmpty()) return false
+        synchronized(lock) {
+            val cur = sourcesMap[id] ?: return false
+            sourcesMap[id] = cur.copy(name = clean)
+        }
+        saveIndex()
+        return true
+    }
+
+    fun getAllSources(): List<SourceRecord> = synchronized(lock) {
+        sourcesMap.values.sortedByDescending { it.scannedAt }
+    }
+
     fun searchSourceRows(
         query: String,
         filter: String = "all",

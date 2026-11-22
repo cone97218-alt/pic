@@ -438,7 +438,7 @@ class MainActivity : AppCompatActivity() {
             onClick = { source -> showSourceDetailDialog(source) },
             onPreviewClick = { source -> ThemePreviewActivity.open(this, source.id) },
             onDeleteClick = { source -> confirmDeleteSource(source) },
-            onLongClick = { source -> showThemeCategoryAssignDialog(source) },
+            onLongClick = { source -> showThemeActionMenu(source) },
             onToggleSelect = { id -> toggleBatchSelection(id) }
         )
         urlsAdapter = UrlsAdapter(
@@ -479,7 +479,8 @@ class MainActivity : AppCompatActivity() {
         worldBooksAdapter = WorldBooksAdapter(
             onClick = { w -> ResourceDetailActivity.open(this, ResourceDetailActivity.TYPE_WORLDBOOK, w.id) },
             onDeleteClick = { w -> confirmDeleteWorldBook(w) },
-            onToggleSelect = { id -> toggleBatchSelection(id) }
+            onToggleSelect = { id -> toggleBatchSelection(id) },
+            onLongClick = { w -> showWorldBookActionMenu(w) }
         )
         binding.wsWorldBooks.rvWorldBooks.adapter = worldBooksAdapter
         buildSimpleChips(
@@ -496,7 +497,8 @@ class MainActivity : AppCompatActivity() {
         presetsAdapter = PresetsAdapter(
             onClick = { p -> ResourceDetailActivity.open(this, ResourceDetailActivity.TYPE_PRESET, p.id) },
             onDeleteClick = { p -> confirmDeletePreset(p) },
-            onToggleSelect = { id -> toggleBatchSelection(id) }
+            onToggleSelect = { id -> toggleBatchSelection(id) },
+            onLongClick = { p -> showPresetActionMenu(p) }
         )
         binding.wsPresets.rvPresets.adapter = presetsAdapter
 
@@ -505,7 +507,8 @@ class MainActivity : AppCompatActivity() {
         componentsAdapter = ComponentsAdapter(
             onClick = { c -> showComponentDetailDialog(c) },
             onDeleteClick = { c -> confirmDeleteComponent(c) },
-            onToggleSelect = { id -> toggleBatchSelection(id) }
+            onToggleSelect = { id -> toggleBatchSelection(id) },
+            onLongClick = { c -> showComponentActionMenu(c) }
         )
         binding.wsComponents.rvComponents.adapter = componentsAdapter
         buildSimpleChips(
@@ -553,6 +556,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private var drawerSearchJob: Job? = null
+    private lateinit var drawerSearchAdapter: DrawerGlobalSearchAdapter
+
     private fun setupDrawer() {
         binding.btnOpenDrawer.setOnClickListener {
             binding.drawerLayout.openDrawer(GravityCompat.START)
@@ -562,10 +568,63 @@ class MainActivity : AppCompatActivity() {
         binding.drawer.drawerItemWorldBooks.setOnClickListener { switchWorkspace("worldbooks") }
         binding.drawer.drawerItemPresets.setOnClickListener { switchWorkspace("presets") }
         binding.drawer.drawerItemComponents.setOnClickListener { switchWorkspace("components") }
+        binding.drawer.drawerItemDedup.setOnClickListener {
+            binding.drawerLayout.closeDrawer(GravityCompat.START)
+            DuplicateCleanerActivity.open(this)
+        }
         binding.drawer.drawerItemSettings.setOnClickListener {
             binding.drawerLayout.closeDrawer(GravityCompat.START)
             SettingsActivity.open(this)
         }
+
+        // Global Cross-Module Search inside Drawer
+        drawerSearchAdapter = DrawerGlobalSearchAdapter { hit ->
+            binding.drawerLayout.closeDrawer(GravityCompat.START)
+            when (hit.module) {
+                "characters" -> ResourceDetailActivity.open(this, ResourceDetailActivity.TYPE_CHARACTER, hit.id)
+                "worldbooks" -> ResourceDetailActivity.open(this, ResourceDetailActivity.TYPE_WORLDBOOK, hit.id)
+                "presets" -> ResourceDetailActivity.open(this, ResourceDetailActivity.TYPE_PRESET, hit.id)
+                "themes" -> repo.getSourceById(hit.id)?.let { showSourceDetailDialog(it) }
+                "components" -> libRepo.getComponentById(hit.id)?.let { showComponentDetailDialog(it) }
+            }
+        }
+        binding.drawer.rvDrawerGlobalSearch.layoutManager = LinearLayoutManager(this)
+        binding.drawer.rvDrawerGlobalSearch.adapter = drawerSearchAdapter
+
+        binding.drawer.btnDrawerSearchClear.setOnClickListener {
+            binding.drawer.etDrawerGlobalSearch.setText("")
+        }
+        binding.drawer.etDrawerGlobalSearch.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                val q = s?.toString()?.trim().orEmpty()
+                binding.drawer.btnDrawerSearchClear.visibility = if (q.isNotEmpty()) View.VISIBLE else View.GONE
+                if (q.isEmpty()) {
+                    drawerSearchJob?.cancel()
+                    binding.drawer.drawerNavGroup.visibility = View.VISIBLE
+                    binding.drawer.rvDrawerGlobalSearch.visibility = View.GONE
+                    binding.drawer.tvDrawerSearchEmpty.visibility = View.GONE
+                    return
+                }
+                binding.drawer.drawerNavGroup.visibility = View.GONE
+                drawerSearchJob?.cancel()
+                drawerSearchJob = lifecycleScope.launch {
+                    delay(180)
+                    val hits = withContext(Dispatchers.IO) {
+                        libRepo.searchGlobal(q, repo)
+                    }
+                    drawerSearchAdapter.submit(hits)
+                    if (hits.isEmpty()) {
+                        binding.drawer.tvDrawerSearchEmpty.visibility = View.VISIBLE
+                        binding.drawer.rvDrawerGlobalSearch.visibility = View.GONE
+                    } else {
+                        binding.drawer.tvDrawerSearchEmpty.visibility = View.GONE
+                        binding.drawer.rvDrawerGlobalSearch.visibility = View.VISIBLE
+                    }
+                }
+            }
+        })
     }
 
     private fun switchWorkspace(workspace: String) {
@@ -2041,15 +2100,170 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun showThemeActionMenu(source: SourceRecord) {
+        VaultSheets.actionList(
+            ctx = this,
+            title = source.name.substringAfterLast('/'),
+            actions = listOf(
+                SheetAction("重命名", "修改显示名称") {
+                    showRenameDialog("重命名美化", source.name) { newName ->
+                        if (repo.renameSource(source.id, newName)) {
+                            toast("已重命名")
+                            refreshVaultList()
+                        }
+                    }
+                },
+                SheetAction("设置分类标签", "多选 1~3 级分类") { showThemeCategoryAssignDialog(source) },
+                SheetAction("删除美化", destructive = true) { confirmDeleteSource(source) }
+            )
+        )
+    }
+
     private fun showCharacterActionMenu(c: CharacterRecord) {
         VaultSheets.actionList(
             ctx = this,
             title = c.name,
             actions = listOf(
+                SheetAction("重命名", "修改角色卡显示名称") {
+                    showRenameDialog("重命名角色卡", c.name) { newName ->
+                        if (libRepo.renameCharacter(c.id, newName)) {
+                            toast("已重命名")
+                            refreshCharactersList()
+                        }
+                    }
+                },
                 SheetAction("设置分类标签", "多选 1~3 级分类") { showCharacterCategoryAssignDialog(c) },
+                SheetAction("合并为同作品版本", "与另一张角色卡归为不同版本") {
+                    showQuickMergeVersionPicker("characters", c.id, c.name)
+                },
                 SheetAction("删除角色卡", destructive = true) { confirmDeleteCharacter(c) }
             )
         )
+    }
+
+    private fun showWorldBookActionMenu(w: WorldBookRecord) {
+        VaultSheets.actionList(
+            ctx = this,
+            title = w.name,
+            actions = listOf(
+                SheetAction("重命名", "修改世界书显示名称") {
+                    showRenameDialog("重命名世界书", w.name) { newName ->
+                        if (libRepo.renameWorldBook(w.id, newName)) {
+                            toast("已重命名")
+                            refreshWorldBooksList()
+                        }
+                    }
+                },
+                SheetAction("合并为同作品版本", "与另一本世界书归为不同版本") {
+                    showQuickMergeVersionPicker("worldbooks", w.id, w.name)
+                },
+                SheetAction("删除世界书", destructive = true) { confirmDeleteWorldBook(w) }
+            )
+        )
+    }
+
+    private fun showPresetActionMenu(p: PresetRecord) {
+        VaultSheets.actionList(
+            ctx = this,
+            title = p.name,
+            actions = listOf(
+                SheetAction("重命名", "修改预设显示名称") {
+                    showRenameDialog("重命名预设", p.name) { newName ->
+                        if (libRepo.renamePreset(p.id, newName)) {
+                            toast("已重命名")
+                            refreshPresetsList()
+                        }
+                    }
+                },
+                SheetAction("合并为同作品版本", "与另一个预设归为同一预设的不同版本") {
+                    showQuickMergeVersionPicker("presets", p.id, p.name)
+                },
+                SheetAction("删除预设", destructive = true) { confirmDeletePreset(p) }
+            )
+        )
+    }
+
+    private fun showComponentActionMenu(comp: ComponentRecord) {
+        VaultSheets.actionList(
+            ctx = this,
+            title = comp.name,
+            actions = listOf(
+                SheetAction("重命名", "修改组件显示名称") {
+                    showRenameDialog("重命名组件", comp.name) { newName ->
+                        if (libRepo.renameComponent(comp.id, newName)) {
+                            toast("已重命名")
+                            refreshComponentsList()
+                        }
+                    }
+                },
+                SheetAction("关联宿主", "关联到角色卡 / 预设 / 世界书 / 美化") { showLinkComponentDialog(comp) },
+                SheetAction("删除组件", destructive = true) { confirmDeleteComponent(comp) }
+            )
+        )
+    }
+
+    private fun showRenameDialog(title: String, currentName: String, onConfirm: (String) -> Unit) {
+        VaultSheets.input(
+            ctx = this,
+            title = title,
+            hint = "输入新名称",
+            initialValue = currentName,
+            confirmText = "保存"
+        ) { newName ->
+            val clean = newName.trim()
+            if (clean.isEmpty()) {
+                toast("名称不能为空")
+            } else {
+                onConfirm(clean)
+            }
+        }
+    }
+
+    private fun showQuickMergeVersionPicker(module: String, firstId: String, firstName: String) {
+        lifecycleScope.launch {
+            val candidates = withContext(Dispatchers.IO) {
+                when (module) {
+                    "characters" -> libRepo.getAllCharacters().filter { it.id != firstId }.map { PickerItem(it.id, it.name, it.fileName) }
+                    "worldbooks" -> libRepo.getAllWorldBooks().filter { it.id != firstId }.map { PickerItem(it.id, it.name, "${it.entryCount} 条目") }
+                    "presets" -> libRepo.getAllPresets().filter { it.id != firstId }.map { PickerItem(it.id, it.name, "启用 ${it.enabledPromptCount}/${it.promptCount}") }
+                    else -> emptyList()
+                }
+            }
+            if (candidates.isEmpty()) {
+                toast("当前没有其他可合并的项目")
+                return@launch
+            }
+            VaultSheets.searchablePicker(
+                ctx = this@MainActivity,
+                title = "选择要与「$firstName」合并的另一版本",
+                items = candidates
+            ) { picked ->
+                VaultSheets.input(
+                    ctx = this@MainActivity,
+                    title = "设置版本组名称",
+                    message = "合并后列表仅显示最新版，进入详情页可随时切换版本并点「对比」查看差异。",
+                    hint = "输入作品分组名称",
+                    initialValue = firstName,
+                    confirmText = "合并"
+                ) { groupName ->
+                    val clean = groupName.trim()
+                    if (clean.isEmpty()) return@input
+                    lifecycleScope.launch {
+                        withContext(Dispatchers.IO) {
+                            val ids = listOf(firstId, picked.id)
+                            when (module) {
+                                "characters" -> libRepo.mergeCharacterVersions(ids, clean)
+                                "worldbooks" -> libRepo.mergeWorldBookVersions(ids, clean)
+                                "presets" -> libRepo.mergePresetVersions(ids, clean)
+                                else -> Unit
+                            }
+                        }
+                        toast("已合并为「$clean」的不同版本")
+                        refreshActiveWorkspace()
+                    }
+                }
+            }
+        }
     }
 
     private fun showCharacterCategoryAssignDialog(c: CharacterRecord) {
@@ -2611,6 +2825,82 @@ class MainActivity : AppCompatActivity() {
                 toast("分享导入失败：${e.message}")
             }
         }
+    }
+
+    private inner class DrawerGlobalSearchAdapter(
+        private val onHitClick: (ResourceLibraryRepository.GlobalSearchHit) -> Unit
+    ) : androidx.recyclerview.widget.RecyclerView.Adapter<DrawerGlobalSearchAdapter.VH>() {
+
+        private var hits: List<ResourceLibraryRepository.GlobalSearchHit> = emptyList()
+
+        fun submit(list: List<ResourceLibraryRepository.GlobalSearchHit>) {
+            hits = list
+            notifyDataSetChanged()
+        }
+
+        private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+        private fun col(res: Int): Int = ContextCompat.getColor(this@MainActivity, res)
+
+        override fun onCreateViewHolder(parent: android.view.ViewGroup, viewType: Int): VH {
+            val row = android.widget.LinearLayout(this@MainActivity).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+                layoutParams = androidx.recyclerview.widget.RecyclerView.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
+            return VH(row)
+        }
+
+        override fun onBindViewHolder(holder: VH, position: Int) {
+            val h = hits[position]
+            val row = holder.row
+            row.removeAllViews()
+
+            val top = android.widget.LinearLayout(this@MainActivity).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+            }
+            top.addView(TextView(this@MainActivity).apply {
+                text = h.badge
+                setTextColor(col(R.color.text_muted))
+                setBackgroundResource(R.drawable.bg_pill_accent)
+                textSize = 10f
+                setPadding(dp(6), dp(1), dp(6), dp(1))
+            })
+            top.addView(TextView(this@MainActivity).apply {
+                text = "  ${h.title}"
+                setTextColor(col(R.color.text_primary))
+                textSize = 13f
+                setTypeface(null, android.graphics.Typeface.BOLD)
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                )
+            })
+            row.addView(top)
+
+            if (h.subtitle.isNotEmpty()) {
+                row.addView(TextView(this@MainActivity).apply {
+                    text = h.subtitle
+                    setTextColor(col(R.color.text_muted))
+                    textSize = 11f
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(2) }
+                })
+            }
+
+            row.setOnClickListener { onHitClick(h) }
+        }
+
+        override fun getItemCount(): Int = hits.size
+        inner class VH(val row: android.widget.LinearLayout) : androidx.recyclerview.widget.RecyclerView.ViewHolder(row)
     }
 
     private fun toast(msg: String) {

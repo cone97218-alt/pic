@@ -54,6 +54,14 @@
             android:exported="false" />
 
         <activity
+            android:name=".ui.VersionDiffActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".ui.DuplicateCleanerActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".ui.ThemePreviewActivity"
             android:exported="false" />
 

@@ -274,6 +274,153 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         saveComponentsIndex()
     }
 
+    // ==================== RENAME & GLOBAL ACCESS ====================
+
+    fun renameCharacter(id: String, newName: String): Boolean {
+        val clean = newName.trim()
+        if (clean.isEmpty()) return false
+        synchronized(lock) {
+            val cur = charactersMap[id] ?: return false
+            charactersMap[id] = cur.copy(name = clean)
+        }
+        saveCharactersIndex()
+        return true
+    }
+
+    fun renameWorldBook(id: String, newName: String): Boolean {
+        val clean = newName.trim()
+        if (clean.isEmpty()) return false
+        synchronized(lock) {
+            val cur = worldBooksMap[id] ?: return false
+            worldBooksMap[id] = cur.copy(name = clean)
+        }
+        saveWorldBooksIndex()
+        return true
+    }
+
+    fun renamePreset(id: String, newName: String): Boolean {
+        val clean = newName.trim()
+        if (clean.isEmpty()) return false
+        synchronized(lock) {
+            val cur = presetsMap[id] ?: return false
+            presetsMap[id] = cur.copy(name = clean)
+        }
+        savePresetsIndex()
+        return true
+    }
+
+    fun renameComponent(id: String, newName: String): Boolean {
+        val clean = newName.trim()
+        if (clean.isEmpty()) return false
+        synchronized(lock) {
+            val cur = componentsMap[id] ?: return false
+            componentsMap[id] = cur.copy(name = clean)
+        }
+        saveComponentsIndex()
+        return true
+    }
+
+    fun getAllCharacters(): List<CharacterRecord> = synchronized(lock) {
+        charactersMap.values.sortedByDescending { it.addedAt }
+    }
+
+    fun getAllWorldBooks(): List<WorldBookRecord> = synchronized(lock) {
+        worldBooksMap.values.sortedByDescending { it.addedAt }
+    }
+
+    fun getAllPresets(): List<PresetRecord> = synchronized(lock) {
+        presetsMap.values.sortedByDescending { it.addedAt }
+    }
+
+    fun getAllComponents(): List<ComponentRecord> = synchronized(lock) {
+        componentsMap.values.sortedByDescending { it.addedAt }
+    }
+
+    data class GlobalSearchHit(
+        val module: String, // "themes" | "characters" | "worldbooks" | "presets" | "components"
+        val id: String,
+        val title: String,
+        val subtitle: String,
+        val badge: String
+    )
+
+    fun searchGlobal(query: String, vaultRepo: VaultRepository): List<GlobalSearchHit> {
+        val q = query.trim().lowercase()
+        if (q.isEmpty()) return emptyList()
+        val hits = mutableListOf<GlobalSearchHit>()
+
+        // 1. Themes
+        for (s in vaultRepo.getAllSources()) {
+            if (s.name.lowercase().contains(q) ||
+                s.fileName.lowercase().contains(q) ||
+                s.categories.any { it.lowercase().contains(q) }
+            ) {
+                hits.add(GlobalSearchHit("themes", s.id, s.name, "外链图 ${s.urls.size}", "美化"))
+                if (hits.size >= 60) return hits
+            }
+        }
+
+        // 2. Characters
+        for (c in getAllCharacters()) {
+            if (c.name.lowercase().contains(q) ||
+                c.fileName.lowercase().contains(q) ||
+                c.creator.lowercase().contains(q) ||
+                c.tags.any { it.lowercase().contains(q) } ||
+                c.categories.any { it.lowercase().contains(q) }
+            ) {
+                val sub = c.creator.ifBlank { c.fileName }
+                hits.add(GlobalSearchHit("characters", c.id, c.name, sub, "角色卡"))
+                if (hits.size >= 60) return hits
+            }
+        }
+
+        // 3. WorldBooks (name + entry keys/titles when query >= 2 chars)
+        for (w in getAllWorldBooks()) {
+            var matchedReason = ""
+            if (w.name.lowercase().contains(q) || w.fileName.lowercase().contains(q)) {
+                matchedReason = "${w.entryCount} 条目"
+            } else if (q.length >= 2) {
+                val parsed = parseWorldBookDetail(w)
+                val entry = parsed?.entries?.firstOrNull { e ->
+                    e.title.lowercase().contains(q) || e.keys.any { it.lowercase().contains(q) }
+                }
+                if (entry != null) {
+                    matchedReason = "命中条目：${entry.title.ifBlank { entry.keys.firstOrNull().orEmpty() }}"
+                }
+            }
+            if (matchedReason.isNotEmpty()) {
+                hits.add(GlobalSearchHit("worldbooks", w.id, w.name, matchedReason, "世界书"))
+                if (hits.size >= 60) return hits
+            }
+        }
+
+        // 4. Presets
+        for (p in getAllPresets()) {
+            if (p.name.lowercase().contains(q) || p.fileName.lowercase().contains(q)) {
+                hits.add(GlobalSearchHit("presets", p.id, p.name, "启用 ${p.enabledPromptCount}/${p.promptCount}", "预设"))
+                if (hits.size >= 60) return hits
+            }
+        }
+
+        // 5. Components
+        for (comp in getAllComponents()) {
+            if (comp.name.lowercase().contains(q) ||
+                comp.fileName.lowercase().contains(q) ||
+                comp.summary.lowercase().contains(q)
+            ) {
+                val badge = when (comp.type) {
+                    "helper" -> "酒馆助手"
+                    "qr" -> "QR"
+                    else -> "正则"
+                }
+                hits.add(GlobalSearchHit("components", comp.id, comp.name, comp.summary, badge))
+                if (hits.size >= 60) return hits
+            }
+        }
+
+        return hits
+    }
+
     fun getVersionsForCharacter(seriesKey: String): List<CharacterRecord> = synchronized(lock) {
         if (seriesKey.isBlank()) return emptyList()
         charactersMap.values.filter { it.seriesKey == seriesKey }.sortedByDescending { it.addedAt }

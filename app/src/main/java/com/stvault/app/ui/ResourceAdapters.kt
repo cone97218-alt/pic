@@ -15,7 +15,8 @@ import com.stvault.app.model.WorldBookRecord
 class WorldBooksAdapter(
     private val onClick: (WorldBookRecord) -> Unit,
     private val onDeleteClick: (WorldBookRecord) -> Unit,
-    private val onToggleSelect: (String) -> Unit
+    private val onToggleSelect: (String) -> Unit,
+    private val onLongClick: (WorldBookRecord) -> Unit = {}
 ) : RecyclerView.Adapter<WorldBooksAdapter.VH>() {
 
     private var items: List<GroupedItem<WorldBookRecord>> = emptyList()
@@ -73,6 +74,10 @@ class WorldBooksAdapter(
         }
         b.tvResMeta.text = meta
         b.root.setOnClickListener { if (selectionMode) onToggleSelect(w.id) else onClick(w) }
+        b.root.setOnLongClickListener {
+            if (selectionMode) onToggleSelect(w.id) else onLongClick(w)
+            true
+        }
         b.btnResDelete.setOnClickListener { onDeleteClick(w) }
     }
 
@@ -83,7 +88,8 @@ class WorldBooksAdapter(
 class PresetsAdapter(
     private val onClick: (PresetRecord) -> Unit,
     private val onDeleteClick: (PresetRecord) -> Unit,
-    private val onToggleSelect: (String) -> Unit
+    private val onToggleSelect: (String) -> Unit,
+    private val onLongClick: (PresetRecord) -> Unit = {}
 ) : RecyclerView.Adapter<PresetsAdapter.VH>() {
 
     private var items: List<GroupedItem<PresetRecord>> = emptyList()
@@ -134,6 +140,10 @@ class PresetsAdapter(
         }
         b.tvResMeta.text = meta
         b.root.setOnClickListener { if (selectionMode) onToggleSelect(p.id) else onClick(p) }
+        b.root.setOnLongClickListener {
+            if (selectionMode) onToggleSelect(p.id) else onLongClick(p)
+            true
+        }
         b.btnResDelete.setOnClickListener { onDeleteClick(p) }
     }
 
@@ -144,7 +154,8 @@ class PresetsAdapter(
 class ComponentsAdapter(
     private val onClick: (ComponentRecord) -> Unit,
     private val onDeleteClick: (ComponentRecord) -> Unit,
-    private val onToggleSelect: (String) -> Unit
+    private val onToggleSelect: (String) -> Unit,
+    private val onLongClick: (ComponentRecord) -> Unit = {}
 ) : RecyclerView.Adapter<ComponentsAdapter.VH>() {
 
     private var items: List<GroupedItem<ComponentRecord>> = emptyList()
@@ -201,6 +212,10 @@ class ComponentsAdapter(
         }
         b.tvResMeta.text = "$linkText · ${c.summary}"
         b.root.setOnClickListener { if (selectionMode) onToggleSelect(c.id) else onClick(c) }
+        b.root.setOnLongClickListener {
+            if (selectionMode) onToggleSelect(c.id) else onLongClick(c)
+            true
+        }
         b.btnResDelete.setOnClickListener { onDeleteClick(c) }
     }
 
