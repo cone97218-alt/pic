@@ -62,6 +62,10 @@
             android:exported="false" />
 
         <activity
+            android:name=".ui.TavernBridgeActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".ui.ThemePreviewActivity"
             android:exported="false" />
 
@@ -79,6 +83,11 @@
 
         <service
             android:name=".service.VaultDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <service
+            android:name=".service.TavernBridgeService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 

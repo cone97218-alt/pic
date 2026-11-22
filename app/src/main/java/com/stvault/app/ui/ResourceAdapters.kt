@@ -52,7 +52,11 @@ class WorldBooksAdapter(
         b.root.strokeWidth = ((if (isSelected) 2 else 1) * d).toInt()
         b.btnResDelete.visibility = if (selectionMode) View.GONE else View.VISIBLE
 
+        val wbInstalled = com.stvault.app.core.TavernBridgeManager.getInstance(ctx)
+            .isWorldBookInstalled(w.name, w.fileName)
         val badge = when {
+            wbInstalled && grouped.versionCount > 1 -> "已装 · ${grouped.versionCount} 版"
+            wbInstalled -> "已装"
             grouped.versionCount > 1 -> "${grouped.versionCount} 版本"
             w.originCardName.isNotEmpty() -> "来自角色卡"
             else -> ""
@@ -125,9 +129,17 @@ class PresetsAdapter(
         b.root.strokeWidth = ((if (isSelected) 2 else 1) * d).toInt()
         b.btnResDelete.visibility = if (selectionMode) View.GONE else View.VISIBLE
 
-        if (grouped.versionCount > 1) {
+        val pInstalled = com.stvault.app.core.TavernBridgeManager.getInstance(ctx)
+            .isPresetInstalled(p.name, p.fileName)
+        val pBadge = when {
+            pInstalled && grouped.versionCount > 1 -> "已装 · ${grouped.versionCount} 版"
+            pInstalled -> "已装"
+            grouped.versionCount > 1 -> "${grouped.versionCount} 版本"
+            else -> ""
+        }
+        if (pBadge.isNotEmpty()) {
             b.tvResBadge.visibility = View.VISIBLE
-            b.tvResBadge.text = "${grouped.versionCount} 版本"
+            b.tvResBadge.text = pBadge
         } else {
             b.tvResBadge.visibility = View.GONE
         }

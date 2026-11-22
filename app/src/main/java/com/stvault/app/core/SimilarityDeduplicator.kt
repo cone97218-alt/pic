@@ -192,6 +192,15 @@ object SimilarityDeduplicator {
         return out
     }
 
+    fun computeNameSimilarity(a: String, b: String): Double {
+        if (a.trim().equals(b.trim(), ignoreCase = true)) return 1.0
+        val sa = normalizeStem(a)
+        val sb = normalizeStem(b)
+        if (sa.length < 2 || sb.length < 2) return 0.0
+        if (sa == sb) return 0.99
+        return diceSimilarity(buildBigrams(sa), buildBigrams(sb))
+    }
+
     private fun normalizeStem(raw: String): String {
         var s = raw.trim().lowercase()
         // Strip file extensions

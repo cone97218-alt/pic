@@ -1,0 +1,51 @@
+.stv-bridge-box {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 6px 2px;
+}
+
+.stv-bridge-status {
+    font-size: 12.5px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: rgba(128, 128, 128, 0.12);
+    opacity: 0.9;
+}
+
+.stv-bridge-status.stv-ok {
+    background: rgba(22, 163, 74, 0.16);
+    color: #22c55e;
+}
+
+.stv-bridge-status.stv-err {
+    background: rgba(220, 38, 38, 0.16);
+    color: #f87171;
+}
+
+.stv-bridge-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.stv-bridge-row .menu_button {
+    flex: 1 1 42%;
+    justify-content: center;
+    text-align: center;
+    padding: 7px 10px;
+    font-size: 12.5px;
+}
+
+.stv-bridge-log {
+    font-size: 11px;
+    line-height: 1.45;
+    max-height: 120px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    padding: 8px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.18);
+    opacity: 0.8;
+}

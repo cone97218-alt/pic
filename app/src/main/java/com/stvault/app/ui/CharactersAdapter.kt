@@ -68,6 +68,9 @@ class CharactersAdapter(
         b.root.strokeWidth = ((if (isSelected) 2 else 1) * d).toInt()
 
         val metaParts = mutableListOf<String>()
+        if (com.stvault.app.core.TavernBridgeManager.getInstance(ctx).isCharacterInstalled(c.name, c.fileName)) {
+            metaParts.add("已装")
+        }
         if (c.categories.isNotEmpty()) {
             metaParts.add(c.categories.first().substringAfterLast('/'))
         }

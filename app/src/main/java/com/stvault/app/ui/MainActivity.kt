@@ -568,9 +568,22 @@ class MainActivity : AppCompatActivity() {
         binding.drawer.drawerItemWorldBooks.setOnClickListener { switchWorkspace("worldbooks") }
         binding.drawer.drawerItemPresets.setOnClickListener { switchWorkspace("presets") }
         binding.drawer.drawerItemComponents.setOnClickListener { switchWorkspace("components") }
+        binding.drawer.drawerItemBridge.setOnClickListener {
+            binding.drawerLayout.closeDrawer(GravityCompat.START)
+            TavernBridgeActivity.open(this)
+        }
         binding.drawer.drawerItemDedup.setOnClickListener {
             binding.drawerLayout.closeDrawer(GravityCompat.START)
             DuplicateCleanerActivity.open(this)
+        }
+        lifecycleScope.launch {
+            com.stvault.app.core.TavernBridgeManager.getInstance(this@MainActivity).stateFlow.collectLatest { st ->
+                binding.drawer.tvDrawerBridgeStatus.text = when {
+                    st.connected -> "已连接"
+                    st.running -> "监听中"
+                    else -> "未开启"
+                }
+            }
         }
         binding.drawer.drawerItemSettings.setOnClickListener {
             binding.drawerLayout.closeDrawer(GravityCompat.START)
@@ -740,6 +753,7 @@ class MainActivity : AppCompatActivity() {
         val options = if (vaultSearchModeSources) {
             listOf(
                 "all" to "最新扫描",
+                "not_installed" to "未装",
                 "has_error" to "有失败",
                 "incomplete" to "未下完",
                 "completed" to "已全缓存",
@@ -2105,6 +2119,9 @@ class MainActivity : AppCompatActivity() {
             ctx = this,
             title = source.name.substringAfterLast('/'),
             actions = listOf(
+                SheetAction("装入酒馆", "推送到 TT 酒馆，支持原版或图床修复版") {
+                    pushThemeToTavern(source)
+                },
                 SheetAction("重命名", "修改显示名称") {
                     showRenameDialog("重命名美化", source.name) { newName ->
                         if (repo.renameSource(source.id, newName)) {
@@ -2119,11 +2136,58 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private fun pushThemeToTavern(source: SourceRecord) {
+        fun enqueueRaw(repaired: Boolean) {
+            lifecycleScope.launch {
+                try {
+                    val (fileName, bytes) = withContext(Dispatchers.IO) {
+                        val (rawName, rawText) = repo.readSourceRawText(source.id)
+                        val outText = if (repaired) {
+                            repo.repairTheme(rawText, rawName, "base64_webp").repairedText
+                        } else rawText
+                        val safeName = if (rawName.endsWith(".json", ignoreCase = true)) rawName else "${source.name}.json"
+                        safeName to outText.toByteArray(Charsets.UTF_8)
+                    }
+                    enqueueToTavernBridge("theme", source.name, fileName, bytes)
+                } catch (e: Exception) {
+                    toast("读取美化失败：${e.message}")
+                }
+            }
+        }
+        VaultSheets.actionList(
+            ctx = this,
+            title = "装入酒馆 · ${source.name}",
+            actions = listOf(
+                SheetAction("推送原版", "保持原始代码直接装入 TT 酒馆") { enqueueRaw(false) },
+                SheetAction("推送图床修复版", "将已缓存图床离线内嵌后再装入") { enqueueRaw(true) }
+            )
+        )
+    }
+
+    private fun enqueueToTavernBridge(kind: String, name: String, fileName: String, bytes: ByteArray) {
+        val bridge = com.stvault.app.core.TavernBridgeManager.getInstance(this)
+        if (!bridge.isRunning()) {
+            com.stvault.app.service.TavernBridgeService.start(this)
+        }
+        bridge.enqueueOutbox(kind, name, fileName, bytes)
+        toast("已加入待装入队列，切回 TT 酒馆即可自动装入")
+    }
+
     private fun showCharacterActionMenu(c: CharacterRecord) {
         VaultSheets.actionList(
             ctx = this,
             title = c.name,
             actions = listOf(
+                SheetAction("装入酒馆", "将角色卡推送到 TT 酒馆") {
+                    lifecycleScope.launch {
+                        val bytes = withContext(Dispatchers.IO) {
+                            val f = libRepo.getCharacterFile(c)
+                            if (f.exists()) f.readBytes() else null
+                        }
+                        if (bytes != null) enqueueToTavernBridge("character", c.name, c.fileName, bytes)
+                        else toast("找不到角色卡文件")
+                    }
+                },
                 SheetAction("重命名", "修改角色卡显示名称") {
                     showRenameDialog("重命名角色卡", c.name) { newName ->
                         if (libRepo.renameCharacter(c.id, newName)) {
@@ -2146,6 +2210,16 @@ class MainActivity : AppCompatActivity() {
             ctx = this,
             title = w.name,
             actions = listOf(
+                SheetAction("装入酒馆", "将世界书推送到 TT 酒馆") {
+                    lifecycleScope.launch {
+                        val bytes = withContext(Dispatchers.IO) {
+                            val f = libRepo.getWorldBookFile(w)
+                            if (f.exists()) f.readBytes() else null
+                        }
+                        if (bytes != null) enqueueToTavernBridge("worldbook", w.name, w.fileName, bytes)
+                        else toast("找不到世界书文件")
+                    }
+                },
                 SheetAction("重命名", "修改世界书显示名称") {
                     showRenameDialog("重命名世界书", w.name) { newName ->
                         if (libRepo.renameWorldBook(w.id, newName)) {
@@ -2167,6 +2241,16 @@ class MainActivity : AppCompatActivity() {
             ctx = this,
             title = p.name,
             actions = listOf(
+                SheetAction("装入酒馆", "将预设推送到 TT 酒馆") {
+                    lifecycleScope.launch {
+                        val bytes = withContext(Dispatchers.IO) {
+                            val f = libRepo.getPresetFile(p)
+                            if (f.exists()) f.readBytes() else null
+                        }
+                        if (bytes != null) enqueueToTavernBridge("preset", p.name, p.fileName, bytes)
+                        else toast("找不到预设文件")
+                    }
+                },
                 SheetAction("重命名", "修改预设显示名称") {
                     showRenameDialog("重命名预设", p.name) { newName ->
                         if (libRepo.renamePreset(p.id, newName)) {
@@ -2184,22 +2268,32 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showComponentActionMenu(comp: ComponentRecord) {
-        VaultSheets.actionList(
-            ctx = this,
-            title = comp.name,
-            actions = listOf(
-                SheetAction("重命名", "修改组件显示名称") {
-                    showRenameDialog("重命名组件", comp.name) { newName ->
-                        if (libRepo.renameComponent(comp.id, newName)) {
-                            toast("已重命名")
-                            refreshComponentsList()
-                        }
+        val canPush = comp.type == "regex" || comp.type == "qr"
+        val actions = mutableListOf<SheetAction>()
+        if (canPush) {
+            actions.add(SheetAction("装入酒馆", "将${if (comp.type == "qr") "快速回复" else "正则"}推送到 TT 酒馆") {
+                lifecycleScope.launch {
+                    val bytes = withContext(Dispatchers.IO) {
+                        val f = libRepo.getComponentFile(comp)
+                        if (f.exists()) f.readBytes() else null
                     }
-                },
-                SheetAction("关联宿主", "关联到角色卡 / 预设 / 世界书 / 美化") { showLinkComponentDialog(comp) },
-                SheetAction("删除组件", destructive = true) { confirmDeleteComponent(comp) }
-            )
-        )
+                    if (bytes != null) enqueueToTavernBridge(comp.type, comp.name, comp.fileName, bytes)
+                    else toast("找不到组件文件")
+                }
+            })
+        }
+        actions.add(SheetAction("重命名", "修改组件显示名称") {
+            showRenameDialog("重命名组件", comp.name) { newName ->
+                if (libRepo.renameComponent(comp.id, newName)) {
+                    toast("已重命名")
+                    refreshComponentsList()
+                }
+            }
+        })
+        actions.add(SheetAction("关联宿主", "关联到角色卡 / 预设 / 世界书 / 美化") { showLinkComponentDialog(comp) })
+        actions.add(SheetAction("删除组件", destructive = true) { confirmDeleteComponent(comp) })
+
+        VaultSheets.actionList(ctx = this, title = comp.name, actions = actions)
     }
 
     private fun showRenameDialog(title: String, currentName: String, onConfirm: (String) -> Unit) {

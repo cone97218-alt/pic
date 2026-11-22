@@ -54,7 +54,11 @@ class SourcesAdapter(
             s.categories.joinToString(" · ") { it.substringAfterLast('/') }
         } else ""
 
+        val installed = com.stvault.app.core.TavernBridgeManager.getInstance(ctx)
+            .isThemeInstalled(s.name, s.fileName)
+
         val meta = buildString {
+            if (installed) append("已装 · ")
             append("已缓存 ${row.okCount}/${s.urls.size}")
             if (row.errCount > 0) append(" · 失败 ${row.errCount}")
             if (row.pendingCount > 0) append(" · 待缓存 ${row.pendingCount}")

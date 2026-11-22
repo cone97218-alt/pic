@@ -966,6 +966,43 @@ class VaultRepository private constructor(private val appContext: Context) {
         return true
     }
 
+    /**
+     * Overwrites an existing theme's stored raw content & extracted URLs while preserving
+     * its ID, categories, and folder metadata (used when pulling updated themes from Tavern).
+     */
+    fun overwriteSourceContent(id: String, rawText: String, newFileName: String = ""): Boolean {
+        if (rawText.isBlank()) return false
+        val (urls, isJson) = UrlExtractor.extract(rawText)
+        val contentHash = sha256Short(rawText.trim().toByteArray(Charsets.UTF_8))
+        synchronized(lock) {
+            val cur = sourcesMap[id] ?: return false
+            try {
+                resolveSourceFile(id, cur.category).writeText(rawText, Charsets.UTF_8)
+            } catch (_: Exception) {
+                return false
+            }
+            val displayName = extractThemeDisplayName(rawText, isJson, newFileName.ifBlank { cur.fileName.ifBlank { cur.name } })
+            sourcesMap[id] = cur.copy(
+                name = displayName.ifBlank { cur.name },
+                fileName = newFileName.ifBlank { cur.fileName },
+                isJson = isJson,
+                urls = urls,
+                contentHash = contentHash,
+                scannedAt = System.currentTimeMillis()
+            )
+            for (u in urls) {
+                val existing = urlsMap[u]
+                if (existing == null) {
+                    urlsMap[u] = UrlRecord(url = u, hash = sha1Short(u), sources = mutableListOf(id))
+                } else if (!existing.sources.contains(id)) {
+                    existing.sources.add(id)
+                }
+            }
+        }
+        saveIndex()
+        return true
+    }
+
     fun getAllSources(): List<SourceRecord> = synchronized(lock) {
         sourcesMap.values.sortedByDescending { it.scannedAt }
     }
@@ -1005,6 +1042,8 @@ class VaultRepository private constructor(private val appContext: Context) {
                 SourceRowUi(s, ok, err, pending)
             }.filter { r ->
                 when (filter) {
+                    "not_installed" -> !TavernBridgeManager.getInstance(appContext)
+                        .isThemeInstalled(r.source.name, r.source.fileName)
                     "has_error" -> r.errCount > 0
                     "incomplete" -> r.okCount < r.source.urls.size
                     "completed" -> r.source.urls.isNotEmpty() && r.okCount == r.source.urls.size
