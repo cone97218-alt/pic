@@ -214,6 +214,66 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         saveCharactersIndex()
     }
 
+    fun batchSetCharacterCategories(ids: List<String>, categories: List<String>, append: Boolean) {
+        if (ids.isEmpty()) return
+        synchronized(lock) {
+            for (id in ids) {
+                val cur = charactersMap[id] ?: continue
+                val next = if (append) (cur.categories + categories).distinct() else categories.distinct()
+                charactersMap[id] = cur.copy(categories = next)
+            }
+        }
+        saveCharactersIndex()
+    }
+
+    fun mergeCharacterVersions(ids: List<String>, seriesName: String) {
+        if (ids.size < 2) return
+        val key = VersionGrouper.extractSeriesAndVersion(seriesName).first
+        synchronized(lock) {
+            for (id in ids) {
+                val cur = charactersMap[id] ?: continue
+                charactersMap[id] = cur.copy(seriesKey = key)
+            }
+        }
+        saveCharactersIndex()
+    }
+
+    fun mergeWorldBookVersions(ids: List<String>, seriesName: String) {
+        if (ids.size < 2) return
+        val key = VersionGrouper.extractSeriesAndVersion(seriesName).first
+        synchronized(lock) {
+            for (id in ids) {
+                val cur = worldBooksMap[id] ?: continue
+                worldBooksMap[id] = cur.copy(seriesKey = key)
+            }
+        }
+        saveWorldBooksIndex()
+    }
+
+    fun mergePresetVersions(ids: List<String>, seriesName: String) {
+        if (ids.size < 2) return
+        val key = VersionGrouper.extractSeriesAndVersion(seriesName).first
+        synchronized(lock) {
+            for (id in ids) {
+                val cur = presetsMap[id] ?: continue
+                presetsMap[id] = cur.copy(seriesKey = key)
+            }
+        }
+        savePresetsIndex()
+    }
+
+    fun mergeComponentVersions(ids: List<String>, seriesName: String) {
+        if (ids.size < 2) return
+        val key = VersionGrouper.extractSeriesAndVersion(seriesName).first
+        synchronized(lock) {
+            for (id in ids) {
+                val cur = componentsMap[id] ?: continue
+                componentsMap[id] = cur.copy(seriesKey = key)
+            }
+        }
+        saveComponentsIndex()
+    }
+
     fun getVersionsForCharacter(seriesKey: String): List<CharacterRecord> = synchronized(lock) {
         if (seriesKey.isBlank()) return emptyList()
         charactersMap.values.filter { it.seriesKey == seriesKey }.sortedByDescending { it.addedAt }

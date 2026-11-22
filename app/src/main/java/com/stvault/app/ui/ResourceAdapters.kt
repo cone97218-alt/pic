@@ -3,7 +3,9 @@ package com.stvault.app.ui
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
+import com.stvault.app.R
 import com.stvault.app.databinding.ItemResourceSimpleBinding
 import com.stvault.app.model.ComponentRecord
 import com.stvault.app.model.GroupedItem
@@ -12,15 +14,26 @@ import com.stvault.app.model.WorldBookRecord
 
 class WorldBooksAdapter(
     private val onClick: (WorldBookRecord) -> Unit,
-    private val onDeleteClick: (WorldBookRecord) -> Unit
+    private val onDeleteClick: (WorldBookRecord) -> Unit,
+    private val onToggleSelect: (String) -> Unit
 ) : RecyclerView.Adapter<WorldBooksAdapter.VH>() {
 
     private var items: List<GroupedItem<WorldBookRecord>> = emptyList()
+    private var selectionMode = false
+    private var selectedIds: Set<String> = emptySet()
 
     fun submitList(list: List<GroupedItem<WorldBookRecord>>) {
         items = list
         notifyDataSetChanged()
     }
+
+    fun updateSelection(enabled: Boolean, selected: Set<String>) {
+        selectionMode = enabled
+        selectedIds = selected
+        notifyDataSetChanged()
+    }
+
+    fun getVisibleIds(): List<String> = items.map { it.primary.id }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH =
         VH(ItemResourceSimpleBinding.inflate(LayoutInflater.from(parent.context), parent, false))
@@ -29,7 +42,14 @@ class WorldBooksAdapter(
         val grouped = items[position]
         val w = grouped.primary
         val b = holder.binding
-        b.tvResTitle.text = w.name
+        val ctx = b.root.context
+        val d = ctx.resources.displayMetrics.density
+        val isSelected = selectionMode && w.id in selectedIds
+
+        b.tvResTitle.text = if (isSelected) "✓  ${w.name}" else w.name
+        b.root.setStrokeColor(ContextCompat.getColor(ctx, if (isSelected) R.color.accent else R.color.border))
+        b.root.strokeWidth = ((if (isSelected) 2 else 1) * d).toInt()
+        b.btnResDelete.visibility = if (selectionMode) View.GONE else View.VISIBLE
 
         val badge = when {
             grouped.versionCount > 1 -> "${grouped.versionCount} 版本"
@@ -52,7 +72,7 @@ class WorldBooksAdapter(
             if (w.urls.isNotEmpty()) append(" · 图 ${w.urls.size}")
         }
         b.tvResMeta.text = meta
-        b.root.setOnClickListener { onClick(w) }
+        b.root.setOnClickListener { if (selectionMode) onToggleSelect(w.id) else onClick(w) }
         b.btnResDelete.setOnClickListener { onDeleteClick(w) }
     }
 
@@ -62,15 +82,26 @@ class WorldBooksAdapter(
 
 class PresetsAdapter(
     private val onClick: (PresetRecord) -> Unit,
-    private val onDeleteClick: (PresetRecord) -> Unit
+    private val onDeleteClick: (PresetRecord) -> Unit,
+    private val onToggleSelect: (String) -> Unit
 ) : RecyclerView.Adapter<PresetsAdapter.VH>() {
 
     private var items: List<GroupedItem<PresetRecord>> = emptyList()
+    private var selectionMode = false
+    private var selectedIds: Set<String> = emptySet()
 
     fun submitList(list: List<GroupedItem<PresetRecord>>) {
         items = list
         notifyDataSetChanged()
     }
+
+    fun updateSelection(enabled: Boolean, selected: Set<String>) {
+        selectionMode = enabled
+        selectedIds = selected
+        notifyDataSetChanged()
+    }
+
+    fun getVisibleIds(): List<String> = items.map { it.primary.id }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH =
         VH(ItemResourceSimpleBinding.inflate(LayoutInflater.from(parent.context), parent, false))
@@ -79,13 +110,21 @@ class PresetsAdapter(
         val grouped = items[position]
         val p = grouped.primary
         val b = holder.binding
+        val ctx = b.root.context
+        val d = ctx.resources.displayMetrics.density
+        val isSelected = selectionMode && p.id in selectedIds
+
+        b.tvResTitle.text = if (isSelected) "✓  ${p.name}" else p.name
+        b.root.setStrokeColor(ContextCompat.getColor(ctx, if (isSelected) R.color.accent else R.color.border))
+        b.root.strokeWidth = ((if (isSelected) 2 else 1) * d).toInt()
+        b.btnResDelete.visibility = if (selectionMode) View.GONE else View.VISIBLE
+
         if (grouped.versionCount > 1) {
             b.tvResBadge.visibility = View.VISIBLE
             b.tvResBadge.text = "${grouped.versionCount} 版本"
         } else {
             b.tvResBadge.visibility = View.GONE
         }
-        b.tvResTitle.text = p.name
         val scripts = p.embeddedRegexCount + p.embeddedHelperCount
         val meta = buildString {
             append("启用 ${p.enabledPromptCount}/${p.promptCount}")
@@ -94,7 +133,7 @@ class PresetsAdapter(
             p.topP?.let { append(" · TopP ${String.format("%.2f", it)}") }
         }
         b.tvResMeta.text = meta
-        b.root.setOnClickListener { onClick(p) }
+        b.root.setOnClickListener { if (selectionMode) onToggleSelect(p.id) else onClick(p) }
         b.btnResDelete.setOnClickListener { onDeleteClick(p) }
     }
 
@@ -104,15 +143,26 @@ class PresetsAdapter(
 
 class ComponentsAdapter(
     private val onClick: (ComponentRecord) -> Unit,
-    private val onDeleteClick: (ComponentRecord) -> Unit
+    private val onDeleteClick: (ComponentRecord) -> Unit,
+    private val onToggleSelect: (String) -> Unit
 ) : RecyclerView.Adapter<ComponentsAdapter.VH>() {
 
     private var items: List<GroupedItem<ComponentRecord>> = emptyList()
+    private var selectionMode = false
+    private var selectedIds: Set<String> = emptySet()
 
     fun submitList(list: List<GroupedItem<ComponentRecord>>) {
         items = list
         notifyDataSetChanged()
     }
+
+    fun updateSelection(enabled: Boolean, selected: Set<String>) {
+        selectionMode = enabled
+        selectedIds = selected
+        notifyDataSetChanged()
+    }
+
+    fun getVisibleIds(): List<String> = items.map { it.primary.id }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH =
         VH(ItemResourceSimpleBinding.inflate(LayoutInflater.from(parent.context), parent, false))
@@ -121,6 +171,15 @@ class ComponentsAdapter(
         val grouped = items[position]
         val c = grouped.primary
         val b = holder.binding
+        val ctx = b.root.context
+        val d = ctx.resources.displayMetrics.density
+        val isSelected = selectionMode && c.id in selectedIds
+
+        b.tvResTitle.text = if (isSelected) "✓  ${c.name}" else c.name
+        b.root.setStrokeColor(ContextCompat.getColor(ctx, if (isSelected) R.color.accent else R.color.border))
+        b.root.strokeWidth = ((if (isSelected) 2 else 1) * d).toInt()
+        b.btnResDelete.visibility = if (selectionMode) View.GONE else View.VISIBLE
+
         b.tvResBadge.visibility = View.VISIBLE
         val typeLabel = when (c.type) {
             "helper" -> "酒馆助手"
@@ -128,7 +187,6 @@ class ComponentsAdapter(
             else -> "正则"
         }
         b.tvResBadge.text = if (grouped.versionCount > 1) "$typeLabel · ${grouped.versionCount}版" else typeLabel
-        b.tvResTitle.text = c.name
         val linkText = if (c.linkedTargetName.isNotEmpty()) {
             val hostType = when (c.linkedTargetType) {
                 "character" -> "角色卡"
@@ -142,7 +200,7 @@ class ComponentsAdapter(
             "全局独立"
         }
         b.tvResMeta.text = "$linkText · ${c.summary}"
-        b.root.setOnClickListener { onClick(c) }
+        b.root.setOnClickListener { if (selectionMode) onToggleSelect(c.id) else onClick(c) }
         b.btnResDelete.setOnClickListener { onDeleteClick(c) }
     }
 

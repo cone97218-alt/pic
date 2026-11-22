@@ -3,8 +3,10 @@ package com.stvault.app.ui
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
+import com.stvault.app.R
 import com.stvault.app.core.ResourceLibraryRepository
 import com.stvault.app.databinding.ItemCharacterBinding
 import com.stvault.app.model.CharacterRecord
@@ -13,15 +15,26 @@ import com.stvault.app.model.GroupedItem
 class CharactersAdapter(
     private val libRepo: ResourceLibraryRepository,
     private val onClick: (CharacterRecord) -> Unit,
-    private val onLongClick: (CharacterRecord) -> Unit
+    private val onLongClick: (CharacterRecord) -> Unit,
+    private val onToggleSelect: (String) -> Unit
 ) : RecyclerView.Adapter<CharactersAdapter.VH>() {
 
     private var items: List<GroupedItem<CharacterRecord>> = emptyList()
+    private var selectionMode = false
+    private var selectedIds: Set<String> = emptySet()
 
     fun submitList(list: List<GroupedItem<CharacterRecord>>) {
         items = list
         notifyDataSetChanged()
     }
+
+    fun updateSelection(enabled: Boolean, selected: Set<String>) {
+        selectionMode = enabled
+        selectedIds = selected
+        notifyDataSetChanged()
+    }
+
+    fun getVisibleIds(): List<String> = items.map { it.primary.id }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
         val binding = ItemCharacterBinding.inflate(LayoutInflater.from(parent.context), parent, false)
@@ -32,9 +45,16 @@ class CharactersAdapter(
         val grouped = items[position]
         val c = grouped.primary
         val b = holder.binding
-        b.tvCharName.text = c.name
+        val ctx = b.root.context
+        val d = ctx.resources.displayMetrics.density
+        val isSelected = selectionMode && c.id in selectedIds
 
-        if (grouped.versionCount > 1) {
+        b.tvCharName.text = if (isSelected) "✓ ${c.name}" else c.name
+
+        if (isSelected) {
+            b.tvCharSpecBadge.visibility = View.VISIBLE
+            b.tvCharSpecBadge.text = "已选"
+        } else if (grouped.versionCount > 1) {
             b.tvCharSpecBadge.visibility = View.VISIBLE
             b.tvCharSpecBadge.text = "${grouped.versionCount} 版本"
         } else if (c.versionTag.isNotEmpty()) {
@@ -43,6 +63,9 @@ class CharactersAdapter(
         } else {
             b.tvCharSpecBadge.visibility = View.GONE
         }
+
+        b.root.setStrokeColor(ContextCompat.getColor(ctx, if (isSelected) R.color.accent else R.color.border))
+        b.root.strokeWidth = ((if (isSelected) 2 else 1) * d).toInt()
 
         val metaParts = mutableListOf<String>()
         if (c.categories.isNotEmpty()) {
@@ -62,12 +85,14 @@ class CharactersAdapter(
                 .into(b.ivCharCover)
         } else {
             Glide.with(b.ivCharCover).clear(b.ivCharCover)
-            b.ivCharCover.setImageResource(com.stvault.app.R.drawable.ic_module_character)
+            b.ivCharCover.setImageResource(R.drawable.ic_module_character)
         }
 
-        b.root.setOnClickListener { onClick(c) }
+        b.root.setOnClickListener {
+            if (selectionMode) onToggleSelect(c.id) else onClick(c)
+        }
         b.root.setOnLongClickListener {
-            onLongClick(c)
+            if (selectionMode) onToggleSelect(c.id) else onLongClick(c)
             true
         }
     }

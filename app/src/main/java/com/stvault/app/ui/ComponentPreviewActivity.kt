@@ -325,6 +325,10 @@ class ComponentPreviewActivity : AppCompatActivity() {
     }
 
     private fun buildGreetingRenderHtml(): String {
+        val prefs = getSharedPreferences("st_vault_prefs", Context.MODE_PRIVATE)
+        val renderMode = prefs.getString("greeting_render_mode", "plain") ?: "plain"
+        val themeId = prefs.getString("greeting_theme_id", "").orEmpty()
+
         val greetingJson = JSONObject.quote(greetingText)
         val regexArrStr = regexListJson.ifBlank { "[]" }
 
@@ -349,7 +353,6 @@ class ComponentPreviewActivity : AppCompatActivity() {
                     } catch (e) {}
                 }
                 text = text.replace(/```html\s*([\s\S]*?)```/gi, '$1');
-                // Simple markdown bold/italic/newlines for non-HTML paragraphs
                 if (!/<(div|style|table|section|details|iframe)/i.test(text)) {
                     text = text
                         .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
@@ -368,12 +371,135 @@ class ComponentPreviewActivity : AppCompatActivity() {
             })();
         """.trimIndent()
 
-        return wrapInStShell(
+        if (renderMode == "theme" && themeId.isNotEmpty()) {
+            val themeCss = extractThemeCssForGreeting(themeId)
+            if (themeCss != null) {
+                return wrapInThemedStShell(
+                    bodyHtml = """<div id="st-render-slot"></div>""",
+                    extraScript = script,
+                    charName = titleText,
+                    hasAvatar = charId.isNotEmpty(),
+                    themeCss = themeCss
+                )
+            }
+        }
+
+        // Plain mode: NO chat bubble, NO avatar — clean full-width text + regex render
+        return wrapInPlainShell(
             bodyHtml = """<div id="st-render-slot"></div>""",
-            extraScript = script,
-            charName = titleText,
-            hasAvatar = charId.isNotEmpty()
+            extraScript = script
         )
+    }
+
+    private fun extractThemeCssForGreeting(themeId: String): String? {
+        return try {
+            val (_, raw) = vaultRepo.readSourceRawText(themeId)
+            val trimmed = raw.trim()
+            if (trimmed.startsWith("{")) {
+                val obj = JSONObject(trimmed)
+                val sb = StringBuilder(":root {\n")
+                fun putVar(jsonKey: String, cssVar: String) {
+                    val v = obj.optString(jsonKey, "").trim()
+                    if (v.isNotEmpty()) sb.append("  $cssVar: $v;\n")
+                }
+                putVar("main_text_color", "--SmartThemeBodyColor")
+                putVar("italics_text_color", "--SmartThemeEmColor")
+                putVar("quote_text_color", "--SmartThemeQuoteColor")
+                putVar("blur_tint_color", "--SmartThemeBlurTintColor")
+                putVar("chat_tint_color", "--SmartThemeChatTintColor")
+                putVar("user_mes_blur_tint_color", "--SmartThemeUserMesBlurTintColor")
+                putVar("bot_mes_blur_tint_color", "--SmartThemeBotMesBlurTintColor")
+                putVar("border_color", "--SmartThemeBorderColor")
+                sb.append("}\n")
+                sb.append(obj.optString("custom_css", ""))
+                sb.toString()
+            } else {
+                trimmed
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun wrapInPlainShell(bodyHtml: String, extraScript: String): String {
+        val bgCol = if (previewDark) "#0C0C0E" else "#F7F7F5"
+        val textCol = if (previewDark) "#E4E4E7" else "#18181B"
+        return """
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<link rel="stylesheet" href="${LOCAL_ORIGIN}css/fontawesome.min.css" />
+<link rel="stylesheet" href="${LOCAL_ORIGIN}css/solid.min.css" />
+<link rel="stylesheet" href="${LOCAL_ORIGIN}css/brands.min.css" />
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 18px 16px 32px 16px;
+    background: $bgCol; color: $textCol;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", sans-serif;
+    font-size: 15px; line-height: 1.75;
+    word-break: break-word; overflow-x: hidden;
+  }
+  img { max-width: 100%; height: auto; border-radius: 8px; }
+</style>
+</head>
+<body>
+  $bodyHtml
+  <script>$extraScript</script>
+</body>
+</html>
+        """.trimIndent()
+    }
+
+    private fun wrapInThemedStShell(
+        bodyHtml: String,
+        extraScript: String,
+        charName: String,
+        hasAvatar: Boolean,
+        themeCss: String
+    ): String {
+        val avatarHtml = if (hasAvatar) {
+            """<div class="mesAvatarWrapper"><div class="avatar"><img src="${LOCAL_ORIGIN}__char_avatar__" /></div></div>"""
+        } else ""
+        return """
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<link rel="stylesheet" href="${LOCAL_ORIGIN}css/fontawesome.min.css" />
+<link rel="stylesheet" href="${LOCAL_ORIGIN}css/solid.min.css" />
+<link rel="stylesheet" href="${LOCAL_ORIGIN}css/brands.min.css" />
+<link rel="stylesheet" href="${LOCAL_ORIGIN}style.css" />
+<style>
+  html, body { margin: 0; padding: 0; min-height: 100vh; }
+  #chat { position: relative !important; height: auto !important; min-height: 100vh; padding: 12px; overflow-y: visible !important; }
+  .mes_text img { max-width: 100%; height: auto; }
+</style>
+<style>
+$themeCss
+</style>
+</head>
+<body class="charlist_grid">
+  <div id="sheld" style="position:relative;height:auto;min-height:100vh;width:100%;">
+    <div id="chat">
+      <div class="mes" is_user="false" is_system="false">
+        $avatarHtml
+        <div class="mes_block">
+          <div class="ch_name flex-container justifySpaceBetween">
+            <span class="name_text">${escapeHtml(charName)}</span>
+          </div>
+          <div class="mes_text">$bodyHtml</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>$extraScript</script>
+</body>
+</html>
+        """.trimIndent()
     }
 
     private fun wrapInStShell(

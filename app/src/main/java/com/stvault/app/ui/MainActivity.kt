@@ -81,7 +81,11 @@ class MainActivity : AppCompatActivity() {
     private var activeCompFilter = "all"
     private var activeThemeCategory = ""
     private var activeCharCategory = ""
+    private var activeThemeTab = "cache"
     private var searchDebounceJob: Job? = null
+
+    private var batchMode = false
+    private val batchSelectedIds = LinkedHashSet<String>()
 
     private var savedTreeUri: Uri? = null
     private var savedLocalDirPath: String? = null
@@ -368,6 +372,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        applyBottomBarVisibility()
         refreshActiveWorkspace()
         libRepo.refreshCounts()
     }
@@ -389,7 +394,8 @@ class MainActivity : AppCompatActivity() {
             onClick = { source -> showSourceDetailDialog(source) },
             onPreviewClick = { source -> ThemePreviewActivity.open(this, source.id) },
             onDeleteClick = { source -> confirmDeleteSource(source) },
-            onLongClick = { source -> showThemeCategoryAssignDialog(source) }
+            onLongClick = { source -> showThemeCategoryAssignDialog(source) },
+            onToggleSelect = { id -> toggleBatchSelection(id) }
         )
         urlsAdapter = UrlsAdapter(
             repo = repo,
@@ -411,7 +417,8 @@ class MainActivity : AppCompatActivity() {
         charactersAdapter = CharactersAdapter(
             libRepo = libRepo,
             onClick = { c -> ResourceDetailActivity.open(this, ResourceDetailActivity.TYPE_CHARACTER, c.id) },
-            onLongClick = { c -> showCharacterActionMenu(c) }
+            onLongClick = { c -> showCharacterActionMenu(c) },
+            onToggleSelect = { id -> toggleBatchSelection(id) }
         )
         binding.wsCharacters.rvCharacters.adapter = charactersAdapter
         buildSimpleChips(
@@ -427,7 +434,8 @@ class MainActivity : AppCompatActivity() {
         binding.wsWorldBooks.rvWorldBooks.layoutManager = LinearLayoutManager(this)
         worldBooksAdapter = WorldBooksAdapter(
             onClick = { w -> ResourceDetailActivity.open(this, ResourceDetailActivity.TYPE_WORLDBOOK, w.id) },
-            onDeleteClick = { w -> confirmDeleteWorldBook(w) }
+            onDeleteClick = { w -> confirmDeleteWorldBook(w) },
+            onToggleSelect = { id -> toggleBatchSelection(id) }
         )
         binding.wsWorldBooks.rvWorldBooks.adapter = worldBooksAdapter
         buildSimpleChips(
@@ -443,7 +451,8 @@ class MainActivity : AppCompatActivity() {
         binding.wsPresets.rvPresets.layoutManager = LinearLayoutManager(this)
         presetsAdapter = PresetsAdapter(
             onClick = { p -> ResourceDetailActivity.open(this, ResourceDetailActivity.TYPE_PRESET, p.id) },
-            onDeleteClick = { p -> confirmDeletePreset(p) }
+            onDeleteClick = { p -> confirmDeletePreset(p) },
+            onToggleSelect = { id -> toggleBatchSelection(id) }
         )
         binding.wsPresets.rvPresets.adapter = presetsAdapter
 
@@ -451,7 +460,8 @@ class MainActivity : AppCompatActivity() {
         binding.wsComponents.rvComponents.layoutManager = LinearLayoutManager(this)
         componentsAdapter = ComponentsAdapter(
             onClick = { c -> showComponentDetailDialog(c) },
-            onDeleteClick = { c -> confirmDeleteComponent(c) }
+            onDeleteClick = { c -> confirmDeleteComponent(c) },
+            onToggleSelect = { id -> toggleBatchSelection(id) }
         )
         binding.wsComponents.rvComponents.adapter = componentsAdapter
         buildSimpleChips(
@@ -554,33 +564,60 @@ class MainActivity : AppCompatActivity() {
             pair.second.imageTintList = ColorStateList.valueOf(if (active) primary else muted)
         }
 
-        // Show sleek floating pill dock ONLY for Themes workspace
-        binding.floatingBottomDock.visibility = if (workspace == "themes") View.VISIBLE else View.GONE
+        exitBatchMode()
+        applyBottomBarVisibility()
         if (workspace == "themes") {
-            selectThemeDockTab("cache")
+            selectThemeDockTab(activeThemeTab)
         }
         refreshActiveWorkspace()
     }
 
+    private fun applyBottomBarVisibility() {
+        val showThemesNav = (activeWorkspace == "themes") && !batchMode
+        val style = prefs.getString("bottom_bar_style", "ios_flat") ?: "ios_flat"
+        val useFloating = (style == "floating_pill")
+
+        binding.iosFlatBottomBar.visibility = if (showThemesNav && !useFloating) View.VISIBLE else View.GONE
+        binding.floatingBottomDock.visibility = if (showThemesNav && useFloating) View.VISIBLE else View.GONE
+    }
+
     private fun selectThemeDockTab(tab: String) {
+        activeThemeTab = tab
+        if (tab != "vault" && batchMode) exitBatchMode()
         binding.tabCache.visibility = if (tab == "cache") View.VISIBLE else View.GONE
         binding.tabVault.visibility = if (tab == "vault") View.VISIBLE else View.GONE
         binding.tabRepair.visibility = if (tab == "repair") View.VISIBLE else View.GONE
         if (tab == "vault") refreshVaultList()
 
+        val primary = ContextCompat.getColor(this, R.color.text_primary)
         val onAccent = ContextCompat.getColor(this, R.color.on_accent)
         val muted = ContextCompat.getColor(this, R.color.text_muted)
-        val tabs = listOf(
+
+        // Sync Floating Pill Dock
+        val floatTabs = listOf(
             Triple("cache", binding.dockTabCache, binding.ivDockCache to binding.tvDockCache),
             Triple("vault", binding.dockTabVault, binding.ivDockVault to binding.tvDockVault),
             Triple("repair", binding.dockTabRepair, binding.ivDockRepair to binding.tvDockRepair)
         )
-        for ((key, pill, pair) in tabs) {
+        for ((key, pill, pair) in floatTabs) {
             val active = (key == tab)
             pill.setBackgroundResource(if (active) R.drawable.bg_dock_item_active else 0)
             pair.first.imageTintList = ColorStateList.valueOf(if (active) onAccent else muted)
             pair.second.setTextColor(if (active) onAccent else muted)
             pair.second.setTypeface(null, if (active) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+        }
+
+        // Sync iOS Flat Bottom Bar
+        val flatTabs = listOf(
+            Triple("cache", binding.ivFlatCache, binding.tvFlatCache),
+            Triple("vault", binding.ivFlatVault, binding.tvFlatVault),
+            Triple("repair", binding.ivFlatRepair, binding.tvFlatRepair)
+        )
+        for ((key, iv, tv) in flatTabs) {
+            val active = (key == tab)
+            iv.imageTintList = ColorStateList.valueOf(if (active) primary else muted)
+            tv.setTextColor(if (active) primary else muted)
+            tv.setTypeface(null, if (active) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
         }
     }
 
@@ -698,6 +735,7 @@ class MainActivity : AppCompatActivity() {
             binding.btnModeUrls.setTextColor(muted)
             binding.btnImportInVault.visibility = View.VISIBLE
             binding.btnThemeCatFilter.visibility = View.VISIBLE
+            binding.btnThemeBatch.visibility = View.VISIBLE
         } else {
             binding.btnModeUrls.backgroundTintList = ColorStateList.valueOf(accent)
             binding.btnModeUrls.setTextColor(onAccent)
@@ -705,6 +743,8 @@ class MainActivity : AppCompatActivity() {
             binding.btnModeSources.setTextColor(muted)
             binding.btnImportInVault.visibility = View.GONE
             binding.btnThemeCatFilter.visibility = View.GONE
+            binding.btnThemeBatch.visibility = View.GONE
+            if (batchMode) exitBatchMode()
         }
     }
 
@@ -719,10 +759,28 @@ class MainActivity : AppCompatActivity() {
             checkUpdateManually()
         }
 
-        // Floating Pill Bottom Dock (Themes Workspace)
+        // Themes Bottom Navigation (both iOS Flat & Floating Pill)
         binding.dockTabCache.setOnClickListener { selectThemeDockTab("cache") }
         binding.dockTabVault.setOnClickListener { selectThemeDockTab("vault") }
         binding.dockTabRepair.setOnClickListener { selectThemeDockTab("repair") }
+        binding.flatTabCache.setOnClickListener { selectThemeDockTab("cache") }
+        binding.flatTabVault.setOnClickListener { selectThemeDockTab("vault") }
+        binding.flatTabRepair.setOnClickListener { selectThemeDockTab("repair") }
+
+        // Universal Batch Multi-Select Triggers & Controls
+        binding.btnThemeBatch.setOnClickListener { enterBatchMode() }
+        binding.wsCharacters.btnCharBatch.setOnClickListener { enterBatchMode() }
+        binding.wsWorldBooks.btnWbBatch.setOnClickListener { enterBatchMode() }
+        binding.wsPresets.btnPresetBatch.setOnClickListener { enterBatchMode() }
+        binding.wsComponents.btnCompBatch.setOnClickListener { enterBatchMode() }
+
+        binding.btnBatchSelectAll.setOnClickListener { batchSelectAll() }
+        binding.btnBatchRange.setOnClickListener { batchSelectRange() }
+        binding.btnBatchInvert.setOnClickListener { batchInvertSelection() }
+        binding.btnBatchDone.setOnClickListener { exitBatchMode() }
+        binding.btnBatchCategorize.setOnClickListener { runBatchCategorize() }
+        binding.btnBatchMergeVersion.setOnClickListener { runBatchMergeVersions() }
+        binding.btnBatchDelete.setOnClickListener { runBatchDelete() }
 
         // Workspace 2: Characters Listeners
         binding.wsCharacters.btnCharCatFilter.setOnClickListener {
@@ -2097,6 +2155,221 @@ class MainActivity : AppCompatActivity() {
             lifecycleScope.launch {
                 withContext(Dispatchers.IO) { libRepo.deleteComponent(c.id) }
                 toast("已删除组件")
+                refreshActiveWorkspace()
+            }
+        }
+    }
+
+    // ================== Universal Batch Multi-Select ==================
+
+    private fun enterBatchMode() {
+        batchMode = true
+        batchSelectedIds.clear()
+        applyBottomBarVisibility()
+        binding.batchActionBar.visibility = View.VISIBLE
+        binding.btnBatchCategorize.visibility =
+            if (activeWorkspace == "themes" || activeWorkspace == "characters") View.VISIBLE else View.GONE
+        binding.btnBatchMergeVersion.visibility =
+            if (activeWorkspace != "themes") View.VISIBLE else View.GONE
+        syncBatchUi()
+    }
+
+    private fun exitBatchMode() {
+        if (!batchMode) return
+        batchMode = false
+        batchSelectedIds.clear()
+        binding.batchActionBar.visibility = View.GONE
+        applyBottomBarVisibility()
+        syncBatchUi()
+    }
+
+    private fun toggleBatchSelection(id: String) {
+        if (id in batchSelectedIds) batchSelectedIds.remove(id) else batchSelectedIds.add(id)
+        syncBatchUi()
+    }
+
+    private fun currentVisibleIds(): List<String> = when (activeWorkspace) {
+        "themes" -> sourcesAdapter.getVisibleIds()
+        "characters" -> charactersAdapter.getVisibleIds()
+        "worldbooks" -> worldBooksAdapter.getVisibleIds()
+        "presets" -> presetsAdapter.getVisibleIds()
+        "components" -> componentsAdapter.getVisibleIds()
+        else -> emptyList()
+    }
+
+    private fun syncBatchUi() {
+        binding.tvBatchCount.text = "已选 ${batchSelectedIds.size} 项"
+        val snap = batchSelectedIds.toSet()
+        sourcesAdapter.updateSelection(batchMode && activeWorkspace == "themes", snap)
+        charactersAdapter.updateSelection(batchMode && activeWorkspace == "characters", snap)
+        worldBooksAdapter.updateSelection(batchMode && activeWorkspace == "worldbooks", snap)
+        presetsAdapter.updateSelection(batchMode && activeWorkspace == "presets", snap)
+        componentsAdapter.updateSelection(batchMode && activeWorkspace == "components", snap)
+    }
+
+    private fun batchSelectAll() {
+        val ids = currentVisibleIds()
+        if (ids.isEmpty()) return
+        if (batchSelectedIds.size == ids.size) {
+            batchSelectedIds.clear()
+        } else {
+            batchSelectedIds.clear()
+            batchSelectedIds.addAll(ids)
+        }
+        syncBatchUi()
+    }
+
+    /**
+     * Contiguous range select: fills all items between the first and last currently selected indices!
+     */
+    private fun batchSelectRange() {
+        val ids = currentVisibleIds()
+        if (ids.isEmpty()) return
+        val selectedIndices = ids.indices.filter { ids[it] in batchSelectedIds }
+        if (selectedIndices.size < 2) {
+            toast("请先点选区间首尾两项，再点「连选」")
+            return
+        }
+        val first = selectedIndices.first()
+        val last = selectedIndices.last()
+        for (i in first..last) {
+            batchSelectedIds.add(ids[i])
+        }
+        syncBatchUi()
+        toast("已连选 ${last - first + 1} 项")
+    }
+
+    private fun batchInvertSelection() {
+        val ids = currentVisibleIds()
+        if (ids.isEmpty()) return
+        val next = ids.filter { it !in batchSelectedIds }
+        batchSelectedIds.clear()
+        batchSelectedIds.addAll(next)
+        syncBatchUi()
+    }
+
+    private fun runBatchCategorize() {
+        val ids = batchSelectedIds.toList()
+        if (ids.isEmpty()) {
+            toast("请先勾选要分类的项目")
+            return
+        }
+        val scope = if (activeWorkspace == "themes") CategoryManager.SCOPE_THEMES else CategoryManager.SCOPE_CHARACTERS
+        val allCats = catManager.getCategories(scope)
+        if (allCats.isEmpty()) {
+            showQuickAddCategoryDialog(scope) { runBatchCategorize() }
+            return
+        }
+        val items = allCats.map { PickerItem(it, catManager.formatIndentedLabel(it)) }
+        VaultSheets.multiSelect(
+            ctx = this,
+            title = "批量分类（已选 ${ids.size} 项）",
+            items = items,
+            preselectedIds = emptySet(),
+            headerAction = "+ 新建" to { showQuickAddCategoryDialog(scope) { runBatchCategorize() } }
+        ) { picked ->
+            if (picked.isEmpty()) {
+                toast("未勾选任何分类")
+                return@multiSelect
+            }
+            VaultSheets.actionList(
+                ctx = this,
+                title = "应用方式",
+                actions = listOf(
+                    SheetAction("追加分类", "保留原有分类并添加新分类") {
+                        applyBatchCategory(ids, picked, append = true)
+                    },
+                    SheetAction("覆盖分类", "替换为当前选中的分类") {
+                        applyBatchCategory(ids, picked, append = false)
+                    }
+                )
+            )
+        }
+    }
+
+    private fun applyBatchCategory(ids: List<String>, categories: List<String>, append: Boolean) {
+        lifecycleScope.launch {
+            withContext(Dispatchers.IO) {
+                if (activeWorkspace == "themes") {
+                    repo.batchSetSourceCategories(ids, categories, append)
+                } else {
+                    libRepo.batchSetCharacterCategories(ids, categories, append)
+                }
+            }
+            toast("已为 ${ids.size} 项更新分类")
+            exitBatchMode()
+            refreshActiveWorkspace()
+        }
+    }
+
+    private fun runBatchMergeVersions() {
+        val ids = batchSelectedIds.toList()
+        if (ids.size < 2) {
+            toast("请至少勾选 2 项进行版本合并")
+            return
+        }
+        val suggestedName = when (activeWorkspace) {
+            "characters" -> libRepo.getCharacterById(ids.first())?.name ?: ""
+            "worldbooks" -> libRepo.getWorldBookById(ids.first())?.name ?: ""
+            "presets" -> libRepo.getPresetById(ids.first())?.name ?: ""
+            else -> ""
+        }
+        VaultSheets.input(
+            ctx = this,
+            title = "合并为同一作品的不同版本",
+            message = "将把选中的 ${ids.size} 项归入同一个版本组，列表只展示最新版，进入详情页可随时切换版本。",
+            hint = "输入作品分组名称",
+            initialValue = suggestedName,
+            confirmText = "合并"
+        ) { name ->
+            val clean = name.trim()
+            if (clean.isEmpty()) {
+                toast("请输入分组名称")
+                return@input
+            }
+            lifecycleScope.launch {
+                withContext(Dispatchers.IO) {
+                    when (activeWorkspace) {
+                        "characters" -> libRepo.mergeCharacterVersions(ids, clean)
+                        "worldbooks" -> libRepo.mergeWorldBookVersions(ids, clean)
+                        "presets" -> libRepo.mergePresetVersions(ids, clean)
+                        "components" -> libRepo.mergeComponentVersions(ids, clean)
+                        else -> Unit
+                    }
+                }
+                toast("已合并 ${ids.size} 项到「$clean」")
+                exitBatchMode()
+                refreshActiveWorkspace()
+            }
+        }
+    }
+
+    private fun runBatchDelete() {
+        val ids = batchSelectedIds.toList()
+        if (ids.isEmpty()) {
+            toast("请先勾选要删除的项目")
+            return
+        }
+        VaultSheets.confirm(
+            ctx = this,
+            title = "批量删除 (${ids.size} 项)",
+            message = "确定删除选中的 ${ids.size} 项？将同时清理仅由其引用的独享图床缓存。",
+            confirmText = "删除 ${ids.size} 项",
+            destructive = true
+        ) {
+            lifecycleScope.launch {
+                withContext(Dispatchers.IO) {
+                    when (activeWorkspace) {
+                        "themes" -> repo.batchDeleteSources(ids)
+                        "characters" -> ids.forEach { libRepo.deleteCharacter(it) }
+                        "worldbooks" -> ids.forEach { libRepo.deleteWorldBook(it) }
+                        "presets" -> ids.forEach { libRepo.deletePreset(it) }
+                        "components" -> ids.forEach { libRepo.deleteComponent(it) }
+                        else -> Unit
+                    }
+                }
+                toast("已批量删除 ${ids.size} 项")
+                exitBatchMode()
                 refreshActiveWorkspace()
             }
         }
