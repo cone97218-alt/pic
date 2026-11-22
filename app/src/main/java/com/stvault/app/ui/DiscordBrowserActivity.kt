@@ -701,20 +701,95 @@ class DiscordBrowserActivity : AppCompatActivity() {
                       }
                     }
                     var tries = 0;
+                    var appFallbackTried = false;
+                    function clearBoxText() {
+                      var bb = findVisibleBox();
+                      if (!bb) return;
+                      bb.focus();
+                      var s = window.getSelection();
+                      if (s) {
+                        var r = document.createRange();
+                        r.selectNodeContents(bb);
+                        s.removeAllRanges();
+                        s.addRange(r);
+                      }
+                      try { bb.dispatchEvent(new InputEvent('beforeinput', { inputType: 'deleteContentBackward', bubbles: true, cancelable: true })); } catch (e) {}
+                      document.execCommand('delete', false, null);
+                    }
+                    function tryAppLauncherFlow() {
+                      clearBoxText();
+                      var scope = document.querySelector('div[class*="chatLayerWrapper_"]') || document;
+                      var appBtn = scope.querySelector('button[aria-label="应用"], button[aria-label="Apps"], button[class*="appLauncher"], button[class*="entryPointButton"], div[class*="appLauncher"] button');
+                      if (!appBtn) return;
+                      appBtn.click();
+                      var appTries = 0;
+                      var appTimer = setInterval(function() {
+                        appTries++;
+                        var dlg = document.querySelector('div[role="dialog"], div[class*="drawerSizingWrapper_"], div[class*="appLauncher_"], div[class*="contentWrapper_"]');
+                        if (!dlg) {
+                          if (appTries >= 20) clearInterval(appTimer);
+                          return;
+                        }
+                        // If a command row matching targetName is already visible, click it directly!
+                        var clickables = dlg.querySelectorAll('button, [role="button"], [role="option"], [class*="command_"], [class*="clickable_"]');
+                        var cmdHit = null;
+                        for (var k = 0; k < clickables.length; k++) {
+                          var ct = (clickables[k].textContent || '').trim().toLowerCase();
+                          if (targetName && ct && ct.indexOf(targetName) !== -1 && ct.length < 60) {
+                            cmdHit = clickables[k];
+                            break;
+                          }
+                        }
+                        if (cmdHit) {
+                          clearInterval(appTimer);
+                          cmdHit.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                          cmdHit.click();
+                          setTimeout(function() {
+                            var b3 = findVisibleBox();
+                            var r3 = b3 ? (b3.textContent || '').trim() : '';
+                            var hasPill3 = !!document.querySelector('[class*="optionPill_"], [class*="commandName_"], [class*="pill_"], [data-slate-void="true"]');
+                            if (hasPill3 || (r3 && r3.indexOf('/') !== 0)) {
+                              if (window.STHoardBridge && window.STHoardBridge.requestNativeEnter) {
+                                window.STHoardBridge.requestNativeEnter(200);
+                              }
+                            }
+                          }, 450);
+                          return;
+                        }
+                        // Otherwise, if App Launcher has a search input, type targetName once to filter commands
+                        if (appTries === 3 && targetName) {
+                          var sInp = dlg.querySelector('input[type="text"], input[type="search"], input');
+                          if (sInp) {
+                            sInp.focus();
+                            var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                            if (setter) setter.call(sInp, targetName); else sInp.value = targetName;
+                            sInp.dispatchEvent(new Event('input', { bubbles: true }));
+                          }
+                        }
+                        if (appTries >= 24) clearInterval(appTimer);
+                      }, 150);
+                    }
                     var timer = setInterval(function() {
                       tries++;
                       // Strictly match Discord's slash-command autocomplete popup
                       var popup = document.querySelector('div[class*="autocomplete_"]');
                       if (!popup || popup.getBoundingClientRect().height < 20) {
-                        if (tries >= 26) clearInterval(timer);
+                        if (tries >= 9 && !appFallbackTried) {
+                          appFallbackTried = true;
+                          clearInterval(timer);
+                          tryAppLauncherFlow();
+                        }
                         return;
                       }
                       var rows = popup.querySelectorAll('[role="option"], div[class*="autocompleteRow_"]');
                       if (!rows || rows.length === 0) {
-                        if (tries >= 26) clearInterval(timer);
+                        if (tries >= 9 && !appFallbackTried) {
+                          appFallbackTried = true;
+                          clearInterval(timer);
+                          tryAppLauncherFlow();
+                        }
                         return;
                       }
-                      // Only pick a row that actually matches targetName (avoid clicking category headers or wrong bots)
                       var matched = null;
                       for (var i = 0; i < rows.length; i++) {
                         var t = (rows[i].textContent || '').toLowerCase();
@@ -724,18 +799,20 @@ class DiscordBrowserActivity : AppCompatActivity() {
                         }
                       }
                       if (!matched) {
-                        if (tries >= 26) clearInterval(timer);
+                        if (tries >= 9 && !appFallbackTried) {
+                          appFallbackTried = true;
+                          clearInterval(timer);
+                          tryAppLauncherFlow();
+                        }
                         return;
                       }
                       clearInterval(timer);
                       matched.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                       matched.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
                       matched.click();
-                      // Wait for Discord to convert raw "/cmd" into a real Slash Command pill before pressing Enter!
                       setTimeout(function() {
                         var b2 = findVisibleBox();
                         var rawTxt = b2 ? (b2.textContent || '').trim() : '';
-                        // If textbox still contains raw unparsed "/..." plain text and no slash pill exists, DO NOT press Enter (prevents AutoMod block!)
                         var hasSlashPill = !!document.querySelector('[class*="optionPill_"], [class*="commandName_"], [class*="pill_"], [data-slate-void="true"]');
                         if (hasSlashPill || (rawTxt.indexOf('/') !== 0)) {
                           if (window.STHoardBridge && window.STHoardBridge.requestNativeEnter) {
@@ -800,14 +877,30 @@ class DiscordBrowserActivity : AppCompatActivity() {
         binding.fabHoard.isEnabled = !isBusy
     }
 
+    override fun onResume() {
+        super.onResume()
+        binding.webDiscord.onResume()
+        binding.webDiscord.resumeTimers()
+    }
+
     override fun onPause() {
         super.onPause()
         CookieManager.getInstance().flush()
+        binding.webDiscord.onPause()
+        binding.webDiscord.pauseTimers()
     }
 
     override fun onDestroy() {
-        binding.webDiscord.stopLoading()
-        binding.webDiscord.destroy()
+        try {
+            val web = binding.webDiscord
+            web.stopLoading()
+            web.loadUrl("about:blank")
+            web.onPause()
+            (web.parent as? android.view.ViewGroup)?.removeView(web)
+            web.removeAllViews()
+            web.destroy()
+        } catch (_: Exception) {
+        }
         super.onDestroy()
     }
 

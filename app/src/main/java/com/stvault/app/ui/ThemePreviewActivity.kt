@@ -813,6 +813,36 @@ $safeCustomCss
         """.trimIndent()
     }
 
+    override fun onResume() {
+        super.onResume()
+        binding.webPreview.onResume()
+        binding.webPreview.resumeTimers()
+    }
+
+    override fun onPause() {
+        binding.webPreview.evaluateJavascript(
+            "(function(){ document.querySelectorAll('audio,video').forEach(function(m){ try{ m.pause(); m.currentTime=0; }catch(e){} }); })();",
+            null
+        )
+        binding.webPreview.onPause()
+        binding.webPreview.pauseTimers()
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        try {
+            val web = binding.webPreview
+            web.stopLoading()
+            web.loadUrl("about:blank")
+            web.onPause()
+            (web.parent as? android.view.ViewGroup)?.removeView(web)
+            web.removeAllViews()
+            web.destroy()
+        } catch (_: Exception) {
+        }
+        super.onDestroy()
+    }
+
     private fun toast(msg: String) {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
     }
