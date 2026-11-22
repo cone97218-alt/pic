@@ -3091,10 +3091,10 @@ class MainActivity : AppCompatActivity() {
         val items = allCats.map { PickerItem(it, catManager.formatIndentedLabel(it)) }
         // Pre-select tags shared by ALL currently selected items (e.g. "待整理") so unchecking removes them in 1 tap
         val selectedCatLists: List<Set<String>> = if (activeWorkspace == "themes") {
-            val map = repo.getSources().associateBy { it.id }
+            val map = repo.getAllSources().associateBy { it.id }
             ids.mapNotNull { map[it]?.categories?.toSet() }
         } else {
-            val map = libRepo.getCharacters().associateBy { it.id }
+            val map = libRepo.getAllCharacters().associateBy { it.id }
             ids.mapNotNull { map[it]?.categories?.toSet() }
         }
         val commonCats: Set<String> = if (selectedCatLists.isEmpty()) {
