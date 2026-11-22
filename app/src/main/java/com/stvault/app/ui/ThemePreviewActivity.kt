@@ -4,7 +4,10 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.view.GestureDetector
+import android.view.MotionEvent
 import android.view.View
+import kotlin.math.abs
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
@@ -91,6 +94,34 @@ class ThemePreviewActivity : AppCompatActivity() {
         }
 
         val web = binding.webPreview
+        // Horizontal swipe gesture to switch between series variants (does not interfere with vertical scroll or edge-back)
+        val density = resources.displayMetrics.density
+        val minSwipeDist = 64f * density
+        val edgeGuardPx = 24f * density
+        val swipeDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onFling(
+                e1: MotionEvent?,
+                e2: MotionEvent,
+                velocityX: Float,
+                velocityY: Float
+            ): Boolean {
+                if (siblingVariants.size <= 1 || e1 == null) return false
+                val w = web.width.toFloat()
+                if (w > 0f && (e1.x < edgeGuardPx || e1.x > w - edgeGuardPx)) return false
+                val dx = e2.x - e1.x
+                val dy = e2.y - e1.y
+                if (abs(dx) > minSwipeDist && abs(dx) > abs(dy) * 1.8f && abs(velocityX) > 250f) {
+                    if (dx < 0f) stepVariant(1) else stepVariant(-1)
+                    return true
+                }
+                return false
+            }
+        })
+        @SuppressLint("ClickableViewAccessibility")
+        web.setOnTouchListener { _, event ->
+            swipeDetector.onTouchEvent(event)
+            false
+        }
         // Eliminate white flash on initial load
         web.setBackgroundColor(ContextCompat.getColor(this, R.color.bg))
         web.settings.apply {
