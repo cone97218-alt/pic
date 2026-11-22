@@ -332,6 +332,8 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         presetsMap.values.sortedByDescending { it.addedAt }
     }
 
+    fun getComponentById(id: String): ComponentRecord? = synchronized(lock) { componentsMap[id] }
+
     fun getAllComponents(): List<ComponentRecord> = synchronized(lock) {
         componentsMap.values.sortedByDescending { it.addedAt }
     }
