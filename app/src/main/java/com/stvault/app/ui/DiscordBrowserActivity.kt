@@ -69,7 +69,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
         binding.btnWebCommands.setOnClickListener { showQuickCommandsSheet() }
         binding.btnWebSidebar.setOnClickListener {
             binding.webDiscord.evaluateJavascript(
-                "(function(){ if(!window.__stSetSidebarHidden) return false; var next = !document.documentElement.classList.contains('st-hide-sidebar'); window.__stSetSidebarHidden(next); return next; })();"
+                "(function(){ if(!window.__stSetSidebarHidden) return false; var next = document.documentElement.getAttribute('data-st-hide-sidebar') !== '1'; window.__stSetSidebarHidden(next); return next; })();"
             ) { res ->
                 sidebarHidden = res == "true"
                 binding.btnWebSidebar.text = if (sidebarHidden) "频道" else "看消息"
@@ -738,30 +738,30 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 s.textContent = [
                   'html, body, #app-mount { width: 100% !important; min-width: 0 !important; max-width: 100% !important; overflow-x: hidden !important; margin: 0 !important; padding: 0 !important; }',
                   'div[class*="membersWrap_"], aside[class*="membersWrap_"] { display: none !important; }',
-                  'html.st-hide-sidebar nav[class*="guilds_"], html.st-hide-sidebar div[class*="guilds_"] { display: none !important; width: 0 !important; min-width: 0 !important; }',
-                  'html.st-hide-sidebar div[class*="base_"] > div[class*="content_"] > div[class*="sidebar_"] { display: none !important; width: 0 !important; min-width: 0 !important; }',
-                  'html.st-hide-sidebar div[class*="sidebarList_"], html.st-hide-sidebar div[class*="resizeHandle_"] { display: none !important; }',
-                  'html.st-hide-sidebar div[class*="base_"] { position: relative !important; left: 0 !important; right: 0 !important; margin-left: 0 !important; width: 100% !important; min-width: 0 !important; max-width: 100% !important; }',
-                  'html.st-hide-sidebar div[class*="base_"] > div[class*="content_"] { width: 100% !important; min-width: 0 !important; max-width: 100% !important; margin: 0 !important; left: 0 !important; }',
-                  'html.st-hide-sidebar div[class*="chat_"], html.st-hide-sidebar main[class*="chatContent_"], html.st-hide-sidebar div[class*="container_"] { min-width: 0 !important; max-width: 100% !important; margin-left: 0 !important; left: 0 !important; box-sizing: border-box !important; }',
-                  'html.st-hide-sidebar div[class*="chatLayerWrapper_"] { position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important; width: 100% !important; min-width: 0 !important; max-width: 100% !important; margin: 0 !important; padding: 0 !important; transform: none !important; z-index: 200 !important; background: var(--background-primary, #313338) !important; box-sizing: border-box !important; }',
-                  'html.st-hide-sidebar div[class*="chatLayerWrapper_"] > * { width: 100% !important; min-width: 0 !important; max-width: 100% !important; margin: 0 !important; left: 0 !important; }',
-                  'html.st-hide-sidebar section[class*="title_"] { position: relative !important; z-index: 20 !important; flex-shrink: 0 !important; }',
-                  'html.st-hide-sidebar section[class*="title_"] div[class*="children_"] { min-width: 0 !important; flex: 1 1 auto !important; overflow: hidden !important; }',
-                  'html.st-hide-sidebar section[class*="title_"] h1, html.st-hide-sidebar section[class*="title_"] div[class*="titleWrapper_"] { min-width: 0 !important; overflow: hidden !important; text-overflow: ellipsis !important; white-space: nowrap !important; }',
-                  'html.st-hide-sidebar section[class*="title_"] div[class*="toolbar_"] { flex-shrink: 0 !important; position: relative !important; z-index: 25 !important; }',
-                  'html.st-hide-sidebar div[class*="headerRow_"], html.st-hide-sidebar div[class*="buttons_"] { position: relative !important; z-index: 15 !important; }',
-                  'html.st-hide-sidebar ol[class*="scrollerInner_"], html.st-hide-sidebar li[class*="messageListItem_"] { max-width: 100% !important; box-sizing: border-box !important; }',
-                  'html:not(.st-hide-sidebar) div[class*="base_"] > div[class*="content_"] > div[class*="sidebar_"] { width: calc(100vw - 72px) !important; min-width: 240px !important; max-width: 100vw !important; }',
-                  'html:not(.st-hide-sidebar) div[class*="sidebarList_"] { width: calc(100vw - 72px) !important; }'
+                  'html[data-st-hide-sidebar="1"] nav[class*="guilds_"], html[data-st-hide-sidebar="1"] div[class*="guilds_"] { display: none !important; width: 0 !important; min-width: 0 !important; }',
+                  'html[data-st-hide-sidebar="1"] div[class*="base_"] > div[class*="content_"] > div[class*="sidebar_"] { display: none !important; width: 0 !important; min-width: 0 !important; }',
+                  'html[data-st-hide-sidebar="1"] div[class*="sidebarList_"], html[data-st-hide-sidebar="1"] div[class*="resizeHandle_"] { display: none !important; }',
+                  'html[data-st-hide-sidebar="1"] div[class*="base_"] { position: relative !important; left: 0 !important; right: 0 !important; margin-left: 0 !important; width: 100% !important; min-width: 0 !important; max-width: 100% !important; }',
+                  'html[data-st-hide-sidebar="1"] div[class*="base_"] > div[class*="content_"] { width: 100% !important; min-width: 0 !important; max-width: 100% !important; margin: 0 !important; left: 0 !important; }',
+                  'html[data-st-hide-sidebar="1"] div[class*="chat_"], html[data-st-hide-sidebar="1"] main[class*="chatContent_"], html[data-st-hide-sidebar="1"] div[class*="container_"] { min-width: 0 !important; max-width: 100% !important; margin-left: 0 !important; left: 0 !important; box-sizing: border-box !important; }',
+                  'html[data-st-hide-sidebar="1"] div[class*="chatLayerWrapper_"] { position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important; width: 100% !important; min-width: 0 !important; max-width: 100% !important; margin: 0 !important; padding: 0 !important; transform: none !important; z-index: 200 !important; background: var(--background-primary, #313338) !important; box-sizing: border-box !important; }',
+                  'html[data-st-hide-sidebar="1"] div[class*="chatLayerWrapper_"] > * { width: 100% !important; min-width: 0 !important; max-width: 100% !important; margin: 0 !important; left: 0 !important; }',
+                  'html[data-st-hide-sidebar="1"] section[class*="title_"] { position: relative !important; z-index: 20 !important; flex-shrink: 0 !important; }',
+                  'html[data-st-hide-sidebar="1"] section[class*="title_"] div[class*="children_"] { min-width: 0 !important; flex: 1 1 auto !important; overflow: hidden !important; }',
+                  'html[data-st-hide-sidebar="1"] section[class*="title_"] h1, html[data-st-hide-sidebar="1"] section[class*="title_"] div[class*="titleWrapper_"] { min-width: 0 !important; overflow: hidden !important; text-overflow: ellipsis !important; white-space: nowrap !important; }',
+                  'html[data-st-hide-sidebar="1"] section[class*="title_"] div[class*="toolbar_"] { flex-shrink: 0 !important; position: relative !important; z-index: 25 !important; }',
+                  'html[data-st-hide-sidebar="1"] div[class*="headerRow_"], html[data-st-hide-sidebar="1"] div[class*="buttons_"] { position: relative !important; z-index: 15 !important; }',
+                  'html[data-st-hide-sidebar="1"] ol[class*="scrollerInner_"], html[data-st-hide-sidebar="1"] li[class*="messageListItem_"] { max-width: 100% !important; box-sizing: border-box !important; }',
+                  'html:not([data-st-hide-sidebar="1"]) div[class*="base_"] > div[class*="content_"] > div[class*="sidebar_"] { width: calc(100vw - 72px) !important; min-width: 240px !important; max-width: 100vw !important; }',
+                  'html:not([data-st-hide-sidebar="1"]) div[class*="sidebarList_"] { width: calc(100vw - 72px) !important; }'
                 ].join('\n');
                 document.head.appendChild(s);
               }
               window.__stSetSidebarHidden = function(hidden) {
                 if (hidden) {
-                  document.documentElement.classList.add('st-hide-sidebar');
+                  document.documentElement.setAttribute('data-st-hide-sidebar', '1');
                 } else {
-                  document.documentElement.classList.remove('st-hide-sidebar');
+                  document.documentElement.removeAttribute('data-st-hide-sidebar');
                 }
                 if (window.STHoardBridge && window.STHoardBridge.onSidebarStateChanged) {
                   window.STHoardBridge.onSidebarStateChanged(!!hidden);
@@ -785,7 +785,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
                   var a = e.target && e.target.closest ? e.target.closest('a[href*="/channels/"]') : null;
                   if (!a) return;
                   var inSidebar = a.closest('div[class*="sidebar_"], div[class*="sidebarList_"]');
-                  if (inSidebar && !document.documentElement.classList.contains('st-hide-sidebar')) {
+                  if (inSidebar && document.documentElement.getAttribute('data-st-hide-sidebar') !== '1') {
                     setTimeout(function() {
                       window.__stSetSidebarHidden(true);
                     }, 180);
