@@ -435,8 +435,8 @@ class MainActivity : AppCompatActivity() {
         // 1. Themes
         binding.rvVault.layoutManager = LinearLayoutManager(this)
         sourcesAdapter = SourcesAdapter(
-            onClick = { source -> showSourceDetailDialog(source) },
-            onPreviewClick = { source -> ThemePreviewActivity.open(this, source.id) },
+            onClick = { source -> ThemePreviewActivity.open(this, source.id) },
+            onPreviewClick = { source -> showSourceDetailDialog(source) },
             onDeleteClick = { source -> confirmDeleteSource(source) },
             onLongClick = { source -> showThemeActionMenu(source) },
             onToggleSelect = { id -> toggleBatchSelection(id) }
@@ -1546,31 +1546,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showSourceDetailDialog(source: SourceRecord) {
+    private fun showSourceDetailDialog(initialSource: SourceRecord) {
+        var activeSource = initialSource
         val dBinding = DialogSourceDetailBinding.inflate(LayoutInflater.from(this))
-        dBinding.tvDialogSourceTitle.text = source.name
         dBinding.rvDialogUrls.layoutManager = LinearLayoutManager(this)
-
-        // Populate Sibling Variant Pills when >1 variant exists in this theme series
-        val variants = repo.getVariantsForTheme(source.seriesKey)
-        if (variants.size > 1) {
-            dBinding.scrollDialogVariants.visibility = View.VISIBLE
-            val opts = variants.map { v ->
-                val lbl = v.variantTag.ifBlank { v.name }
-                v.id to lbl
-            }
-            buildSimpleChips(dBinding.chipGroupDialogVariants, opts, source.id) { pickedId ->
-                if (pickedId != source.id) {
-                    com.stvault.app.core.ThemeVariantGrouper.setPreferredVariant(this, source.seriesKey, pickedId)
-                    val target = repo.getSourceById(pickedId)
-                    activeSourceDialog?.dismiss()
-                    refreshVaultList()
-                    if (target != null) showSourceDetailDialog(target)
-                }
-            }
-        } else {
-            dBinding.scrollDialogVariants.visibility = View.GONE
-        }
 
         val detailAdapter = UrlsAdapter(
             repo = repo,
@@ -1584,16 +1563,50 @@ class MainActivity : AppCompatActivity() {
             }
         )
         dBinding.rvDialogUrls.adapter = detailAdapter
-        detailAdapter.submitList(repo.getUrlRecordsForSource(source))
+
+        fun bindActiveSource(target: SourceRecord) {
+            activeSource = target
+            dBinding.tvDialogSourceTitle.text = target.name
+            detailAdapter.submitList(repo.getUrlRecordsForSource(target))
+        }
+
+        bindActiveSource(initialSource)
+
+        // Populate Sibling Variant Pills when >1 variant exists (updates in-place with zero flicker!)
+        val variants = repo.getVariantsForTheme(initialSource.seriesKey)
+        if (variants.size > 1) {
+            dBinding.scrollDialogVariants.visibility = View.VISIBLE
+            val opts = variants.map { v ->
+                val lbl = v.variantTag.ifBlank { v.name }
+                v.id to lbl
+            }
+            fun rebuildVariantChips(selectedId: String) {
+                buildSimpleChips(dBinding.chipGroupDialogVariants, opts, selectedId) { pickedId ->
+                    if (pickedId != activeSource.id) {
+                        com.stvault.app.core.ThemeVariantGrouper.setPreferredVariant(this, initialSource.seriesKey, pickedId)
+                        val target = repo.getSourceById(pickedId)
+                        if (target != null) {
+                            bindActiveSource(target)
+                            rebuildVariantChips(pickedId)
+                            refreshVaultList()
+                        }
+                    }
+                }
+            }
+            rebuildVariantChips(initialSource.id)
+        } else {
+            dBinding.scrollDialogVariants.visibility = View.GONE
+        }
 
         fun runModalRepair(mode: String) {
             val labelPrefix = if (mode == "catbox") "上传换链" else "压缩内嵌"
+            val curId = activeSource.id
             activeSourceDialog?.dismiss()
             showIsland("正在$labelPrefix...")
             lifecycleScope.launch {
                 try {
                     val res = withContext(Dispatchers.IO) {
-                        repo.repairSourceById(source.id, mode) { done, total ->
+                        repo.repairSourceById(curId, mode) { done, total ->
                             runOnUiThread {
                                 updateIsland("$labelPrefix $done / $total")
                             }
@@ -1610,11 +1623,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         dBinding.btnDialogDelete.setOnClickListener {
-            confirmDeleteSource(source)
+            confirmDeleteSource(activeSource)
         }
         dBinding.btnDialogPreview.setOnClickListener {
             activeSourceDialog?.dismiss()
-            ThemePreviewActivity.open(this, source.id)
+            ThemePreviewActivity.open(this, activeSource.id)
         }
         dBinding.btnDialogRepairCatbox.setOnClickListener { runModalRepair("catbox") }
         dBinding.btnDialogRepairBase64.setOnClickListener { runModalRepair("base64_webp") }
