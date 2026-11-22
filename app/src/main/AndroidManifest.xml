@@ -44,6 +44,10 @@
             android:name=".ui.SettingsActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".ui.ComponentPreviewActivity"
+            android:exported="false" />
+
         <service
             android:name=".service.VaultDownloadService"
             android:exported="false"

@@ -491,6 +491,35 @@ class ResourceDetailActivity : AppCompatActivity() {
                 if (parsed.mesExample.isNotBlank()) out.add(DetailItem.TextBlock("对话示例", parsed.mesExample, false))
             }
         } else if (activeTabKey == "greetings" && parsed != null) {
+            val allGreetings = listOf("默认开场白" to parsed.firstMes) +
+                parsed.alternateGreetings.mapIndexed { i, g -> "备用开场白 #${i + 1}" to g }
+            out.add(
+                DetailItem.ActionStrip(
+                    leftText = "共 ${allGreetings.size} 条开场白",
+                    actionLabel = "酒馆渲染预览"
+                ) {
+                    val rules = parsed.embeddedRegexScripts.map {
+                        Triple(it.findRegex, it.replaceString, it.disabled)
+                    }
+                    if (allGreetings.size == 1) {
+                        ComponentPreviewActivity.openCharacterGreeting(
+                            this, rec.id, rec.name, parsed.firstMes, rules
+                        )
+                    } else {
+                        VaultSheets.actionList(
+                            this,
+                            title = "选择要渲染的开场白",
+                            actions = allGreetings.map { (label, text) ->
+                                SheetAction(label, text.take(40).replace('\n', ' ')) {
+                                    ComponentPreviewActivity.openCharacterGreeting(
+                                        this, rec.id, rec.name, text, rules
+                                    )
+                                }
+                            }
+                        )
+                    }
+                }
+            )
             out.add(DetailItem.TextBlock("默认开场白", parsed.firstMes.ifBlank { "（空）" }, false))
             parsed.alternateGreetings.forEachIndexed { idx, g ->
                 out.add(DetailItem.TextBlock("备用开场白 #${idx + 1}", g, false))
@@ -522,7 +551,12 @@ class ResourceDetailActivity : AppCompatActivity() {
                             title = r.name,
                             subtitle = "正则 · ${r.findRegex.take(60)}",
                             body = "查找正则：\n${r.findRegex}\n\n替换内容：\n${r.replaceString}",
-                            dotColor = dot
+                            dotColor = dot,
+                            onPreview = {
+                                ComponentPreviewActivity.openRegex(
+                                    this, r.name, r.findRegex, r.replaceString, r.rawJson, parsed.firstMes
+                                )
+                            }
                         )
                     )
                 }
@@ -540,7 +574,10 @@ class ResourceDetailActivity : AppCompatActivity() {
                             title = h.name,
                             subtitle = h.info.ifBlank { "酒馆助手脚本" },
                             body = body,
-                            dotColor = dot
+                            dotColor = dot,
+                            onPreview = {
+                                ComponentPreviewActivity.openHelper(this, h.name, h.content, h.rawJson)
+                            }
                         )
                     )
                 }
@@ -624,7 +661,10 @@ class ResourceDetailActivity : AppCompatActivity() {
                             title = r.name,
                             subtitle = r.findRegex.take(70),
                             body = "查找正则：\n${r.findRegex}\n\n替换内容：\n${r.replaceString}",
-                            dotColor = dot
+                            dotColor = dot,
+                            onPreview = {
+                                ComponentPreviewActivity.openRegex(this, r.name, r.findRegex, r.replaceString, r.rawJson)
+                            }
                         )
                     )
                 }
@@ -642,7 +682,10 @@ class ResourceDetailActivity : AppCompatActivity() {
                             title = h.name,
                             subtitle = h.info.ifBlank { "酒馆助手脚本" },
                             body = body,
-                            dotColor = dot
+                            dotColor = dot,
+                            onPreview = {
+                                ComponentPreviewActivity.openHelper(this, h.name, h.content, h.rawJson)
+                            }
                         )
                     )
                 }
@@ -750,7 +793,8 @@ class ResourceDetailActivity : AppCompatActivity() {
             val subtitle: String,
             val body: String,
             val dotColor: Int,
-            val dimmed: Boolean = false
+            val dimmed: Boolean = false,
+            val onPreview: (() -> Unit)? = null
         ) : DetailItem()
     }
 
@@ -971,6 +1015,20 @@ class ResourceDetailActivity : AppCompatActivity() {
                         ellipsize = android.text.TextUtils.TruncateAt.END
                         layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                     })
+                    if (item.onPreview != null) {
+                        titleRow.addView(TextView(ctx).apply {
+                            text = "预览"
+                            setTextColor(col(R.color.text_primary))
+                            textSize = 11f
+                            setTypeface(null, Typeface.BOLD)
+                            setBackgroundResource(R.drawable.bg_pill_accent)
+                            setPadding(dp(9), dp(3), dp(9), dp(3))
+                            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                                marginStart = dp(8)
+                            }
+                            setOnClickListener { item.onPreview.invoke() }
+                        })
+                    }
                     box.addView(titleRow)
 
                     if (item.subtitle.isNotBlank()) {

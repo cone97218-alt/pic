@@ -2002,20 +2002,67 @@ class MainActivity : AppCompatActivity() {
             } else {
                 "当前状态：全局独立"
             }
+            val canPreview = comp.type == "regex" || comp.type == "helper"
             val preview = "$linkInfo\n\n${content.take(2000)}" + if (content.length > 2000) "\n..." else ""
             VaultSheets.info(
                 ctx = this@MainActivity,
                 title = comp.name,
                 message = preview,
-                primaryText = "关联宿主",
-                onPrimary = { showLinkComponentDialog(comp) },
-                secondaryText = "关闭",
+                primaryText = if (canPreview) "沙盒预览" else "关联宿主",
+                onPrimary = {
+                    if (canPreview) launchComponentPreview(comp, content)
+                    else showLinkComponentDialog(comp)
+                },
+                secondaryText = if (canPreview) "关联宿主" else "关闭",
+                onSecondary = {
+                    if (canPreview) showLinkComponentDialog(comp)
+                },
                 tertiaryText = "导出",
                 onTertiary = {
                     pendingExportCompFile = libRepo.getComponentFile(comp)
                     exportCompFileLauncher.launch(comp.fileName)
                 }
             )
+        }
+    }
+
+    private fun launchComponentPreview(comp: ComponentRecord, rawContent: String) {
+        lifecycleScope.launch {
+            val linkedGreeting = withContext(Dispatchers.IO) {
+                if (comp.linkedTargetType == "character" && comp.linkedTargetId.isNotEmpty()) {
+                    libRepo.getCharacterById(comp.linkedTargetId)?.let { libRepo.parseCharacterDetail(it)?.firstMes }.orEmpty()
+                } else ""
+            }
+            val trimmed = rawContent.trim()
+            if (comp.type == "regex") {
+                try {
+                    val obj = if (trimmed.startsWith("[")) {
+                        org.json.JSONArray(trimmed).optJSONObject(0)
+                    } else {
+                        org.json.JSONObject(trimmed)
+                    }
+                    val find = obj?.optString("findRegex", "").orEmpty()
+                    val rep = obj?.optString("replaceString", "").orEmpty()
+                    ComponentPreviewActivity.openRegex(
+                        this@MainActivity, comp.name, find, rep, rawContent, linkedGreeting
+                    )
+                } catch (_: Exception) {
+                    toast("正则 JSON 解析失败")
+                }
+            } else {
+                val code = try {
+                    if (trimmed.startsWith("{")) {
+                        val o = org.json.JSONObject(trimmed)
+                        o.optString("content", o.optString("script", rawContent))
+                    } else if (trimmed.startsWith("[")) {
+                        val o = org.json.JSONArray(trimmed).optJSONObject(0)
+                        o?.optString("content", o.optString("script", rawContent)) ?: rawContent
+                    } else rawContent
+                } catch (_: Exception) {
+                    rawContent
+                }
+                ComponentPreviewActivity.openHelper(this@MainActivity, comp.name, code, rawContent)
+            }
         }
     }
 
