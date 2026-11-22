@@ -1488,7 +1488,12 @@ class MainActivity : AppCompatActivity() {
                     repo.searchSourceRows(q, activeSourceFilter, activeThemeCategory, groupVars)
                 }
                 sourcesAdapter.submitList(list)
-                binding.tvVaultCount.text = "共 ${list.size} 个美化"
+                val totalExpanded = list.sumOf { it.variantCount }
+                binding.tvVaultCount.text = if (groupVars && totalExpanded > list.size) {
+                    "共 ${list.size} 组（$totalExpanded 个美化）"
+                } else {
+                    "共 ${list.size} 个美化"
+                }
             } else {
                 val list = withContext(Dispatchers.IO) { repo.searchUrls(q, activeUrlFilter) }
                 urlsAdapter.submitList(list)

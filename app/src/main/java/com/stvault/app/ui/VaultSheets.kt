@@ -230,6 +230,10 @@ object VaultSheets {
             })
         }
 
+        val listBox = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
         actions.forEachIndexed { idx, act ->
             val row = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
@@ -256,14 +260,25 @@ object VaultSheets {
                     }
                 })
             }
-            root.addView(row)
+            listBox.addView(row)
             if (idx < actions.lastIndex && !act.checked) {
-                root.addView(View(ctx).apply {
+                listBox.addView(View(ctx).apply {
                     layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 1))
                     setBackgroundColor(col(ctx, R.color.border))
                 })
             }
         }
+
+        val maxScrollH = (ctx.resources.displayMetrics.heightPixels * 0.58f).toInt()
+        val scroll = androidx.core.widget.NestedScrollView(ctx).apply {
+            isFillViewport = false
+            addView(listBox, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        val lp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            if (actions.size > 7) maxScrollH else ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        root.addView(scroll, lp)
         sheet.show()
     }
 
