@@ -350,26 +350,21 @@ class TavernBridgeActivity : AppCompatActivity() {
     try { if (window.top && (window.top.__TAURITAVERN__ || window.top.SillyTavern)) return window.top; } catch (_) {}
     return window;
   })();
-  const toast = (type, msg) => { try { w.toastr && w.toastr[type] && w.toastr[type](msg, '酒馆匣互联'); } catch (_) {} };
   const urls = [
     'https://raw.githubusercontent.com/cone97218-alt/pic/main/index.js?t=' + Date.now(),
     'https://cdn.jsdelivr.net/gh/cone97218-alt/pic@main/index.js?t=' + Date.now()
   ];
-  let lastErr = '';
   for (const url of urls) {
     try {
       const res = await (w.fetch || fetch)(url, { cache: 'no-store' });
-      if (!res.ok) { lastErr = 'HTTP ' + res.status; continue; }
+      if (!res.ok) continue;
       const code = await res.text();
       if (code && code.includes('getMainWin')) {
         (new w.Function(code))();
-        toast('success', '已加载，请在 TT 扩展面板中打开「酒馆匣互联」');
         return;
       }
-      lastErr = '远端缓存尚未刷新';
-    } catch (e) { lastErr = String(e && e.message ? e.message : e); }
+    } catch (_) {}
   }
-  toast('error', '加载失败（' + lastErr + '），请检查网络或改用原生扩展');
 })();
         """.trimIndent()
 
