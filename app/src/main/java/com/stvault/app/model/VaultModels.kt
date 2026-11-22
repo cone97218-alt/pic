@@ -41,6 +41,7 @@ data class SourceRecord(
     val categories: List<String> = emptyList(),
     val fileName: String = "",
     val seriesKey: String = "",
+    val seriesName: String = "",
     val variantTag: String = ""
 )
 

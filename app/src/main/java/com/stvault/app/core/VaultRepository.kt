@@ -246,7 +246,9 @@ class VaultRepository private constructor(private val appContext: Context) {
                             }
                         }
                         val (autoSeries, autoVar) = ThemeVariantGrouper.extractSeriesAndVariant(resolvedName)
+                        val autoSeriesName = ThemeVariantGrouper.extractDisplaySeriesName(resolvedName)
                         val storedSeries = o.optString("seriesKey", "").ifBlank { autoSeries }
+                        val storedSeriesName = o.optString("seriesName", "").ifBlank { autoSeriesName }
                         val storedVariant = o.optString("variantTag", "").ifBlank { autoVar }
                         sourcesMap[id] = SourceRecord(
                             id = id,
@@ -261,6 +263,7 @@ class VaultRepository private constructor(private val appContext: Context) {
                             categories = cats,
                             fileName = storedFileName,
                             seriesKey = storedSeries,
+                            seriesName = storedSeriesName,
                             variantTag = storedVariant
                         )
                     }
@@ -309,6 +312,7 @@ class VaultRepository private constructor(private val appContext: Context) {
                 o.put("categories", JSONArray(s.categories))
                 if (s.fileName.isNotEmpty()) o.put("fileName", s.fileName)
                 if (s.seriesKey.isNotEmpty()) o.put("seriesKey", s.seriesKey)
+                if (s.seriesName.isNotEmpty()) o.put("seriesName", s.seriesName)
                 if (s.variantTag.isNotEmpty()) o.put("variantTag", s.variantTag)
                 srcObj.put(id, o)
             }
@@ -693,6 +697,7 @@ class VaultRepository private constructor(private val appContext: Context) {
         }
 
         val (autoSeries, autoVar) = ThemeVariantGrouper.extractSeriesAndVariant(displayName)
+        val autoSeriesName = ThemeVariantGrouper.extractDisplaySeriesName(displayName)
         sourcesMap[targetId] = SourceRecord(
             id = targetId,
             name = displayName,
@@ -705,6 +710,7 @@ class VaultRepository private constructor(private val appContext: Context) {
             folderName = folderName,
             fileName = name,
             seriesKey = autoSeries,
+            seriesName = autoSeriesName,
             variantTag = autoVar
         )
         var addedUrls = 0
@@ -1030,13 +1036,15 @@ class VaultRepository private constructor(private val appContext: Context) {
 
     fun mergeThemeSeries(ids: List<String>, seriesName: String) {
         if (ids.size < 2) return
-        val key = ThemeVariantGrouper.normalizeKey(seriesName).ifBlank { seriesName.trim().lowercase() }
+        val cleanSeriesName = seriesName.trim()
+        val key = ThemeVariantGrouper.normalizeKey(cleanSeriesName).ifBlank { cleanSeriesName.lowercase() }
         synchronized(lock) {
             for (id in ids) {
                 val cur = sourcesMap[id] ?: continue
                 val (_, autoVar) = ThemeVariantGrouper.extractSeriesAndVariant(cur.name)
                 sourcesMap[id] = cur.copy(
                     seriesKey = key,
+                    seriesName = cleanSeriesName,
                     variantTag = cur.variantTag.ifBlank { autoVar }
                 )
             }
@@ -1070,6 +1078,7 @@ class VaultRepository private constructor(private val appContext: Context) {
             if (q.isNotEmpty()) {
                 list = list.filter { s ->
                     s.name.lowercase().contains(q) ||
+                        s.seriesName.lowercase().contains(q) ||
                         s.fileName.lowercase().contains(q) ||
                         s.variantTag.lowercase().contains(q) ||
                         s.categories.any { it.lowercase().contains(q) } ||

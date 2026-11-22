@@ -30,6 +30,52 @@ object ThemeVariantGrouper {
         '暗', '亮', '深', '浅', '宽', '窄', '日', '夜', '简', '繁', '透', '雾', '奶', '茶', '墨', '玄', '素'
     )
 
+    fun extractDisplaySeriesName(rawName: String): String {
+        val cleaned = rawName.trim()
+            .replace(Regex("\\.(json|css|html|htm|txt)$", RegexOption.IGNORE_CASE), "")
+            .trim()
+        if (cleaned.isEmpty()) return ""
+        val tokens = cleaned.split(Regex("[/\\-_·•\\s()（）\\[\\]【】]+")).filter { it.isNotBlank() }
+        if (tokens.size >= 2) {
+            val baseParts = mutableListOf<String>()
+            var hitVar = false
+            for ((idx, tok) in tokens.withIndex()) {
+                if (idx > 0 && isPureVariantToken(tok)) {
+                    hitVar = true
+                } else {
+                    baseParts.add(tok)
+                }
+            }
+            if (hitVar && baseParts.isNotEmpty()) {
+                val joined = baseParts.joinToString(" ").trim()
+                if (joined.length >= 2) return joined
+            }
+        }
+        var stem = cleaned
+        for (pass in 0 until 2) {
+            var matched = false
+            for (v in MULTI_CHAR_VARIANTS) {
+                if (stem.length > v.length + 1 && stem.endsWith(v, ignoreCase = true)) {
+                    val cut = stem.substring(0, stem.length - v.length).trimEnd(' ', '-', '_', '/', '·', '(', '（')
+                    if (cut.length >= 2) {
+                        stem = cut
+                        matched = true
+                        break
+                    }
+                }
+            }
+            if (!matched && stem.length >= 4 && stem.last() in SINGLE_CHAR_VARIANTS) {
+                val prev = stem[stem.length - 2]
+                if (prev in setOf('-', '_', '/', ' ', '·') || prev in SINGLE_CHAR_VARIANTS) {
+                    stem = stem.substring(0, stem.length - 1).trimEnd(' ', '-', '_', '/', '·')
+                    matched = true
+                }
+            }
+            if (!matched) break
+        }
+        return stem.ifBlank { cleaned }
+    }
+
     /**
      * Returns Pair(normalizedSeriesKey, displayVariantTag).
      * Example: "叠金玉良缘/手机端/宽/黑" -> ("叠金玉良缘", "手机端·宽·黑")

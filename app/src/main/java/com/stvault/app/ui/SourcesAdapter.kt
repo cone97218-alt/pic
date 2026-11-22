@@ -45,10 +45,28 @@ class SourcesAdapter(
         val s = row.source
         val ctx = holder.binding.root.context
         val d = ctx.resources.displayMetrics.density
-        val cleanName = s.name
         val isSelected = selectionMode && s.id in selectedIds
+        val prefix = if (isSelected) "✓  " else ""
 
-        holder.binding.tvSourceName.text = if (isSelected) "✓  $cleanName" else cleanName
+        if (row.variantCount > 1) {
+            val seriesTitle = s.seriesName.ifBlank { s.name }
+            val vTag = s.variantTag.trim()
+            if (vTag.isNotEmpty() && !seriesTitle.equals(vTag, ignoreCase = true)) {
+                val sb = android.text.SpannableStringBuilder(prefix + seriesTitle + "  ")
+                val start = sb.length
+                sb.append(vTag)
+                val end = sb.length
+                val muted = ContextCompat.getColor(ctx, R.color.text_muted)
+                sb.setSpan(android.text.style.RelativeSizeSpan(0.78f), start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                sb.setSpan(android.text.style.ForegroundColorSpan(muted), start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                sb.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.NORMAL), start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                holder.binding.tvSourceName.text = sb
+            } else {
+                holder.binding.tvSourceName.text = prefix + seriesTitle
+            }
+        } else {
+            holder.binding.tvSourceName.text = prefix + s.name
+        }
 
         val catLabel = if (s.categories.isNotEmpty()) {
             s.categories.joinToString(" · ") { it.substringAfterLast('/') }
