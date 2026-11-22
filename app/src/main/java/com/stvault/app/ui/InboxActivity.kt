@@ -24,6 +24,7 @@ class InboxActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityInboxBinding
     private var busy = false
+    private var dcConfigExpanded = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -31,6 +32,9 @@ class InboxActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         binding.btnInboxClose.setOnClickListener { finish() }
+        binding.btnOpenHoardBrowser.setOnClickListener {
+            startActivity(Intent(this, DiscordBrowserActivity::class.java))
+        }
 
         // Restore saved config
         binding.etDcToken.setText(InboxManager.getBotToken(this))
@@ -40,6 +44,14 @@ class InboxActivity : AppCompatActivity() {
         binding.cbWatchDiscordPics.isChecked = InboxManager.isWatchDiscordPics(this)
         binding.swDeleteAfterImport.isChecked = InboxManager.isDeleteAfterImport(this)
         binding.swAutoTagPending.isChecked = InboxManager.isAutoTagEnabled(this)
+
+        // Collapse token/channel inputs by default once configured to prevent accidental edits
+        dcConfigExpanded = !InboxManager.isDiscordConfigured(this)
+        applyDcConfigCollapseUi()
+        binding.btnDcToggleConfig.setOnClickListener {
+            dcConfigExpanded = !dcConfigExpanded
+            applyDcConfigCollapseUi()
+        }
 
         refreshStatusUi()
 
@@ -75,6 +87,8 @@ class InboxActivity : AppCompatActivity() {
                     setBusy(false)
                     refreshStatusUi()
                     res.onSuccess { chName ->
+                        dcConfigExpanded = false
+                        applyDcConfigCollapseUi()
                         toast("连接成功：$chName")
                     }.onFailure { err ->
                         toast(err.message ?: "连接失败")
@@ -227,6 +241,11 @@ class InboxActivity : AppCompatActivity() {
             binding.etDcToken.text?.toString().orEmpty(),
             binding.etDcChannelId.text?.toString().orEmpty()
         )
+    }
+
+    private fun applyDcConfigCollapseUi() {
+        binding.dcConfigContainer.visibility = if (dcConfigExpanded) View.VISIBLE else View.GONE
+        binding.btnDcToggleConfig.text = if (dcConfigExpanded) "收起配置 ▴" else "编辑配置 ▾"
     }
 
     private fun refreshStatusUi() {

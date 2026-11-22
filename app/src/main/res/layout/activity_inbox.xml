@@ -88,6 +88,64 @@
             android:layout_height="wrap_content"
             android:orientation="vertical">
 
+            <!-- 0. Built-in Discord Web Hoarder (囤囤) -->
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                app:cardBackgroundColor="@color/surface"
+                app:cardCornerRadius="14dp"
+                app:cardElevation="0dp"
+                app:strokeColor="@color/border"
+                app:strokeWidth="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:padding="16dp">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="囤囤 · DC 网页囤货"
+                            android:textColor="@color/text_primary"
+                            android:textSize="14.5sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text="支持多附件、Bot 私聊与临时消息一键全收，自动识别作者"
+                            android:textColor="@color/text_muted"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnOpenHoardBrowser"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:layout_marginStart="10dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingHorizontal="16dp"
+                        android:text="打开囤囤"
+                        android:textColor="@color/on_accent"
+                        android:textSize="12.5sp"
+                        android:textStyle="bold"
+                        app:backgroundTint="@color/accent"
+                        app:cornerRadius="18dp" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
             <!-- 1. Discord Relay Channel Sync Card -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
@@ -121,6 +179,19 @@
                             android:textStyle="bold" />
 
                         <TextView
+                            android:id="@+id/btnDcToggleConfig"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginEnd="6dp"
+                            android:clickable="true"
+                            android:focusable="true"
+                            android:paddingHorizontal="6dp"
+                            android:paddingVertical="4dp"
+                            android:text="编辑配置 ▾"
+                            android:textColor="@color/text_muted"
+                            android:textSize="12sp" />
+
+                        <TextView
                             android:id="@+id/btnDcGuide"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
@@ -142,33 +213,55 @@
                         android:textColor="@color/text_muted"
                         android:textSize="12sp" />
 
-                    <EditText
-                        android:id="@+id/etDcToken"
+                    <!-- Collapsible Token & Channel ID Config Container -->
+                    <LinearLayout
+                        android:id="@+id/dcConfigContainer"
                         android:layout_width="match_parent"
-                        android:layout_height="40dp"
-                        android:layout_marginTop="12dp"
-                        android:background="@drawable/bg_input"
-                        android:hint="官方 Bot Token"
-                        android:inputType="textPassword"
-                        android:paddingHorizontal="12dp"
-                        android:singleLine="true"
-                        android:textColor="@color/text_primary"
-                        android:textColorHint="@color/text_muted"
-                        android:textSize="13sp" />
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical">
 
-                    <EditText
-                        android:id="@+id/etDcChannelId"
-                        android:layout_width="match_parent"
-                        android:layout_height="40dp"
-                        android:layout_marginTop="8dp"
-                        android:background="@drawable/bg_input"
-                        android:hint="私人中转频道 ID（纯数字）"
-                        android:inputType="number"
-                        android:paddingHorizontal="12dp"
-                        android:singleLine="true"
-                        android:textColor="@color/text_primary"
-                        android:textColorHint="@color/text_muted"
-                        android:textSize="13sp" />
+                        <EditText
+                            android:id="@+id/etDcToken"
+                            android:layout_width="match_parent"
+                            android:layout_height="40dp"
+                            android:layout_marginTop="12dp"
+                            android:background="@drawable/bg_input"
+                            android:hint="官方 Bot Token"
+                            android:inputType="textPassword"
+                            android:paddingHorizontal="12dp"
+                            android:singleLine="true"
+                            android:textColor="@color/text_primary"
+                            android:textColorHint="@color/text_muted"
+                            android:textSize="13sp" />
+
+                        <EditText
+                            android:id="@+id/etDcChannelId"
+                            android:layout_width="match_parent"
+                            android:layout_height="40dp"
+                            android:layout_marginTop="8dp"
+                            android:background="@drawable/bg_input"
+                            android:hint="私人中转频道 ID（纯数字）"
+                            android:inputType="number"
+                            android:paddingHorizontal="12dp"
+                            android:singleLine="true"
+                            android:textColor="@color/text_primary"
+                            android:textColorHint="@color/text_muted"
+                            android:textSize="13sp" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnDcTest"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="36dp"
+                            android:layout_marginTop="8dp"
+                            android:insetTop="0dp"
+                            android:insetBottom="0dp"
+                            android:text="测试并保存连接"
+                            android:textColor="@color/text_primary"
+                            android:textSize="12.5sp"
+                            app:cornerRadius="10dp"
+                            app:strokeColor="@color/border" />
+                    </LinearLayout>
 
                     <LinearLayout
                         android:layout_width="match_parent"
@@ -191,42 +284,20 @@
                             android:layout_height="wrap_content" />
                     </LinearLayout>
 
-                    <LinearLayout
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnDcSync"
+                        style="@style/Widget.Material3.Button.UnelevatedButton"
                         android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
+                        android:layout_height="38dp"
                         android:layout_marginTop="8dp"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal">
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnDcTest"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="0dp"
-                            android:layout_height="38dp"
-                            android:layout_marginEnd="8dp"
-                            android:layout_weight="1"
-                            android:insetTop="0dp"
-                            android:insetBottom="0dp"
-                            android:text="测试连接"
-                            android:textColor="@color/text_primary"
-                            android:textSize="12.5sp"
-                            app:cornerRadius="10dp"
-                            app:strokeColor="@color/border" />
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnDcSync"
-                            android:layout_width="0dp"
-                            android:layout_height="38dp"
-                            android:layout_weight="1.3"
-                            android:insetTop="0dp"
-                            android:insetBottom="0dp"
-                            android:text="立即同步"
-                            android:textColor="@color/on_accent"
-                            android:textSize="12.5sp"
-                            android:textStyle="bold"
-                            app:backgroundTint="@color/accent"
-                            app:cornerRadius="10dp" />
-                    </LinearLayout>
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:text="立即同步"
+                        android:textColor="@color/text_primary"
+                        android:textSize="12.5sp"
+                        android:textStyle="bold"
+                        app:backgroundTint="@color/surface_2"
+                        app:cornerRadius="10dp" />
 
                     <LinearLayout
                         android:layout_width="match_parent"

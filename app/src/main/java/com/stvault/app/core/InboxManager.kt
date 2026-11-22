@@ -538,6 +538,31 @@ object InboxManager {
         return fetched to summary
     }
 
+    fun downloadAndImportSingleUrl(
+        context: Context,
+        url: String,
+        fallbackName: String,
+        extraTags: List<String> = emptyList(),
+        summary: SmartImportSummary = SmartImportSummary()
+    ): Boolean {
+        val hintName = fallbackName.ifBlank { inferFileNameFromUrl(url, null) }
+        val allowHtml = hintName.endsWith(".html", true) || hintName.endsWith(".htm", true)
+        val dl = downloadUrlBytes(url, hintName, allowHtml) ?: run {
+            summary.skipped++
+            return false
+        }
+        SmartImporter.importBytes(
+            context = context,
+            bytes = dl.first,
+            fileName = dl.second,
+            sourceRef = url,
+            autoTag = getEffectiveAutoTag(context),
+            extraTags = extraTags,
+            summary = summary
+        )
+        return true
+    }
+
     private fun downloadUrlBytes(
         url: String,
         fallbackName: String,
