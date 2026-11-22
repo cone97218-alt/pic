@@ -111,6 +111,7 @@ class ResourceDetailActivity : AppCompatActivity() {
                             TYPE_CHARACTER -> libRepo.deleteCharacter(resId)
                             TYPE_WORLDBOOK -> libRepo.deleteWorldBook(resId)
                             TYPE_PRESET -> libRepo.deletePreset(resId)
+                            else -> Unit
                         }
                     }
                     toast("已删除")
