@@ -36,6 +36,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityDiscordBrowserBinding
     private var busy = false
+    private var sidebarHidden = false
     private val zoomSteps = intArrayOf(85, 100, 115, 130)
     private var zoomIndex = 1 // default 100%
 
@@ -60,6 +61,14 @@ class DiscordBrowserActivity : AppCompatActivity() {
             if (binding.webDiscord.canGoBack()) binding.webDiscord.goBack() else finish()
         }
         binding.btnWebReload.setOnClickListener { binding.webDiscord.reload() }
+        binding.btnWebSidebar.setOnClickListener {
+            binding.webDiscord.evaluateJavascript(
+                "(function(){ if(!window.__stSetSidebarHidden) return false; var next = !document.documentElement.classList.contains('st-hide-sidebar'); window.__stSetSidebarHidden(next); return next; })();"
+            ) { res ->
+                sidebarHidden = res == "true"
+                binding.btnWebSidebar.text = if (sidebarHidden) "频道" else "看消息"
+            }
+        }
         binding.btnWebZoom.setOnClickListener {
             zoomIndex = (zoomIndex + 1) % zoomSteps.size
             prefs.edit().putInt("dc_web_zoom_idx", zoomIndex).apply()
@@ -121,6 +130,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 binding.pbWebLoading.visibility = View.GONE
                 CookieManager.getInstance().flush()
+                injectMobileLayoutHelper()
             }
         }
 
@@ -140,6 +150,21 @@ class DiscordBrowserActivity : AppCompatActivity() {
         }
 
         web.loadUrl("https://discord.com/app")
+    }
+
+    private fun injectMobileLayoutHelper() {
+        binding.webDiscord.evaluateJavascript(MOBILE_LAYOUT_JS) {
+            applySidebarMode()
+        }
+    }
+
+    private fun applySidebarMode() {
+        binding.btnWebSidebar.text = if (sidebarHidden) "频道" else "看消息"
+        val flag = if (sidebarHidden) "true" else "false"
+        binding.webDiscord.evaluateJavascript(
+            "if(window.__stSetSidebarHidden) window.__stSetSidebarHidden($flag);",
+            null
+        )
     }
 
     private fun applyZoom() {
@@ -281,6 +306,53 @@ class DiscordBrowserActivity : AppCompatActivity() {
     }
 
     companion object {
+        /**
+         * Injects a lightweight mobile-adaptation CSS layer into Discord Web:
+         * - Hides the right-hand online members list to free screen space
+         * - Toggles the left server rail + channel sidebar via `html.st-hide-sidebar` so chat/forum gets 100% width
+         * - Auto-hides the sidebar when the user clicks a channel or DM link, and lets the top-bar button bring it back
+         */
+        private val MOBILE_LAYOUT_JS = """
+            (function() {
+              if (!document.getElementById('st-mobile-dc-style')) {
+                var s = document.createElement('style');
+                s.id = 'st-mobile-dc-style';
+                s.textContent = [
+                  'div[class*="membersWrap_"], aside[class*="membersWrap_"] { display: none !important; }',
+                  'html.st-hide-sidebar nav[class*="guilds_"], html.st-hide-sidebar div[class*="guilds_"] { display: none !important; }',
+                  'html.st-hide-sidebar div[class*="base_"] > div[class*="content_"] > div[class*="sidebar_"] { display: none !important; }',
+                  'html.st-hide-sidebar div[class*="sidebarList_"] { display: none !important; }',
+                  'html.st-hide-sidebar div[class*="base_"] { left: 0 !important; width: 100vw !important; }',
+                  'html.st-hide-sidebar div[class*="chat_"], html.st-hide-sidebar main[class*="chatContent_"] { min-width: 0 !important; width: 100% !important; max-width: 100vw !important; }',
+                  'html.st-hide-sidebar div[class*="chatLayerWrapper_"] { position: fixed !important; inset: 0 !important; width: 100vw !important; max-width: 100vw !important; z-index: 60 !important; }',
+                  'html:not(.st-hide-sidebar) div[class*="base_"] > div[class*="content_"] > div[class*="sidebar_"] { width: calc(100vw - 72px) !important; min-width: 240px !important; max-width: 100vw !important; }',
+                  'html:not(.st-hide-sidebar) div[class*="sidebarList_"] { width: calc(100vw - 72px) !important; }'
+                ].join('\n');
+                document.head.appendChild(s);
+              }
+              window.__stSetSidebarHidden = function(hidden) {
+                if (hidden) {
+                  document.documentElement.classList.add('st-hide-sidebar');
+                } else {
+                  document.documentElement.classList.remove('st-hide-sidebar');
+                }
+              };
+              if (!window.__stSidebarAutoBound) {
+                window.__stSidebarAutoBound = true;
+                document.addEventListener('click', function(e) {
+                  var a = e.target && e.target.closest ? e.target.closest('a[href*="/channels/"]') : null;
+                  if (!a) return;
+                  var inSidebar = a.closest('div[class*="sidebar_"], div[class*="sidebarList_"]');
+                  if (inSidebar && !document.documentElement.classList.contains('st-hide-sidebar')) {
+                    setTimeout(function() {
+                      document.documentElement.classList.add('st-hide-sidebar');
+                    }, 180);
+                  }
+                }, true);
+              }
+            })();
+        """.trimIndent()
+
         /**
          * Read-only DOM scanner: collects attachment URLs already rendered on the user's screen
          * (including normal messages, forum threads, Bot DMs, and ephemeral messages),

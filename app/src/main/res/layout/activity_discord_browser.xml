@@ -40,6 +40,21 @@
             android:textStyle="bold" />
 
         <TextView
+            android:id="@+id/btnWebSidebar"
+            android:layout_width="wrap_content"
+            android:layout_height="28dp"
+            android:layout_marginEnd="6dp"
+            android:background="@drawable/bg_input"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:paddingHorizontal="10dp"
+            android:text="频道"
+            android:textColor="@color/text_primary"
+            android:textSize="11.5sp"
+            android:textStyle="bold" />
+
+        <TextView
             android:id="@+id/btnWebZoom"
             android:layout_width="wrap_content"
             android:layout_height="28dp"
