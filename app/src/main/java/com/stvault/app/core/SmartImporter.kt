@@ -264,8 +264,11 @@ object SmartImporter {
                     summary.characters++
                     summary.newUrls += addedUrls
                     if (tags.isNotEmpty()) {
-                        tags.forEach { catMgr.addCategory(CategoryManager.SCOPE_CHARACTERS, it) }
-                        val merged = (rec.categories + tags).distinct()
+                        val resolved = tags.map { catMgr.resolveTagPath(CategoryManager.SCOPE_CHARACTERS, it) }
+                            .filter { it.isNotEmpty() }
+                            .distinct()
+                        resolved.forEach { catMgr.addCategory(CategoryManager.SCOPE_CHARACTERS, it) }
+                        val merged = (rec.categories + resolved).distinct()
                         libRepo.setCharacterCategories(rec.id, merged)
                     }
                 }
@@ -298,13 +301,16 @@ object SmartImporter {
 
         // 3. CSS / HTML -> Theme
         if (ext == "css" || ext == "html" || ext == "htm") {
-            val res = vaultRepo.importRawThemeText(text, fileName, "导入", initialCategories = tags)
+            val resolved = tags.map { catMgr.resolveTagPath(CategoryManager.SCOPE_THEMES, it) }
+                .filter { it.isNotEmpty() }
+                .distinct()
+            val res = vaultRepo.importRawThemeText(text, fileName, "导入", initialCategories = resolved)
             if (res == null) summary.skipped++
             else if (res.second) summary.duplicates++
             else {
                 summary.themes++
                 summary.newUrls += res.first
-                tags.forEach { catMgr.addCategory(CategoryManager.SCOPE_THEMES, it) }
+                resolved.forEach { catMgr.addCategory(CategoryManager.SCOPE_THEMES, it) }
             }
             return
         }
@@ -328,8 +334,11 @@ object SmartImporter {
                     summary.characters++
                     summary.newUrls += addedUrls
                     if (tags.isNotEmpty()) {
-                        tags.forEach { catMgr.addCategory(CategoryManager.SCOPE_CHARACTERS, it) }
-                        val merged = (rec.categories + tags).distinct()
+                        val resolved = tags.map { catMgr.resolveTagPath(CategoryManager.SCOPE_CHARACTERS, it) }
+                            .filter { it.isNotEmpty() }
+                            .distinct()
+                        resolved.forEach { catMgr.addCategory(CategoryManager.SCOPE_CHARACTERS, it) }
+                        val merged = (rec.categories + resolved).distinct()
                         libRepo.setCharacterCategories(rec.id, merged)
                     }
                 }
@@ -365,13 +374,16 @@ object SmartImporter {
         }
 
         // Fallback: Theme JSON/TXT with external image URLs
-        val themeRes = vaultRepo.importRawThemeText(text, fileName, "导入", initialCategories = tags)
+        val resolvedThemeTags = tags.map { catMgr.resolveTagPath(CategoryManager.SCOPE_THEMES, it) }
+            .filter { it.isNotEmpty() }
+            .distinct()
+        val themeRes = vaultRepo.importRawThemeText(text, fileName, "导入", initialCategories = resolvedThemeTags)
         if (themeRes != null) {
             if (themeRes.second) summary.duplicates++
             else {
                 summary.themes++
                 summary.newUrls += themeRes.first
-                tags.forEach { catMgr.addCategory(CategoryManager.SCOPE_THEMES, it) }
+                resolvedThemeTags.forEach { catMgr.addCategory(CategoryManager.SCOPE_THEMES, it) }
             }
         } else {
             summary.skipped++

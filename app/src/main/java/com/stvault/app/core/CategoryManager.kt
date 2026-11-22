@@ -71,6 +71,40 @@ class CategoryManager private constructor(context: Context) {
     }
 
     /**
+     * Resolves a shorthand tag (e.g. "某某老师" or "仙侠" or unique substring "白月光")
+     * to its existing full hierarchical path (e.g. "作者/某某老师", "风格/古风/仙侠").
+     * Falls back to normalized rawInput if no unambiguous existing category matches.
+     */
+    fun resolveTagPath(scope: String, rawInput: String): String {
+        val normalized = normalizePath(rawInput)
+        if (normalized.isEmpty()) return ""
+        val existing = getCategories(scope)
+        if (existing.isEmpty()) return normalized
+
+        // 1. Exact full-path match (case-insensitive)
+        existing.firstOrNull { it.equals(normalized, ignoreCase = true) }?.let { return it }
+
+        // If user explicitly provided a multi-level path, respect it as-is
+        if (normalized.contains('/')) return normalized
+
+        // 2. Exact leaf-name match (e.g. "某某" -> "作者/某某"), preferring shallower paths
+        val exactLeafMatches = existing
+            .filter { it.substringAfterLast('/').equals(normalized, ignoreCase = true) }
+            .sortedBy { it.count { ch -> ch == '/' } }
+        if (exactLeafMatches.isNotEmpty()) return exactLeafMatches.first()
+
+        // 3. Unique substring match on leaf name (length >= 2 to avoid noisy 1-char hits)
+        if (normalized.length >= 2) {
+            val subMatches = existing.filter {
+                it.substringAfterLast('/').contains(normalized, ignoreCase = true)
+            }
+            if (subMatches.size == 1) return subMatches.first()
+        }
+
+        return normalized
+    }
+
+    /**
      * Adds a category path (up to 3 levels) and automatically ensures its parent levels exist.
      */
     fun addCategory(scope: String, rawPath: String): String? {
