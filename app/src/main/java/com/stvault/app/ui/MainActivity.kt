@@ -2143,7 +2143,7 @@ class MainActivity : AppCompatActivity() {
                     val (fileName, bytes) = withContext(Dispatchers.IO) {
                         val (rawName, rawText) = repo.readSourceRawText(source.id)
                         val outText = if (repaired) {
-                            repo.repairTheme(rawText, rawName, "base64_webp").repairedText
+                            repo.repairRawText(rawText, rawName, "base64_webp").repairedText
                         } else rawText
                         val safeName = if (rawName.endsWith(".json", ignoreCase = true)) rawName else "${source.name}.json"
                         safeName to outText.toByteArray(Charsets.UTF_8)

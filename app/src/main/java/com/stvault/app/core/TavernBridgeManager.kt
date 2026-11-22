@@ -338,6 +338,7 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                             "character" -> installedChars.add(nk)
                             "worldbook" -> installedWbs.add(nk)
                             "preset" -> installedPresets.add(nk)
+                            else -> Unit
                         }
                     }
                     saveInventory()
