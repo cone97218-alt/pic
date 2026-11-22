@@ -177,8 +177,39 @@ class ResourceDetailActivity : AppCompatActivity() {
                 }
             }
         }
+        actions.add(SheetAction("修改版本号", "自定义当前版本的版本标签") { showEditVersionTagDialog() })
         actions.add(SheetAction("删除当前版本", destructive = true) { confirmDelete() })
         VaultSheets.actionList(this, actions = actions)
+    }
+
+    private fun showEditVersionTagDialog() {
+        val currentTag = when (resType) {
+            TYPE_CHARACTER -> currentCharacter?.versionTag.orEmpty()
+            TYPE_WORLDBOOK -> currentWorldBook?.versionTag.orEmpty()
+            TYPE_PRESET -> currentPreset?.versionTag.orEmpty()
+            else -> ""
+        }
+        VaultSheets.input(
+            ctx = this,
+            title = "自定义版本号",
+            message = "例如 v2.0、精修版、自改版（留空则按默认序号显示）",
+            hint = "输入版本号",
+            initialValue = currentTag,
+            confirmText = "保存"
+        ) { newTag ->
+            lifecycleScope.launch {
+                withContext(Dispatchers.IO) {
+                    when (resType) {
+                        TYPE_CHARACTER -> libRepo.updateCharacterVersionTag(resId, newTag)
+                        TYPE_WORLDBOOK -> libRepo.updateWorldBookVersionTag(resId, newTag)
+                        TYPE_PRESET -> libRepo.updatePresetVersionTag(resId, newTag)
+                        else -> Unit
+                    }
+                }
+                toast("版本号已更新")
+                reloadById()
+            }
+        }
     }
 
     private fun showCharacterCategoryDialog(c: CharacterRecord) {
@@ -269,17 +300,28 @@ class ResourceDetailActivity : AppCompatActivity() {
             }
         }
         binding.btnDetailVersion.setOnClickListener {
+            val sKey = when (resType) {
+                TYPE_CHARACTER -> currentCharacter?.seriesKey.orEmpty()
+                TYPE_WORLDBOOK -> currentWorldBook?.seriesKey.orEmpty()
+                TYPE_PRESET -> currentPreset?.seriesKey.orEmpty()
+                else -> ""
+            }
             val actions = versions.map { (id, ver, fname) ->
                 SheetAction(
                     label = ver,
                     subtitle = fname,
                     checked = (id == currentId)
                 ) {
+                    if (sKey.isNotEmpty()) {
+                        com.stvault.app.core.VersionGrouper.setPreferredVersion(this, resType, sKey, id)
+                    }
                     if (id != resId) {
                         resId = id
                         reloadById()
                     }
                 }
+            } + SheetAction("修改当前版本号", "自定义当前版本标签") {
+                showEditVersionTagDialog()
             }
             VaultSheets.actionList(this, title = "切换版本 (${versions.size})", actions = actions)
         }

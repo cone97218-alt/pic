@@ -320,6 +320,42 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         return true
     }
 
+    fun updateCharacterVersionTag(id: String, newTag: String): Boolean {
+        synchronized(lock) {
+            val cur = charactersMap[id] ?: return false
+            charactersMap[id] = cur.copy(versionTag = newTag.trim())
+        }
+        saveCharactersIndex()
+        return true
+    }
+
+    fun updateWorldBookVersionTag(id: String, newTag: String): Boolean {
+        synchronized(lock) {
+            val cur = worldBooksMap[id] ?: return false
+            worldBooksMap[id] = cur.copy(versionTag = newTag.trim())
+        }
+        saveWorldBooksIndex()
+        return true
+    }
+
+    fun updatePresetVersionTag(id: String, newTag: String): Boolean {
+        synchronized(lock) {
+            val cur = presetsMap[id] ?: return false
+            presetsMap[id] = cur.copy(versionTag = newTag.trim())
+        }
+        savePresetsIndex()
+        return true
+    }
+
+    fun updateComponentVersionTag(id: String, newTag: String): Boolean {
+        synchronized(lock) {
+            val cur = componentsMap[id] ?: return false
+            componentsMap[id] = cur.copy(versionTag = newTag.trim())
+        }
+        saveComponentsIndex()
+        return true
+    }
+
     fun getAllCharacters(): List<CharacterRecord> = synchronized(lock) {
         charactersMap.values.sortedByDescending { it.addedAt }
     }

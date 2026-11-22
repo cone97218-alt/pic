@@ -1916,7 +1916,10 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val (grouped, totalRaw, pendingCount) = withContext(Dispatchers.IO) {
                 val chars = libRepo.searchCharacters(q, activeCharFilter, activeCharCategory)
-                val g = VersionGrouper.groupBySeries(chars, groupVersions, { it.seriesKey }, { it.addedAt })
+                val g = VersionGrouper.groupBySeries(
+                    chars, groupVersions, { it.seriesKey }, { it.addedAt }, { it.id },
+                    { key -> VersionGrouper.getPreferredVersion(this@MainActivity, ResourceDetailActivity.TYPE_CHARACTER, key) }
+                )
                 val urls = libRepo.getAllCharacterUrls()
                 val counts = repo.getCountsForUrls(urls)
                 Triple(g, chars.size, counts.third)
@@ -1955,7 +1958,10 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val (grouped, totalRaw, pendingCount) = withContext(Dispatchers.IO) {
                 val books = libRepo.searchWorldBooks(q, activeWbFilter)
-                val g = VersionGrouper.groupBySeries(books, groupVersions, { it.seriesKey }, { it.addedAt })
+                val g = VersionGrouper.groupBySeries(
+                    books, groupVersions, { it.seriesKey }, { it.addedAt }, { it.id },
+                    { key -> VersionGrouper.getPreferredVersion(this@MainActivity, ResourceDetailActivity.TYPE_WORLDBOOK, key) }
+                )
                 val urls = libRepo.getAllWorldBookUrls()
                 val counts = repo.getCountsForUrls(urls)
                 Triple(g, books.size, counts.third)
@@ -1994,7 +2000,10 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val (groupedPresets, totalRaw) = withContext(Dispatchers.IO) {
                 val p = libRepo.searchPresets(q)
-                val gp = VersionGrouper.groupBySeries(p, groupVersions, { it.seriesKey }, { it.addedAt })
+                val gp = VersionGrouper.groupBySeries(
+                    p, groupVersions, { it.seriesKey }, { it.addedAt }, { it.id },
+                    { key -> VersionGrouper.getPreferredVersion(this@MainActivity, ResourceDetailActivity.TYPE_PRESET, key) }
+                )
                 gp to p.size
             }
             presetsAdapter.submitList(groupedPresets)
@@ -2025,7 +2034,10 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val (grouped, totalRaw) = withContext(Dispatchers.IO) {
                 val list = libRepo.searchComponents(q, activeCompFilter)
-                val g = VersionGrouper.groupBySeries(list, groupVersions, { it.seriesKey }, { it.addedAt })
+                val g = VersionGrouper.groupBySeries(
+                    list, groupVersions, { it.seriesKey }, { it.addedAt }, { it.id },
+                    { key -> VersionGrouper.getPreferredVersion(this@MainActivity, "component", key) }
+                )
                 g to list.size
             }
             componentsAdapter.submitList(grouped)
