@@ -586,6 +586,13 @@
             themeObj.name = themeObj.name || stripExt(item.name || item.fileName);
             const r = await mainFetch('/api/themes/save', { method: 'POST', headers, body: JSON.stringify(themeObj) });
             if (!r.ok) throw new Error('保存美化失败');
+            try {
+                const tags = Array.isArray(item.tags) ? item.tags : [];
+                const category = typeof item.category === 'string' ? item.category : (typeof item.folder === 'string' ? item.folder : '');
+                mainDoc.dispatchEvent(new CustomEvent('stvault:themePushed', {
+                    detail: { theme: themeObj, tags, category, autoApply: Boolean(item.autoApply) }
+                }));
+            } catch (_) {}
             return;
         }
         if (item.kind === 'character') {
