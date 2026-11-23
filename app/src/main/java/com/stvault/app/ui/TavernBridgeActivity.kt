@@ -67,6 +67,17 @@ class TavernBridgeActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         bridge = TavernBridgeManager.getInstance(this)
+        val prefs = getSharedPreferences("st_vault_prefs", Context.MODE_PRIVATE)
+        binding.swBridgeAutoStart.isChecked = prefs.getBoolean("bridge_auto_start", false)
+        binding.swBridgeAutoStart.setOnCheckedChangeListener { _, checked ->
+            prefs.edit().putBoolean("bridge_auto_start", checked).apply()
+            if (checked && !bridge.isRunning()) {
+                lifecycleScope.launch {
+                    withContext(Dispatchers.IO) { bridge.startServer() }
+                    try { TavernBridgeService.start(this@TavernBridgeActivity) } catch (_: Exception) {}
+                }
+            }
+        }
 
         binding.btnBridgeClose.setOnClickListener { finish() }
         binding.btnBridgeToggle.setOnClickListener {
@@ -232,9 +243,9 @@ class TavernBridgeActivity : AppCompatActivity() {
     }
 
     private fun renderLogs(st: TavernBridgeState, allLogs: List<BridgeSyncLogEntry>) {
-        binding.tvLogsHeader.text = "同步与代码变更日志 (${allLogs.size})"
+        binding.tvLogsHeader.text = "同步日志 (${allLogs.size})"
         binding.tvLogsStatsSummary.text =
-            "推至酒馆 ${st.pushedToTavernCount}  ·  从酒馆拉取 ${st.pulledFromTavernCount}  ·  代码变更覆盖 ${st.overwrittenCount}"
+            "装入 ${st.pushedToTavernCount}  ·  拉取 ${st.pulledFromTavernCount}  ·  覆盖 ${st.overwrittenCount}"
 
         val filtered = allLogs.filter { e ->
             when (activeLogFilter) {
@@ -277,10 +288,10 @@ class TavernBridgeActivity : AppCompatActivity() {
                 gravity = Gravity.CENTER_VERTICAL
             }
             val (dirBadge, badgeColor) = when {
-                entry.action == "overwritten" -> "代码覆盖" to Color.parseColor("#D97706")
-                entry.direction == "push_to_tavern" -> "推至酒馆" to Color.parseColor("#2563EB")
-                entry.direction == "tag_sync" -> "标签联动" to Color.parseColor("#7C3AED")
-                else -> "酒馆拉取" to Color.parseColor("#16A34A")
+                entry.action == "overwritten" -> "覆盖" to Color.parseColor("#D97706")
+                entry.direction == "push_to_tavern" -> "装入" to Color.parseColor("#2563EB")
+                entry.direction == "tag_sync" -> "标签" to Color.parseColor("#7C3AED")
+                else -> "拉取" to Color.parseColor("#16A34A")
             }
             topRow.addView(TextView(this).apply {
                 text = "$dirBadge · ${entry.moduleLabel}"
@@ -350,7 +361,7 @@ class TavernBridgeActivity : AppCompatActivity() {
             return
         }
         binding.sectionBridgeConflicts.visibility = View.VISIBLE
-        binding.tvConflictsHeader.text = "近似版本待确认 (${list.size})"
+        binding.tvConflictsHeader.text = "待确认 (${list.size})"
         binding.containerBridgeConflicts.removeAllViews()
 
         val dp = { v: Int -> (v * resources.displayMetrics.density).toInt() }
@@ -427,7 +438,7 @@ class TavernBridgeActivity : AppCompatActivity() {
             return
         }
         binding.sectionBridgeOutbox.visibility = View.VISIBLE
-        binding.tvOutboxHeader.text = "待装入队列 (${list.size})"
+        binding.tvOutboxHeader.text = "待装入 (${list.size})"
         binding.containerBridgeOutbox.removeAllViews()
 
         val dp = { v: Int -> (v * resources.displayMetrics.density).toInt() }

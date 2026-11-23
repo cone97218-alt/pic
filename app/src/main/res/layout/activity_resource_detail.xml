@@ -159,15 +159,60 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- Virtualized High-Performance RecyclerView -->
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/rvDetail"
+    <!-- Virtualized High-Performance RecyclerView + Top/Bottom Quick Jump -->
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1"
-        android:clipToPadding="false"
-        android:paddingHorizontal="16dp"
-        android:paddingTop="10dp"
-        android:paddingBottom="28dp" />
+        android:layout_weight="1">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/rvDetail"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:paddingHorizontal="16dp"
+            android:paddingTop="10dp"
+            android:paddingBottom="28dp" />
+
+        <LinearLayout
+            android:id="@+id/boxDetailScrollJump"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|end"
+            android:layout_marginEnd="14dp"
+            android:layout_marginBottom="20dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/btnDetailScrollTop"
+                android:layout_width="34dp"
+                android:layout_height="34dp"
+                android:layout_marginBottom="6dp"
+                android:background="@drawable/bg_floating_dock"
+                android:clickable="true"
+                android:elevation="4dp"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="↑"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btnDetailScrollBottom"
+                android:layout_width="34dp"
+                android:layout_height="34dp"
+                android:background="@drawable/bg_floating_dock"
+                android:clickable="true"
+                android:elevation="4dp"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="↓"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+    </FrameLayout>
 
 </LinearLayout>

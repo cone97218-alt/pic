@@ -410,6 +410,20 @@ class MainActivity : AppCompatActivity() {
         val lastWs = prefs.getString("active_workspace", "themes") ?: "themes"
         switchWorkspace(lastWs)
         handleIncomingShareIntent(intent)
+        maybeAutoStartTavernBridge()
+    }
+
+    private fun maybeAutoStartTavernBridge() {
+        if (!prefs.getBoolean("bridge_auto_start", false)) return
+        val bridge = com.stvault.app.core.TavernBridgeManager.getInstance(this)
+        if (bridge.isRunning()) return
+        lifecycleScope.launch(Dispatchers.IO) {
+            bridge.startServer()
+            try {
+                com.stvault.app.service.TavernBridgeService.start(this@MainActivity)
+            } catch (_: Exception) {
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -642,6 +656,42 @@ class MainActivity : AppCompatActivity() {
         ) { key ->
             activeCompFilter = key
             refreshComponentsList()
+        }
+
+        // 6. Quick Top / Bottom Scroll Jump Buttons across all 5 workspaces
+        bindQuickScrollJump(binding.rvVault, binding.boxVaultScrollJump, binding.btnVaultScrollTop, binding.btnVaultScrollBottom)
+        bindQuickScrollJump(binding.wsCharacters.rvCharacters, binding.wsCharacters.boxCharScrollJump, binding.wsCharacters.btnCharScrollTop, binding.wsCharacters.btnCharScrollBottom)
+        bindQuickScrollJump(binding.wsWorldBooks.rvWorldBooks, binding.wsWorldBooks.boxWbScrollJump, binding.wsWorldBooks.btnWbScrollTop, binding.wsWorldBooks.btnWbScrollBottom)
+        bindQuickScrollJump(binding.wsPresets.rvPresets, binding.wsPresets.boxPresetScrollJump, binding.wsPresets.btnPresetScrollTop, binding.wsPresets.btnPresetScrollBottom)
+        bindQuickScrollJump(binding.wsComponents.rvComponents, binding.wsComponents.boxCompScrollJump, binding.wsComponents.btnCompScrollTop, binding.wsComponents.btnCompScrollBottom)
+    }
+
+    private fun bindQuickScrollJump(
+        rv: androidx.recyclerview.widget.RecyclerView,
+        box: View,
+        btnTop: View,
+        btnBottom: View
+    ) {
+        fun updateVisibility() {
+            val count = rv.adapter?.itemCount ?: 0
+            box.visibility = if (count >= 6) View.VISIBLE else View.GONE
+        }
+        rv.addOnScrollListener(object : androidx.recyclerview.widget.RecyclerView.OnScrollListener() {
+            override fun onScrolled(recyclerView: androidx.recyclerview.widget.RecyclerView, dx: Int, dy: Int) {
+                updateVisibility()
+            }
+        })
+        rv.adapter?.registerAdapterDataObserver(object : androidx.recyclerview.widget.RecyclerView.AdapterDataObserver() {
+            override fun onChanged() = updateVisibility()
+            override fun onItemRangeInserted(positionStart: Int, itemCount: Int) = updateVisibility()
+            override fun onItemRangeRemoved(positionStart: Int, itemCount: Int) = updateVisibility()
+        })
+        btnTop.setOnClickListener {
+            rv.scrollToPosition(0)
+        }
+        btnBottom.setOnClickListener {
+            val last = (rv.adapter?.itemCount ?: 0) - 1
+            if (last >= 0) rv.scrollToPosition(last)
         }
     }
 
@@ -2600,7 +2650,7 @@ class MainActivity : AppCompatActivity() {
         actions.add(SheetAction("装入酒馆", "推送到 TT 酒馆，支持原版或图床修复版") {
             pushThemeToTavern(source)
         })
-        actions.add(SheetAction("查看 / 编辑代码", "直接查看或编辑美化 JSON / CSS 源码") {
+        actions.add(SheetAction("编辑代码", "可视化调节样式与 CSS，或切换 JSON 源码") {
             CodeEditorActivity.open(this, CodeEditorActivity.MODULE_THEME, source.id, source.name)
         })
         actions.add(SheetAction("设置分类标签", "多选 1~3 级分类") { showThemeCategoryAssignDialog(source) })
@@ -2686,7 +2736,7 @@ class MainActivity : AppCompatActivity() {
                         else toast("找不到角色卡文件")
                     }
                 },
-                SheetAction("查看 / 编辑代码", "查看并编辑角色卡底层 JSON 源码") {
+                SheetAction("编辑内容", "分段编辑设定、开场白或 JSON 源码") {
                     CodeEditorActivity.open(this, CodeEditorActivity.MODULE_CHARACTER, c.id, c.name)
                 },
                 SheetAction("重命名", "修改角色卡显示名称") {
@@ -2721,7 +2771,7 @@ class MainActivity : AppCompatActivity() {
                         else toast("找不到世界书文件")
                     }
                 },
-                SheetAction("查看 / 编辑代码", "查看并编辑世界书 JSON 源码") {
+                SheetAction("编辑条目", "逐条编辑世界书条目或 JSON 源码") {
                     CodeEditorActivity.open(this, CodeEditorActivity.MODULE_WORLDBOOK, w.id, w.name)
                 },
                 SheetAction("重命名", "修改世界书显示名称") {
@@ -2755,7 +2805,7 @@ class MainActivity : AppCompatActivity() {
                         else toast("找不到预设文件")
                     }
                 },
-                SheetAction("查看 / 编辑代码", "查看并编辑预设 JSON 源码") {
+                SheetAction("编辑提示词", "逐条编辑预设提示词或 JSON 源码") {
                     CodeEditorActivity.open(this, CodeEditorActivity.MODULE_PRESET, p.id, p.name)
                 },
                 SheetAction("重命名", "修改预设显示名称") {
@@ -2789,7 +2839,7 @@ class MainActivity : AppCompatActivity() {
                 }
             })
         }
-        actions.add(SheetAction("查看 / 编辑代码", "查看并编辑组件脚本或正则源码") {
+        actions.add(SheetAction("编辑代码", "可视化编辑正则与脚本，或切换源码") {
             CodeEditorActivity.open(this, CodeEditorActivity.MODULE_COMPONENT, comp.id, comp.name)
         })
         actions.add(SheetAction("重命名", "修改组件显示名称") {

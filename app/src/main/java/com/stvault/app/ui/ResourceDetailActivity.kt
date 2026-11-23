@@ -132,6 +132,26 @@ class ResourceDetailActivity : AppCompatActivity() {
         binding.btnDetailExport.setOnClickListener { exportCurrentResource() }
         binding.btnDetailMore.setOnClickListener { showMoreActionsMenu() }
 
+        fun updateScrollJumpVisibility() {
+            val count = binding.rvDetail.adapter?.itemCount ?: 0
+            binding.boxDetailScrollJump.visibility = if (count >= 4) View.VISIBLE else View.GONE
+        }
+        binding.rvDetail.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                updateScrollJumpVisibility()
+            }
+        })
+        detailAdapter.registerAdapterDataObserver(object : RecyclerView.AdapterDataObserver() {
+            override fun onChanged() = updateScrollJumpVisibility()
+        })
+        binding.btnDetailScrollTop.setOnClickListener {
+            binding.rvDetail.scrollToPosition(0)
+        }
+        binding.btnDetailScrollBottom.setOnClickListener {
+            val last = (binding.rvDetail.adapter?.itemCount ?: 0) - 1
+            if (last >= 0) binding.rvDetail.scrollToPosition(last)
+        }
+
         binding.etDetailSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
@@ -177,7 +197,13 @@ class ResourceDetailActivity : AppCompatActivity() {
 
     private fun showMoreActionsMenu() {
         val actions = mutableListOf<SheetAction>()
-        actions.add(SheetAction("编辑源码", "查看并编辑底层 JSON 代码") { openCodeEditor() })
+        val editLabel = when (resType) {
+            TYPE_CHARACTER -> "编辑内容"
+            TYPE_WORLDBOOK -> "编辑条目"
+            TYPE_PRESET -> "编辑提示词"
+            else -> "编辑代码"
+        }
+        actions.add(SheetAction(editLabel, "支持可视化分段编辑或切换 JSON 源码") { openCodeEditor() })
         if (resType == TYPE_CHARACTER) {
             currentCharacter?.let { c ->
                 actions.add(SheetAction("分类标签", "多选 1~3 级分类") { showCharacterCategoryDialog(c) })

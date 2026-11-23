@@ -121,6 +121,27 @@
                         android:text="仅在手机本机回环通信，不上云、无需账号。"
                         android:textColor="@color/text_muted"
                         android:textSize="12sp" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="打开酒馆匣时自动开启"
+                            android:textColor="@color/text_primary"
+                            android:textSize="12.5sp" />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/swBridgeAutoStart"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                    </LinearLayout>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
@@ -144,7 +165,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="酒馆在库概况"
+                        android:text="在库概况"
                         android:textColor="@color/text_primary"
                         android:textSize="14sp"
                         android:textStyle="bold" />
@@ -181,7 +202,7 @@
                             android:layout_weight="1"
                             android:insetTop="0dp"
                             android:insetBottom="0dp"
-                            android:text="从酒馆拉取更新"
+                            android:text="从酒馆拉取"
                             android:textColor="@color/text_primary"
                             android:textSize="12.5sp"
                             app:cornerRadius="10dp"
@@ -211,7 +232,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="近似版本待确认"
+                        android:text="待确认"
                         android:textColor="@color/text_primary"
                         android:textSize="13.5sp"
                         android:textStyle="bold" />
@@ -224,7 +245,7 @@
                         android:focusable="true"
                         android:paddingHorizontal="6dp"
                         android:paddingVertical="2dp"
-                        android:text="全部保留两份"
+                        android:text="全部保留"
                         android:textColor="@color/text_primary"
                         android:textSize="12sp"
                         android:textStyle="bold" />
@@ -258,7 +279,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="待装入队列"
+                        android:text="待装入"
                         android:textColor="@color/text_primary"
                         android:textSize="13.5sp"
                         android:textStyle="bold" />
@@ -283,7 +304,7 @@
                     android:orientation="vertical" />
             </LinearLayout>
 
-            <!-- 4.5 Sync & Code Change Logs Container -->
+            <!-- 4.5 Sync Logs Container -->
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/sectionBridgeLogs"
                 android:layout_width="match_parent"
@@ -312,7 +333,7 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
-                            android:text="同步与代码变更日志"
+                            android:text="同步日志"
                             android:textColor="@color/text_primary"
                             android:textSize="14sp"
                             android:textStyle="bold" />
@@ -335,7 +356,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="推至酒馆 0  ·  从酒馆拉取 0  ·  代码变更覆盖 0"
+                        android:text="推至酒馆 0  ·  从酒馆拉取 0  ·  覆盖 0"
                         android:textColor="@color/text_muted"
                         android:textSize="12sp" />
 
@@ -376,7 +397,7 @@
                                 android:focusable="true"
                                 android:gravity="center"
                                 android:paddingHorizontal="10dp"
-                                android:text="代码覆盖"
+                                android:text="覆盖"
                                 android:textColor="@color/text_muted"
                                 android:textSize="11.5sp" />
 
@@ -390,7 +411,7 @@
                                 android:focusable="true"
                                 android:gravity="center"
                                 android:paddingHorizontal="10dp"
-                                android:text="从酒馆拉取"
+                                android:text="拉取"
                                 android:textColor="@color/text_muted"
                                 android:textSize="11.5sp" />
 
@@ -404,7 +425,7 @@
                                 android:focusable="true"
                                 android:gravity="center"
                                 android:paddingHorizontal="10dp"
-                                android:text="推至酒馆"
+                                android:text="装入"
                                 android:textColor="@color/text_muted"
                                 android:textSize="11.5sp" />
 
@@ -417,7 +438,7 @@
                                 android:focusable="true"
                                 android:gravity="center"
                                 android:paddingHorizontal="10dp"
-                                android:text="标签联动"
+                                android:text="标签"
                                 android:textColor="@color/text_muted"
                                 android:textSize="11.5sp" />
                         </LinearLayout>

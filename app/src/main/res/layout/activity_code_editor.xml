@@ -22,9 +22,24 @@
             android:layout_weight="1"
             android:ellipsize="end"
             android:singleLine="true"
-            android:text="代码编辑"
+            android:text="编辑"
             android:textColor="@color/text_primary"
             android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/btnEditorModeToggle"
+            android:layout_width="wrap_content"
+            android:layout_height="28dp"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/bg_pill_accent"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:paddingHorizontal="9dp"
+            android:text="源码"
+            android:textColor="@color/text_primary"
+            android:textSize="11.5sp"
             android:textStyle="bold" />
 
         <TextView
@@ -53,7 +68,8 @@
             android:paddingHorizontal="9dp"
             android:text="格式化"
             android:textColor="@color/text_muted"
-            android:textSize="11.5sp" />
+            android:textSize="11.5sp"
+            android:visibility="gone" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnEditorSave"
@@ -106,7 +122,7 @@
             android:layout_height="32dp"
             android:layout_weight="1"
             android:background="@drawable/bg_input"
-            android:hint="查找代码内容..."
+            android:hint="查找内容..."
             android:imeOptions="actionSearch"
             android:inputType="text"
             android:paddingHorizontal="10dp"
@@ -177,26 +193,90 @@
         android:layout_height="1dp"
         android:background="@color/border" />
 
-    <!-- Full-Screen Monospace Code Editor -->
-    <ScrollView
+    <!-- Dual Mode Editor Area + Floating Top / Bottom Jump -->
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1"
-        android:fillViewport="true">
+        android:layout_weight="1">
 
-        <EditText
-            android:id="@+id/etCodeContent"
+        <!-- 1. Friendly Visual Section Editor -->
+        <ScrollView
+            android:id="@+id/scrollVisualEditor"
             android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:paddingHorizontal="14dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="40dp">
+
+            <LinearLayout
+                android:id="@+id/containerVisualSections"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </ScrollView>
+
+        <!-- 2. Full-Screen Monospace Raw Code Editor -->
+        <ScrollView
+            android:id="@+id/scrollRawEditor"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true"
+            android:visibility="gone">
+
+            <EditText
+                android:id="@+id/etCodeContent"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@android:color/transparent"
+                android:fontFamily="monospace"
+                android:gravity="top|start"
+                android:inputType="textMultiLine|textNoSuggestions"
+                android:lineSpacingExtra="3dp"
+                android:padding="14dp"
+                android:scrollbars="vertical"
+                android:textColor="@color/text_primary"
+                android:textSize="12.5sp" />
+        </ScrollView>
+
+        <!-- Floating Top / Bottom Jump Pills -->
+        <LinearLayout
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:background="@android:color/transparent"
-            android:fontFamily="monospace"
-            android:gravity="top|start"
-            android:inputType="textMultiLine|textNoSuggestions"
-            android:lineSpacingExtra="3dp"
-            android:padding="14dp"
-            android:scrollbars="vertical"
-            android:textColor="@color/text_primary"
-            android:textSize="12.5sp" />
-    </ScrollView>
+            android:layout_gravity="bottom|end"
+            android:layout_marginEnd="14dp"
+            android:layout_marginBottom="18dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/btnEditorScrollTop"
+                android:layout_width="34dp"
+                android:layout_height="34dp"
+                android:layout_marginBottom="6dp"
+                android:background="@drawable/bg_floating_dock"
+                android:clickable="true"
+                android:elevation="4dp"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="↑"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btnEditorScrollBottom"
+                android:layout_width="34dp"
+                android:layout_height="34dp"
+                android:background="@drawable/bg_floating_dock"
+                android:clickable="true"
+                android:elevation="4dp"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="↓"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+    </FrameLayout>
 
 </LinearLayout>

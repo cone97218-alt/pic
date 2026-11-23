@@ -453,7 +453,7 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="12dp"
             android:layout_weight="1"
-            android:text="重复与近似整理"
+            android:text="查重整理"
             android:textColor="@color/text_primary"
             android:textSize="13.5sp" />
     </LinearLayout>
