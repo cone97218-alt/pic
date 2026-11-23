@@ -2600,6 +2600,9 @@ class MainActivity : AppCompatActivity() {
         actions.add(SheetAction("装入酒馆", "推送到 TT 酒馆，支持原版或图床修复版") {
             pushThemeToTavern(source)
         })
+        actions.add(SheetAction("查看 / 编辑代码", "直接查看或编辑美化 JSON / CSS 源码") {
+            CodeEditorActivity.open(this, CodeEditorActivity.MODULE_THEME, source.id, source.name)
+        })
         actions.add(SheetAction("设置分类标签", "多选 1~3 级分类") { showThemeCategoryAssignDialog(source) })
         actions.add(SheetAction("删除美化", destructive = true) { confirmDeleteSource(source) })
         VaultSheets.actionList(ctx = this, title = source.name, actions = actions)
@@ -2683,6 +2686,9 @@ class MainActivity : AppCompatActivity() {
                         else toast("找不到角色卡文件")
                     }
                 },
+                SheetAction("查看 / 编辑代码", "查看并编辑角色卡底层 JSON 源码") {
+                    CodeEditorActivity.open(this, CodeEditorActivity.MODULE_CHARACTER, c.id, c.name)
+                },
                 SheetAction("重命名", "修改角色卡显示名称") {
                     showRenameDialog("重命名角色卡", c.name) { newName ->
                         if (libRepo.renameCharacter(c.id, newName)) {
@@ -2715,6 +2721,9 @@ class MainActivity : AppCompatActivity() {
                         else toast("找不到世界书文件")
                     }
                 },
+                SheetAction("查看 / 编辑代码", "查看并编辑世界书 JSON 源码") {
+                    CodeEditorActivity.open(this, CodeEditorActivity.MODULE_WORLDBOOK, w.id, w.name)
+                },
                 SheetAction("重命名", "修改世界书显示名称") {
                     showRenameDialog("重命名世界书", w.name) { newName ->
                         if (libRepo.renameWorldBook(w.id, newName)) {
@@ -2745,6 +2754,9 @@ class MainActivity : AppCompatActivity() {
                         if (bytes != null) enqueueToTavernBridge("preset", p.name, p.fileName, bytes)
                         else toast("找不到预设文件")
                     }
+                },
+                SheetAction("查看 / 编辑代码", "查看并编辑预设 JSON 源码") {
+                    CodeEditorActivity.open(this, CodeEditorActivity.MODULE_PRESET, p.id, p.name)
                 },
                 SheetAction("重命名", "修改预设显示名称") {
                     showRenameDialog("重命名预设", p.name) { newName ->
@@ -2777,6 +2789,9 @@ class MainActivity : AppCompatActivity() {
                 }
             })
         }
+        actions.add(SheetAction("查看 / 编辑代码", "查看并编辑组件脚本或正则源码") {
+            CodeEditorActivity.open(this, CodeEditorActivity.MODULE_COMPONENT, comp.id, comp.name)
+        })
         actions.add(SheetAction("重命名", "修改组件显示名称") {
             showRenameDialog("重命名组件", comp.name) { newName ->
                 if (libRepo.renameComponent(comp.id, newName)) {

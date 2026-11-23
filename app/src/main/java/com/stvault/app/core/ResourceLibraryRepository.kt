@@ -916,6 +916,45 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         return Triple("${base}_已复活.$ext", outBytes, repairRes)
     }
 
+    /**
+     * In-place updates a Character Card's JSON (losslessly rewriting PNG tEXt chunks if PNG)
+     * while preserving its ID, categories, series metadata, and thumbnail.
+     */
+    fun updateCharacterRawJson(id: String, newRawJson: String): Boolean {
+        val cur = synchronized(lock) { charactersMap[id] } ?: return false
+        val parsed = CharacterCardParser.parseJson(newRawJson, cur.name) ?: return false
+        val file = getCharacterFile(cur)
+        if (!file.exists()) return false
+        val outBytes = if (cur.isPng) {
+            val origBytes = file.readBytes()
+            CharacterCardParser.rewritePngCardJson(origBytes, newRawJson)
+        } else {
+            newRawJson.trim().toByteArray(Charsets.UTF_8)
+        }
+        file.writeBytes(outBytes)
+        val (urls, _) = UrlExtractor.extract(newRawJson)
+        vaultRepo.registerExternalUrls("char:$id", urls)
+        val contentHash = sha256Short(outBytes)
+        synchronized(lock) {
+            val latest = charactersMap[id] ?: return false
+            charactersMap[id] = latest.copy(
+                name = parsed.name.ifBlank { latest.name },
+                creator = parsed.creator,
+                tags = parsed.tags,
+                spec = parsed.spec,
+                fileSize = file.length(),
+                hasEmbeddedBook = parsed.embeddedWorldBook != null,
+                embeddedBookEntryCount = parsed.embeddedWorldBook?.entries?.size ?: 0,
+                embeddedRegexCount = parsed.embeddedRegexScripts.size,
+                embeddedHelperCount = parsed.embeddedHelperScripts.size,
+                urls = urls,
+                contentHash = contentHash
+            )
+        }
+        saveCharactersIndex()
+        return true
+    }
+
     // ==================== WORLD BOOKS MODULE ====================
 
     private fun loadWorldBooksLocked() {
@@ -1182,6 +1221,32 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         return assetRes
     }
 
+    fun updateWorldBookRawJson(id: String, newRawJson: String): Boolean {
+        val cur = synchronized(lock) { worldBooksMap[id] } ?: return false
+        val parsed = WorldBookParser.parse(newRawJson, cur.name) ?: return false
+        val bytes = newRawJson.trim().toByteArray(Charsets.UTF_8)
+        val file = getWorldBookFile(cur)
+        file.parentFile?.mkdirs()
+        file.writeBytes(bytes)
+        val (urls, _) = UrlExtractor.extract(newRawJson)
+        vaultRepo.registerExternalUrls("wb:$id", urls)
+        val contentHash = sha256Short(bytes)
+        synchronized(lock) {
+            val latest = worldBooksMap[id] ?: return false
+            worldBooksMap[id] = latest.copy(
+                name = parsed.name.ifBlank { latest.name },
+                entryCount = parsed.entries.size,
+                constantCount = parsed.entries.count { it.constant },
+                totalChars = parsed.entries.sumOf { it.content.length },
+                urls = urls,
+                fileSize = file.length(),
+                contentHash = contentHash
+            )
+        }
+        saveWorldBooksIndex()
+        return true
+    }
+
     // ==================== PRESETS MODULE ====================
 
     private fun loadPresetsLocked() {
@@ -1410,6 +1475,32 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
     fun deletePreset(id: String): Boolean {
         val removed = synchronized(lock) { presetsMap.remove(id) } ?: return false
         try { getPresetFile(removed).delete() } catch (_: Exception) {}
+        savePresetsIndex()
+        return true
+    }
+
+    fun updatePresetRawJson(id: String, newRawJson: String): Boolean {
+        val cur = synchronized(lock) { presetsMap[id] } ?: return false
+        val parsed = PresetParser.parse(newRawJson, cur.fileName.ifBlank { cur.name }) ?: return false
+        val bytes = newRawJson.trim().toByteArray(Charsets.UTF_8)
+        val file = getPresetFile(cur)
+        file.parentFile?.mkdirs()
+        file.writeBytes(bytes)
+        val contentHash = sha256Short(bytes)
+        synchronized(lock) {
+            val latest = presetsMap[id] ?: return false
+            presetsMap[id] = latest.copy(
+                promptCount = parsed.prompts.size,
+                enabledPromptCount = parsed.prompts.count { it.enabled },
+                embeddedRegexCount = parsed.embeddedRegexScripts.size,
+                embeddedHelperCount = parsed.embeddedHelperScripts.size,
+                temperature = parsed.temperature,
+                topP = parsed.topP,
+                maxTokens = parsed.maxTokens,
+                fileSize = file.length(),
+                contentHash = contentHash
+            )
+        }
         savePresetsIndex()
         return true
     }
@@ -1684,6 +1775,31 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         val assetRes = vaultRepo.unregisterExternalOwner("comp:$id")
         saveComponentsIndex()
         return assetRes
+    }
+
+    fun updateComponentRawText(id: String, newRawText: String): Boolean {
+        val cur = synchronized(lock) { componentsMap[id] } ?: return false
+        val parsed = ComponentParser.parse(newRawText, cur.fileName.ifBlank { cur.name }) ?: return false
+        val bytes = newRawText.trim().toByteArray(Charsets.UTF_8)
+        val file = getComponentFile(cur)
+        file.parentFile?.mkdirs()
+        file.writeBytes(bytes)
+        val (urls, _) = UrlExtractor.extract(newRawText)
+        vaultRepo.registerExternalUrls("comp:$id", urls)
+        val contentHash = sha256Short(bytes)
+        synchronized(lock) {
+            val latest = componentsMap[id] ?: return false
+            componentsMap[id] = latest.copy(
+                name = parsed.name.ifBlank { latest.name },
+                type = parsed.type,
+                summary = parsed.summary,
+                urls = urls,
+                fileSize = file.length(),
+                contentHash = contentHash
+            )
+        }
+        saveComponentsIndex()
+        return true
     }
 
     // ==================== HELPERS ====================

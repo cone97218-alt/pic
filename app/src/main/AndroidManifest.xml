@@ -102,6 +102,11 @@
             android:name=".ui.ComponentPreviewActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".ui.CodeEditorActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
         <service
             android:name=".service.VaultDownloadService"
             android:exported="false"

@@ -74,6 +74,14 @@ class ResourceDetailActivity : AppCompatActivity() {
     private var detailSearchQuery: String = ""
     private var searchDebounceJob: Job? = null
 
+    private val codeEditorLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+            if (res.resultCode == RESULT_OK) {
+                setResult(RESULT_OK)
+                reloadById()
+            }
+        }
+
     private val exportDocLauncher =
         registerForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
             if (uri == null) return@registerForActivityResult
@@ -169,6 +177,7 @@ class ResourceDetailActivity : AppCompatActivity() {
 
     private fun showMoreActionsMenu() {
         val actions = mutableListOf<SheetAction>()
+        actions.add(SheetAction("编辑源码", "查看并编辑底层 JSON 代码") { openCodeEditor() })
         if (resType == TYPE_CHARACTER) {
             currentCharacter?.let { c ->
                 actions.add(SheetAction("分类标签", "多选 1~3 级分类") { showCharacterCategoryDialog(c) })
@@ -180,6 +189,16 @@ class ResourceDetailActivity : AppCompatActivity() {
         actions.add(SheetAction("修改版本号", "自定义当前版本的版本标签") { showEditVersionTagDialog() })
         actions.add(SheetAction("删除当前版本", destructive = true) { confirmDelete() })
         VaultSheets.actionList(this, actions = actions)
+    }
+
+    private fun openCodeEditor() {
+        val (mod, title) = when (resType) {
+            TYPE_CHARACTER -> CodeEditorActivity.MODULE_CHARACTER to (currentCharacter?.name ?: "角色卡")
+            TYPE_WORLDBOOK -> CodeEditorActivity.MODULE_WORLDBOOK to (currentWorldBook?.name ?: "世界书")
+            TYPE_PRESET -> CodeEditorActivity.MODULE_PRESET to (currentPreset?.name ?: "预设")
+            else -> return
+        }
+        codeEditorLauncher.launch(CodeEditorActivity.createIntent(this, mod, resId, title))
     }
 
     private fun showEditVersionTagDialog() {

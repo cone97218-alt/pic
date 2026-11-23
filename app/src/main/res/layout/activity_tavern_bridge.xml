@@ -283,6 +283,155 @@
                     android:orientation="vertical" />
             </LinearLayout>
 
+            <!-- 4.5 Sync & Code Change Logs Container -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/sectionBridgeLogs"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                app:cardBackgroundColor="@color/surface"
+                app:cardCornerRadius="14dp"
+                app:cardElevation="0dp"
+                app:strokeColor="@color/border"
+                app:strokeWidth="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/tvLogsHeader"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="同步与代码变更日志"
+                            android:textColor="@color/text_primary"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/btnLogsClear"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:clickable="true"
+                            android:focusable="true"
+                            android:paddingHorizontal="6dp"
+                            android:paddingVertical="2dp"
+                            android:text="清空"
+                            android:textColor="@color/text_muted"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/tvLogsStatsSummary"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="推至酒馆 0  ·  从酒馆拉取 0  ·  代码变更覆盖 0"
+                        android:textColor="@color/text_muted"
+                        android:textSize="12sp" />
+
+                    <!-- Filter Chips -->
+                    <HorizontalScrollView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:scrollbars="none">
+
+                        <LinearLayout
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:id="@+id/chipLogAll"
+                                android:layout_width="wrap_content"
+                                android:layout_height="26dp"
+                                android:layout_marginEnd="6dp"
+                                android:background="@drawable/bg_pill_accent"
+                                android:clickable="true"
+                                android:focusable="true"
+                                android:gravity="center"
+                                android:paddingHorizontal="10dp"
+                                android:text="全部"
+                                android:textColor="@color/text_primary"
+                                android:textSize="11.5sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/chipLogOverwritten"
+                                android:layout_width="wrap_content"
+                                android:layout_height="26dp"
+                                android:layout_marginEnd="6dp"
+                                android:background="@drawable/bg_pill_accent"
+                                android:clickable="true"
+                                android:focusable="true"
+                                android:gravity="center"
+                                android:paddingHorizontal="10dp"
+                                android:text="代码覆盖"
+                                android:textColor="@color/text_muted"
+                                android:textSize="11.5sp" />
+
+                            <TextView
+                                android:id="@+id/chipLogPull"
+                                android:layout_width="wrap_content"
+                                android:layout_height="26dp"
+                                android:layout_marginEnd="6dp"
+                                android:background="@drawable/bg_pill_accent"
+                                android:clickable="true"
+                                android:focusable="true"
+                                android:gravity="center"
+                                android:paddingHorizontal="10dp"
+                                android:text="从酒馆拉取"
+                                android:textColor="@color/text_muted"
+                                android:textSize="11.5sp" />
+
+                            <TextView
+                                android:id="@+id/chipLogPush"
+                                android:layout_width="wrap_content"
+                                android:layout_height="26dp"
+                                android:layout_marginEnd="6dp"
+                                android:background="@drawable/bg_pill_accent"
+                                android:clickable="true"
+                                android:focusable="true"
+                                android:gravity="center"
+                                android:paddingHorizontal="10dp"
+                                android:text="推至酒馆"
+                                android:textColor="@color/text_muted"
+                                android:textSize="11.5sp" />
+
+                            <TextView
+                                android:id="@+id/chipLogTags"
+                                android:layout_width="wrap_content"
+                                android:layout_height="26dp"
+                                android:background="@drawable/bg_pill_accent"
+                                android:clickable="true"
+                                android:focusable="true"
+                                android:gravity="center"
+                                android:paddingHorizontal="10dp"
+                                android:text="标签联动"
+                                android:textColor="@color/text_muted"
+                                android:textSize="11.5sp" />
+                        </LinearLayout>
+                    </HorizontalScrollView>
+
+                    <LinearLayout
+                        android:id="@+id/containerBridgeLogs"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:orientation="vertical" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
             <!-- 5. Collapsible Companion Script / Extension Guide -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"

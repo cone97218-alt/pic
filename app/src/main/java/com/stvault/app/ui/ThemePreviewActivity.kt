@@ -53,6 +53,13 @@ class ThemePreviewActivity : AppCompatActivity() {
     private val aiAvatarFile by lazy { File(filesDir, "preview_ai_avatar.img") }
     private val userAvatarFile by lazy { File(filesDir, "preview_user_avatar.img") }
 
+    private val codeEditorLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+            if (res.resultCode == RESULT_OK && currentSourceId.isNotEmpty()) {
+                loadThemeById(currentSourceId)
+            }
+        }
+
     private val pickAvatarLauncher =
         registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
             if (uri == null) return@registerForActivityResult
@@ -87,6 +94,13 @@ class ThemePreviewActivity : AppCompatActivity() {
         binding.btnClosePreview.setOnClickListener { finish() }
         binding.btnPreviewSettings.setOnClickListener { showPreviewSettingsDialog() }
         binding.btnPreviewInstall.setOnClickListener { showInstallToTavernSheet() }
+        binding.btnPreviewEditCode.setOnClickListener {
+            if (currentSourceId.isNotEmpty()) {
+                codeEditorLauncher.launch(
+                    CodeEditorActivity.createIntent(this, CodeEditorActivity.MODULE_THEME, currentSourceId, currentTitle)
+                )
+            }
+        }
         binding.btnVariantPrev.setOnClickListener { stepVariant(-1) }
         binding.btnVariantNext.setOnClickListener { stepVariant(1) }
         binding.tvPreviewTitle.setOnClickListener {

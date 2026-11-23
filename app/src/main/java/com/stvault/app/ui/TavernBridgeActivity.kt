@@ -22,6 +22,7 @@ import com.google.android.material.card.MaterialCardView
 import com.stvault.app.R
 import com.stvault.app.core.BridgeOutboxItem
 import com.stvault.app.core.BridgePullConflict
+import com.stvault.app.core.BridgeSyncLogEntry
 import com.stvault.app.core.TavernBridgeManager
 import com.stvault.app.core.TavernBridgeState
 import com.stvault.app.databinding.ActivityTavernBridgeBinding
@@ -30,12 +31,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class TavernBridgeActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityTavernBridgeBinding
     private lateinit var bridge: TavernBridgeManager
     private var guideExpanded = false
+    private var activeLogFilter = "all" // "all" | "overwritten" | "pull" | "push" | "tags"
+    private val expandedLogIds = HashSet<String>()
 
     private val exportHelperScriptLauncher =
         registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
@@ -109,6 +115,16 @@ class TavernBridgeActivity : AppCompatActivity() {
             }
         }
         binding.btnBridgePull.setOnClickListener { showPullSheet() }
+        binding.btnLogsClear.setOnClickListener {
+            bridge.clearLogs()
+            expandedLogIds.clear()
+            toast("已清空同步日志")
+        }
+        binding.chipLogAll.setOnClickListener { setLogFilter("all") }
+        binding.chipLogOverwritten.setOnClickListener { setLogFilter("overwritten") }
+        binding.chipLogPull.setOnClickListener { setLogFilter("pull") }
+        binding.chipLogPush.setOnClickListener { setLogFilter("push") }
+        binding.chipLogTags.setOnClickListener { setLogFilter("tags") }
 
         lifecycleScope.launch {
             bridge.stateFlow.collectLatest { st ->
@@ -193,6 +209,139 @@ class TavernBridgeActivity : AppCompatActivity() {
 
         renderConflicts(bridge.listConflicts())
         renderOutbox(bridge.listOutbox())
+        renderLogs(st, bridge.listLogs())
+    }
+
+    private fun setLogFilter(filter: String) {
+        activeLogFilter = filter
+        val primary = ContextCompat.getColor(this, R.color.text_primary)
+        val muted = ContextCompat.getColor(this, R.color.text_muted)
+        val chips = listOf(
+            "all" to binding.chipLogAll,
+            "overwritten" to binding.chipLogOverwritten,
+            "pull" to binding.chipLogPull,
+            "push" to binding.chipLogPush,
+            "tags" to binding.chipLogTags
+        )
+        for ((k, tv) in chips) {
+            val active = (k == filter)
+            tv.setTextColor(if (active) primary else muted)
+            tv.setTypeface(null, if (active) Typeface.BOLD else Typeface.NORMAL)
+        }
+        renderLogs(bridge.stateFlow.value, bridge.listLogs())
+    }
+
+    private fun renderLogs(st: TavernBridgeState, allLogs: List<BridgeSyncLogEntry>) {
+        binding.tvLogsHeader.text = "同步与代码变更日志 (${allLogs.size})"
+        binding.tvLogsStatsSummary.text =
+            "推至酒馆 ${st.pushedToTavernCount}  ·  从酒馆拉取 ${st.pulledFromTavernCount}  ·  代码变更覆盖 ${st.overwrittenCount}"
+
+        val filtered = allLogs.filter { e ->
+            when (activeLogFilter) {
+                "overwritten" -> e.action == "overwritten"
+                "pull" -> e.direction == "pull_from_tavern"
+                "push" -> e.direction == "push_to_tavern"
+                "tags" -> e.direction == "tag_sync"
+                else -> true
+            }
+        }.take(60)
+
+        binding.containerBridgeLogs.removeAllViews()
+        val dp = { v: Int -> (v * resources.displayMetrics.density).toInt() }
+        val col = { res: Int -> ContextCompat.getColor(this, res) }
+
+        if (filtered.isEmpty()) {
+            binding.containerBridgeLogs.addView(TextView(this).apply {
+                text = "暂无对应日志记录"
+                setTextColor(col(R.color.text_muted))
+                textSize = 12f
+                setPadding(dp(2), dp(6), dp(2), dp(4))
+            })
+            return
+        }
+
+        val timeFmt = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
+        for (entry in filtered) {
+            val box = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundResource(R.drawable.bg_input)
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(6) }
+            }
+
+            val topRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val (dirBadge, badgeColor) = when {
+                entry.action == "overwritten" -> "代码覆盖" to Color.parseColor("#D97706")
+                entry.direction == "push_to_tavern" -> "推至酒馆" to Color.parseColor("#2563EB")
+                entry.direction == "tag_sync" -> "标签联动" to Color.parseColor("#7C3AED")
+                else -> "酒馆拉取" to Color.parseColor("#16A34A")
+            }
+            topRow.addView(TextView(this).apply {
+                text = "$dirBadge · ${entry.moduleLabel}"
+                setTextColor(badgeColor)
+                textSize = 11f
+                setTypeface(null, Typeface.BOLD)
+            })
+            topRow.addView(TextView(this).apply {
+                text = timeFmt.format(Date(entry.timestamp))
+                setTextColor(col(R.color.text_muted))
+                textSize = 11f
+                gravity = Gravity.END
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            box.addView(topRow)
+
+            box.addView(TextView(this).apply {
+                text = entry.name
+                setTextColor(col(R.color.text_primary))
+                textSize = 13f
+                setTypeface(null, Typeface.BOLD)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(3) }
+            })
+
+            box.addView(TextView(this).apply {
+                text = entry.summary
+                setTextColor(col(R.color.text_muted))
+                textSize = 12f
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(2) }
+            })
+
+            if (entry.diffDetail.isNotEmpty()) {
+                val isExp = entry.id in expandedLogIds
+                box.addView(TextView(this).apply {
+                    text = if (isExp) entry.diffDetail else "点击查看代码变更明细 ▾"
+                    setTextColor(if (isExp) col(R.color.text_primary) else col(R.color.text_muted))
+                    textSize = 11.5f
+                    if (isExp) {
+                        typeface = Typeface.MONOSPACE
+                        setLineSpacing(dp(2).toFloat(), 1f)
+                    }
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(5) }
+                })
+                box.setOnClickListener {
+                    if (entry.id in expandedLogIds) expandedLogIds.remove(entry.id)
+                    else expandedLogIds.add(entry.id)
+                    renderLogs(bridge.stateFlow.value, bridge.listLogs())
+                }
+            }
+
+            binding.containerBridgeLogs.addView(box)
+        }
     }
 
     private fun renderConflicts(list: List<BridgePullConflict>) {

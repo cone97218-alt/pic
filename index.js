@@ -33,7 +33,7 @@
         'stvault_outbox_list', 'stvault_outbox_fetch', 'stvault_outbox_ack',
         'stvault_pull_poll', 'stvault_pull_done',
         'stvault_push_begin', 'stvault_push_chunk', 'stvault_push_end',
-        'stvault_push_fast', 'stvault_push_batch'
+        'stvault_push_fast', 'stvault_push_batch', 'stvault_sync_theme_tags'
     ];
 
     const state = {
@@ -269,6 +269,7 @@
                     setStatus('已连接酒馆匣 · 端口 ' + port, 'stv-ok');
                     log('连接成功（端口 ' + port + '）');
                     await syncInventory();
+                    await syncThemeTagsBidirectional(true);
                     startPolling();
                 }
                 return true;
@@ -333,6 +334,77 @@
         return names;
     }
 
+    function extractCompanionTagPayload() {
+        const tagPaths = [];
+        const themeTags = {};
+        try {
+            const tm = mainWin.themeManager;
+            if (!tm || typeof tm.getTags !== 'function') return { tagPaths, themeTags };
+            const tags = asArray(tm.getTags());
+            const byId = new Map();
+            for (const t of tags) {
+                if (t && t.id && t.name) byId.set(t.id, t);
+            }
+            function resolveFullPath(tag) {
+                const segs = [];
+                const visited = new Set();
+                let cur = tag;
+                while (cur && !visited.has(cur.id)) {
+                    visited.add(cur.id);
+                    segs.unshift(String(cur.name).trim());
+                    cur = cur.parentId ? byId.get(cur.parentId) : null;
+                }
+                return segs.filter(Boolean).slice(0, 3).join('/');
+            }
+            for (const t of tags) {
+                if (!t || !t.name) continue;
+                const path = resolveFullPath(t);
+                if (!path) continue;
+                if (!tagPaths.includes(path)) tagPaths.push(path);
+                const themes = asArray(t.themes);
+                for (const tn of themes) {
+                    const cleanName = String(tn || '').trim();
+                    if (!cleanName) continue;
+                    if (!themeTags[cleanName]) themeTags[cleanName] = [];
+                    if (!themeTags[cleanName].includes(path)) {
+                        themeTags[cleanName].push(path);
+                    }
+                }
+            }
+        } catch (_) {}
+        return { tagPaths, themeTags };
+    }
+
+    async function syncThemeTagsBidirectional(silent) {
+        if (!state.connected) return;
+        try {
+            const payload = extractCompanionTagPayload();
+            const res = await callToolWithRetry('stvault_sync_theme_tags', payload);
+            if (!res || !res.ok) return;
+
+            const vaultPaths = asArray(res.vaultTagPaths);
+            const vaultThemeTags = asObject(res.vaultThemeTags) || {};
+
+            // Broadcast vault tags to st-theme-companion so it merges them into its tag tree
+            try {
+                mainDoc.dispatchEvent(new CustomEvent('stvault:tagsSynced', {
+                    detail: {
+                        tagPaths: vaultPaths,
+                        themeTags: vaultThemeTags
+                    }
+                }));
+            } catch (_) {}
+
+            if (!silent) {
+                const uApp = res.updatedThemesInApp || 0;
+                const aCat = res.addedCategoryPaths || 0;
+                log('美化标签双向同步完成：推向酒馆匣更新 ' + uApp + ' 项（新分类 ' + aCat + '），从酒馆匣回传 ' + Object.keys(vaultThemeTags).length + ' 项');
+            }
+        } catch (e) {
+            if (!silent) log('标签同步失败：' + (e && e.message ? e.message : String(e)));
+        }
+    }
+
     async function syncInventory() {
         if (!state.connected) return;
         try {
@@ -353,13 +425,14 @@
         }
     }
 
-    async function pushBytesToVault(kind, fileName, bytes) {
+    async function pushBytesToVault(kind, fileName, bytes, tags) {
+        const tagArr = Array.isArray(tags) && tags.length > 0 ? tags : undefined;
         if (bytes.length <= FAST_LIMIT_BYTES) {
             try {
-                return await callToolWithRetry('stvault_push_fast', { kind, fileName, data: bytesToBase64(bytes) });
+                return await callToolWithRetry('stvault_push_fast', { kind, fileName, data: bytesToBase64(bytes), tags: tagArr });
             } catch (_) {}
         }
-        const begin = await callToolWithRetry('stvault_push_begin', { kind, fileName, bytes: bytes.length });
+        const begin = await callToolWithRetry('stvault_push_begin', { kind, fileName, bytes: bytes.length, tags: tagArr });
         const opId = begin.opId;
         let idx = 0;
         for (let off = 0; off < bytes.length; off += CHUNK_BYTES) {
@@ -419,13 +492,13 @@
         }
 
         for (let i = 0; i < pending.length; i++) {
-            const { fileName, bytes } = pending[i];
+            const { fileName, bytes, tags } = pending[i];
             const prog = skipped + i + 1;
             if (bytes.length > FAST_LIMIT_BYTES) {
                 await commitBatch();
                 setStatus('正在推送' + label + ' ' + prog + '/' + items.length, 'stv-ok');
                 try {
-                    await pushBytesToVault(kind, fileName, bytes);
+                    await pushBytesToVault(kind, fileName, bytes, tags);
                     doneSet.add(fileName);
                     sent++;
                 } catch (e) {
@@ -439,7 +512,9 @@
                 setStatus('极速批量推送' + label + ' ' + (skipped + i) + '/' + items.length + '...', 'stv-ok');
                 await commitBatch();
             }
-            batch.push({ kind, fileName, data: b64 });
+            const entry = { kind, fileName, data: b64 };
+            if (Array.isArray(tags) && tags.length > 0) entry.tags = tags;
+            batch.push(entry);
             batchNames.push(fileName);
             batchBytes += b64.length;
         }
@@ -477,12 +552,25 @@
         const src = await fetchStSettings();
 
         if (kind === 'all' || kind === 'theme') {
+            await syncThemeTagsBidirectional(true);
+            const companionMap = extractCompanionTagPayload().themeTags;
             const themes = asArray(src.themes).map(asObject).filter(Boolean);
             log('读取到美化 ' + themes.length + ' 个，极速批量推送中...');
-            const prepared = themes.map((t, i) => ({
-                fileName: String(t.name || t.theme_name || ('theme_' + (i + 1))) + '.json',
-                bytes: enc.encode(JSON.stringify(t, null, 2))
-            }));
+            const prepared = themes.map((t, i) => {
+                const tName = String(t.name || t.theme_name || ('theme_' + (i + 1)));
+                const cTags = companionMap[tName] || [];
+                const xiaTags = (t._xia && Array.isArray(t._xia.tags)) ? t._xia.tags : [];
+                const mergedTags = Array.from(new Set([...cTags, ...xiaTags])).filter(Boolean);
+                const copy = Object.assign({}, t);
+                if (mergedTags.length > 0) {
+                    copy._xia = Object.assign({}, copy._xia || {}, { tags: mergedTags });
+                }
+                return {
+                    fileName: tName + '.json',
+                    bytes: enc.encode(JSON.stringify(copy, null, 2)),
+                    tags: mergedTags
+                };
+            });
             totalSent += await pushItemsBatched('theme', prepared, '美化');
         }
         if (kind === 'all' || kind === 'character') {
@@ -713,7 +801,7 @@
         return `
 <div class="inline-drawer">
   <div class="inline-drawer-toggle inline-drawer-header">
-    <b>酒馆匣互联 <span style="font-weight:normal;opacity:.55;font-size:11px;">v1.9.11</span></b>
+    <b>酒馆匣互联 <span style="font-weight:normal;opacity:.55;font-size:11px;">v1.13.0</span></b>
     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
   </div>
   <div class="inline-drawer-content">
@@ -722,6 +810,7 @@
       <div class="stv-bridge-row">
         <div class="menu_button" id="stv_btn_connect">连接酒馆匣</div>
         <div class="menu_button" id="stv_btn_sync">同步清单</div>
+        <div class="menu_button" id="stv_btn_sync_tags">同步标签</div>
         <div class="menu_button" id="stv_btn_push_themes">推美化</div>
         <div class="menu_button" id="stv_btn_push_chars">推角色卡</div>
         <div class="menu_button" id="stv_btn_push_wbs">推世界书</div>
@@ -758,6 +847,12 @@
         if (btnSync) btnSync.addEventListener('click', () => runExclusive(async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await syncInventory();
+            await syncThemeTagsBidirectional(false);
+        }));
+        const btnTags = byId('stv_btn_sync_tags');
+        if (btnTags) btnTags.addEventListener('click', () => runExclusive(async () => {
+            if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
+            await syncThemeTagsBidirectional(false);
         }));
         const btnThemes = byId('stv_btn_push_themes');
         if (btnThemes) btnThemes.addEventListener('click', () => runExclusive(async () => {
@@ -806,6 +901,18 @@
                 clearInterval(timer);
             }
         }, 800);
+
+        let tagDebounce = null;
+        mainDoc.addEventListener('themeManager:tagsChanged', () => {
+            if (!state.connected || state.busy) return;
+            if (tagDebounce) clearTimeout(tagDebounce);
+            tagDebounce = setTimeout(() => {
+                tagDebounce = null;
+                if (state.connected && !state.busy) {
+                    syncThemeTagsBidirectional(true);
+                }
+            }, 1200);
+        });
     }
 
     if (mainDoc.readyState === 'loading') {

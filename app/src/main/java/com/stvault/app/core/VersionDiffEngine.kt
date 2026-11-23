@@ -236,6 +236,101 @@ object VersionDiffEngine {
         return buildReport(out)
     }
 
+    fun diffRawTexts(oldRaw: String, newRaw: String, module: String): String {
+        val oTrim = oldRaw.trim()
+        val nTrim = newRaw.trim()
+        if (oTrim == nTrim) return "代码完全一致，未发生变化"
+
+        try {
+            when (module) {
+                "themes" -> {
+                    if (oTrim.startsWith("{") && nTrim.startsWith("{")) {
+                        val oObj = org.json.JSONObject(oTrim)
+                        val nObj = org.json.JSONObject(nTrim)
+                        val changedKeys = mutableListOf<String>()
+                        val allKeys = (oObj.keys().asSequence().toSet() + nObj.keys().asSequence().toSet()) - setOf("_xia")
+                        var cssDelta = 0
+                        for (k in allKeys) {
+                            val ov = oObj.opt(k)?.toString().orEmpty().trim()
+                            val nv = nObj.opt(k)?.toString().orEmpty().trim()
+                            if (ov != nv) {
+                                if (k == "custom_css") {
+                                    cssDelta = nv.length - ov.length
+                                } else {
+                                    changedKeys.add("$k: ${ov.take(24)} → ${nv.take(24)}")
+                                }
+                            }
+                        }
+                        val parts = mutableListOf<String>()
+                        if (cssDelta != 0) {
+                            val sign = if (cssDelta > 0) "+$cssDelta" else "$cssDelta"
+                            parts.add("custom_css 改动 ($sign 字符)")
+                        } else if (oObj.optString("custom_css").trim() != nObj.optString("custom_css").trim()) {
+                            parts.add("custom_css 内容修改")
+                        }
+                        if (changedKeys.isNotEmpty()) {
+                            parts.add("配色/属性改动 ${changedKeys.size} 项 (${changedKeys.take(4).joinToString(" · ")})")
+                        }
+                        if (parts.isNotEmpty()) return parts.joinToString("\n")
+                    }
+                }
+                "presets" -> {
+                    val op = PresetParser.parse(oTrim, "old")
+                    val np = PresetParser.parse(nTrim, "new")
+                    if (op != null && np != null) {
+                        val rep = diffPresets(op, np)
+                        if (rep.entries.isNotEmpty()) {
+                            return formatReportBrief(rep)
+                        }
+                    }
+                }
+                "worldbooks" -> {
+                    val ow = WorldBookParser.parse(oTrim, "old")
+                    val nw = WorldBookParser.parse(nTrim, "new")
+                    if (ow != null && nw != null) {
+                        val rep = diffWorldBooks(ow, nw)
+                        if (rep.entries.isNotEmpty()) {
+                            return formatReportBrief(rep)
+                        }
+                    }
+                }
+                "characters" -> {
+                    val oc = CharacterCardParser.parseJson(oTrim, "old")
+                    val nc = CharacterCardParser.parseJson(nTrim, "new")
+                    if (oc != null && nc != null) {
+                        val rep = diffCharacters(oc, nc)
+                        if (rep.entries.isNotEmpty()) {
+                            return formatReportBrief(rep)
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+
+        val oLines = oTrim.lines()
+        val nLines = nTrim.lines()
+        val lineDelta = nLines.size - oLines.size
+        val charDelta = nTrim.length - oTrim.length
+        val lSign = if (lineDelta >= 0) "+$lineDelta" else "$lineDelta"
+        val cSign = if (charDelta >= 0) "+$charDelta" else "$charDelta"
+        return "代码行数 ${oLines.size} → ${nLines.size} ($lSign 行)，字符数 $cSign"
+    }
+
+    private fun formatReportBrief(rep: DiffReport): String {
+        val head = "+${rep.addedCount} 新增 · ~${rep.modifiedCount} 修改 · -${rep.removedCount} 删除"
+        val topItems = rep.entries.take(5).joinToString("\n") { e ->
+            val sym = when (e.kind) {
+                DiffKind.ADDED -> "+"
+                DiffKind.MODIFIED -> "~"
+                DiffKind.REMOVED -> "-"
+            }
+            "$sym [${e.section}] ${e.title}：${e.summary}"
+        }
+        val more = if (rep.entries.size > 5) "\n...等共 ${rep.entries.size} 处变更" else ""
+        return "$head\n$topItems$more"
+    }
+
     private fun compareOpt(section: String, title: String, oldVal: String?, newVal: String?, out: MutableList<DiffEntry>) {
         if (oldVal == newVal) return
         out.add(

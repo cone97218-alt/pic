@@ -34,6 +34,18 @@ data class BridgePullConflict(
     val reason: String
 )
 
+data class BridgeSyncLogEntry(
+    val id: String,
+    val timestamp: Long,
+    val direction: String, // "push_to_tavern" | "pull_from_tavern" | "tag_sync"
+    val action: String,    // "pushed" | "imported" | "overwritten" | "unchanged" | "conflict" | "tags_merged"
+    val module: String,    // "themes" | "characters" | "worldbooks" | "presets" | "components"
+    val moduleLabel: String,
+    val name: String,
+    val summary: String,
+    val diffDetail: String = ""
+)
+
 data class TavernBridgeState(
     val running: Boolean = false,
     val port: Int = 0,
@@ -45,6 +57,10 @@ data class TavernBridgeState(
     val installedPresetsCount: Int = 0,
     val outboxCount: Int = 0,
     val conflictCount: Int = 0,
+    val logCount: Int = 0,
+    val pushedToTavernCount: Int = 0,
+    val pulledFromTavernCount: Int = 0,
+    val overwrittenCount: Int = 0,
     val pendingPullKind: String = "",
     val lastPullSummary: String = "",
     val lastDiagLog: String = ""
@@ -57,6 +73,7 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
     private val outboxDir = File(bridgeDir, "outbox").apply { mkdirs() }
     private val conflictDir = File(bridgeDir, "conflicts").apply { mkdirs() }
     private val inventoryFile = File(bridgeDir, "tavern_inventory.json")
+    private val logsFile = File(bridgeDir, "sync_logs.json")
 
     private val installedThemes = HashSet<String>()
     private val installedChars = HashSet<String>()
@@ -65,12 +82,14 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
 
     private val outboxMap = LinkedHashMap<String, BridgeOutboxItem>()
     private val conflictsMap = LinkedHashMap<String, BridgePullConflict>()
+    private val syncLogs = ArrayList<BridgeSyncLogEntry>()
 
     private data class UploadSession(
         val id: String,
         val kind: String,
         val fileName: String,
         val totalBytes: Long,
+        val tags: List<String> = emptyList(),
         val chunks: MutableMap<Int, ByteArray> = HashMap()
     )
 
@@ -101,6 +120,7 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
 
     init {
         loadInventory()
+        loadLogs()
         publishState()
     }
 
@@ -227,6 +247,192 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
         publishState()
     }
 
+    // ==================== SYNC LOGS (双向推送与代码变更日志) ====================
+
+    fun listLogs(): List<BridgeSyncLogEntry> = synchronized(lock) {
+        syncLogs.toList()
+    }
+
+    fun clearLogs() {
+        synchronized(lock) {
+            syncLogs.clear()
+        }
+        saveLogs()
+        publishState()
+    }
+
+    private fun recordSyncLog(
+        direction: String,
+        action: String,
+        module: String,
+        name: String,
+        summary: String,
+        diffDetail: String = "",
+        deferSave: Boolean = false
+    ) {
+        val modLabel = when (module) {
+            "themes", "theme" -> "美化"
+            "characters", "character" -> "角色卡"
+            "worldbooks", "worldbook" -> "世界书"
+            "presets", "preset" -> "预设"
+            else -> "组件"
+        }
+        val entry = BridgeSyncLogEntry(
+            id = "log_${UUID.randomUUID().toString().replace("-", "").take(10)}",
+            timestamp = System.currentTimeMillis(),
+            direction = direction,
+            action = action,
+            module = module,
+            moduleLabel = modLabel,
+            name = name,
+            summary = summary,
+            diffDetail = diffDetail
+        )
+        synchronized(lock) {
+            syncLogs.add(0, entry)
+            while (syncLogs.size > 300) {
+                syncLogs.removeAt(syncLogs.lastIndex)
+            }
+        }
+        if (!deferSave) {
+            saveLogs()
+        }
+    }
+
+    private fun loadLogs() {
+        if (!logsFile.exists()) return
+        try {
+            val arr = JSONArray(logsFile.readText(Charsets.UTF_8))
+            synchronized(lock) {
+                syncLogs.clear()
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    syncLogs.add(
+                        BridgeSyncLogEntry(
+                            id = o.optString("id"),
+                            timestamp = o.optLong("timestamp", 0L),
+                            direction = o.optString("direction"),
+                            action = o.optString("action"),
+                            module = o.optString("module"),
+                            moduleLabel = o.optString("moduleLabel"),
+                            name = o.optString("name"),
+                            summary = o.optString("summary"),
+                            diffDetail = o.optString("diffDetail", "")
+                        )
+                    )
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun saveLogs() {
+        val json = synchronized(lock) {
+            val arr = JSONArray()
+            for (e in syncLogs) {
+                arr.put(JSONObject().apply {
+                    put("id", e.id)
+                    put("timestamp", e.timestamp)
+                    put("direction", e.direction)
+                    put("action", e.action)
+                    put("module", e.module)
+                    put("moduleLabel", e.moduleLabel)
+                    put("name", e.name)
+                    put("summary", e.summary)
+                    if (e.diffDetail.isNotEmpty()) put("diffDetail", e.diffDetail)
+                })
+            }
+            arr.toString()
+        }
+        try {
+            logsFile.writeText(json, Charsets.UTF_8)
+        } catch (_: Exception) {
+        }
+    }
+
+    // ==================== BIDIRECTIONAL TAG SYNC (st-theme-companion <-> 酒馆匣) ====================
+
+    fun syncThemeTagsWithCompanion(args: JSONObject): JSONObject {
+        val vaultRepo = VaultRepository.getInstance(appContext)
+        val catManager = CategoryManager.getInstance(appContext)
+        val incomingPathsArr = args.optJSONArray("tagPaths")
+        val incomingThemeTagsObj = args.optJSONObject("themeTags")
+
+        var addedCategoryPaths = 0
+        var updatedThemesInApp = 0
+        val existingCatSet = catManager.getCategories(CategoryManager.SCOPE_THEMES).toHashSet()
+
+        if (incomingPathsArr != null) {
+            for (i in 0 until incomingPathsArr.length()) {
+                val rawPath = incomingPathsArr.optString(i, "").trim()
+                val norm = catManager.normalizePath(rawPath)
+                if (norm.isNotEmpty() && norm != "待整理" && norm !in existingCatSet) {
+                    catManager.addCategory(CategoryManager.SCOPE_THEMES, norm)
+                    existingCatSet.add(norm)
+                    addedCategoryPaths++
+                }
+            }
+        }
+
+        if (incomingThemeTagsObj != null) {
+            val sourcesByNorm = vaultRepo.getAllSources().groupBy { normKey(it.name) }
+            val keys = incomingThemeTagsObj.keys()
+            while (keys.hasNext()) {
+                val tName = keys.next()
+                val arr = incomingThemeTagsObj.optJSONArray(tName) ?: continue
+                val incTags = mutableListOf<String>()
+                for (i in 0 until arr.length()) {
+                    val p = catManager.normalizePath(arr.optString(i, ""))
+                    if (p.isNotEmpty() && p != "待整理") {
+                        if (p !in existingCatSet) {
+                            catManager.addCategory(CategoryManager.SCOPE_THEMES, p)
+                            existingCatSet.add(p)
+                            addedCategoryPaths++
+                        }
+                        incTags.add(p)
+                    }
+                }
+                if (incTags.isEmpty()) continue
+                val matchedSources = sourcesByNorm[normKey(tName)].orEmpty()
+                for (src in matchedSources) {
+                    val merged = (src.categories + incTags).distinct()
+                    if (merged.size != src.categories.size) {
+                        vaultRepo.setSourceCategories(src.id, merged)
+                        updatedThemesInApp++
+                    }
+                }
+            }
+        }
+
+        if (addedCategoryPaths > 0 || updatedThemesInApp > 0) {
+            recordSyncLog(
+                direction = "tag_sync",
+                action = "tags_merged",
+                module = "themes",
+                name = "美化分类标签联动",
+                summary = "从 st-theme-companion 同步：新增分类 $addedCategoryPaths 个，更新匣内美化标签 $updatedThemesInApp 项"
+            )
+        }
+
+        val allVaultPaths = catManager.getCategories(CategoryManager.SCOPE_THEMES).filter { it != "待整理" }
+        val vaultThemeTagsObj = JSONObject()
+        for (src in vaultRepo.getAllSources()) {
+            val cleanCats = src.categories.filter { it.isNotBlank() && it != "待整理" }
+            if (cleanCats.isNotEmpty()) {
+                vaultThemeTagsObj.put(src.name, JSONArray(cleanCats))
+            }
+        }
+
+        lastDiagLog = "标签联动完成：更新 $updatedThemesInApp 项美化标签"
+        return JSONObject().apply {
+            put("ok", true)
+            put("addedCategoryPaths", addedCategoryPaths)
+            put("updatedThemesInApp", updatedThemesInApp)
+            put("vaultTagPaths", JSONArray(allVaultPaths))
+            put("vaultThemeTags", vaultThemeTagsObj)
+        }
+    }
+
     // ==================== CONFLICTS (近似名处理) ====================
 
     fun listConflicts(): List<BridgePullConflict> = synchronized(lock) {
@@ -254,7 +460,18 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
             "overwrite" -> {
                 if (bytes.isEmpty()) "文件已失效"
                 else {
+                    val oldRaw = readExistingRawCode(conflict.module, conflict.matchedId, vaultRepo, libRepo)
+                    val newRaw = extractIncomingRawCode(conflict.module, conflict.incomingFileName, bytes)
+                    val diffText = VersionDiffEngine.diffRawTexts(oldRaw, newRaw, conflict.module)
                     overwriteMatchedItem(conflict.module, conflict.matchedId, conflict.incomingFileName, bytes, vaultRepo, libRepo)
+                    recordSyncLog(
+                        direction = "pull_from_tavern",
+                        action = "overwritten",
+                        module = conflict.module,
+                        name = conflict.matchedName,
+                        summary = "用酒馆近似新版「${conflict.incomingName}」覆盖原版",
+                        diffDetail = diffText
+                    )
                     "已用酒馆新版覆盖「${conflict.matchedName}」"
                 }
             }
@@ -271,6 +488,13 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                             "components" -> libRepo.mergeComponentVersions(ids, conflict.matchedName)
                             else -> Unit
                         }
+                        recordSyncLog(
+                            direction = "pull_from_tavern",
+                            action = "imported",
+                            module = conflict.module,
+                            name = conflict.incomingName,
+                            summary = "归为「${conflict.matchedName}」的新版本"
+                        )
                         "已归为「${conflict.matchedName}」的新版本"
                     } else {
                         "已导入新版本"
@@ -281,6 +505,13 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                 if (bytes.isEmpty()) "文件已失效"
                 else {
                     importAndGetId(conflict.module, conflict.incomingFileName, bytes, vaultRepo, libRepo)
+                    recordSyncLog(
+                        direction = "pull_from_tavern",
+                        action = "imported",
+                        module = conflict.module,
+                        name = conflict.incomingName,
+                        summary = "与「${conflict.matchedName}」保留两份入库"
+                    )
                     "已保留两份"
                 }
             }
@@ -362,8 +593,15 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                 val id = args.optString("id", "")
                 val item = synchronized(lock) { outboxMap[id] }
                 if (item != null) {
-                    synchronized(lock) {
+                    val wasInstalled = synchronized(lock) {
                         val nk = normKey(item.name)
+                        val had = when (item.kind) {
+                            "theme" -> nk in installedThemes
+                            "character" -> nk in installedChars
+                            "worldbook" -> nk in installedWbs
+                            "preset" -> nk in installedPresets
+                            else -> false
+                        }
                         when (item.kind) {
                             "theme" -> installedThemes.add(nk)
                             "character" -> installedChars.add(nk)
@@ -371,12 +609,23 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                             "preset" -> installedPresets.add(nk)
                             else -> Unit
                         }
+                        had
                     }
                     saveInventory()
+                    val tagSuffix = if (item.tags.isNotEmpty()) "（标签：${item.tags.joinToString("、")}）" else ""
+                    recordSyncLog(
+                        direction = "push_to_tavern",
+                        action = "pushed",
+                        module = item.kind,
+                        name = item.name,
+                        summary = (if (wasInstalled) "已覆盖装入酒馆" else "已新装入酒馆") + tagSuffix
+                    )
                 }
                 removeOutbox(id)
                 JSONObject().apply { put("ok", true) }
             }
+
+            "stvault_sync_theme_tags" -> syncThemeTagsWithCompanion(args)
 
             "stvault_pull_poll" -> {
                 val kind = pendingPullKind
@@ -398,8 +647,9 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                 val kind = args.optString("kind", "")
                 val fileName = args.optString("fileName", "item.json")
                 val totalBytes = args.optLong("bytes", 0L)
+                val tags = readTagsArray(args.optJSONArray("tags"))
                 val opId = "up_${UUID.randomUUID().toString().replace("-", "").take(10)}"
-                uploadSessions[opId] = UploadSession(opId, kind, fileName, totalBytes)
+                uploadSessions[opId] = UploadSession(opId, kind, fileName, totalBytes, tags)
                 JSONObject().apply {
                     put("ok", true)
                     put("opId", opId)
@@ -429,7 +679,7 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                     for (k in session.chunks.keys.sorted()) {
                         session.chunks[k]?.let { baos.write(it) }
                     }
-                    val status = ingestIncomingFromTavern(session.kind, session.fileName, baos.toByteArray())
+                    val status = ingestIncomingFromTavern(session.kind, session.fileName, baos.toByteArray(), incomingTags = session.tags)
                     lastDiagLog = "已接收：${session.fileName} ($status)"
                     JSONObject().apply {
                         put("ok", true)
@@ -442,8 +692,9 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                 val kind = args.optString("kind", "")
                 val fileName = args.optString("fileName", "item.json")
                 val b64 = args.optString("data", "")
+                val tags = readTagsArray(args.optJSONArray("tags"))
                 val bytes = Base64.decode(b64, Base64.DEFAULT)
-                val status = ingestIncomingFromTavern(kind, fileName, bytes)
+                val status = ingestIncomingFromTavern(kind, fileName, bytes, incomingTags = tags)
                 lastDiagLog = "已接收：$fileName"
                 JSONObject().apply {
                     put("ok", true)
@@ -465,6 +716,7 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                 } else emptySet()
                 var imported = 0
                 var overwritten = 0
+                var unchanged = 0
                 var conflicts = 0
                 var touchedThemes = false
                 for (i in 0 until arr.length()) {
@@ -472,13 +724,15 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                     val kind = o.optString("kind", "")
                     val fileName = o.optString("fileName", "item.json")
                     val b64 = o.optString("data", "")
+                    val tags = readTagsArray(o.optJSONArray("tags"))
                     if (b64.isEmpty()) continue
                     try {
                         val bytes = Base64.decode(b64, Base64.DEFAULT)
                         if (kind == "theme") touchedThemes = true
-                        when (ingestIncomingFromTavern(kind, fileName, bytes, embeddedWbKeys, deferThemeSave = true)) {
+                        when (ingestIncomingFromTavern(kind, fileName, bytes, embeddedWbKeys, deferThemeSave = true, incomingTags = tags)) {
                             "imported" -> imported++
                             "overwritten" -> overwritten++
+                            "unchanged" -> unchanged++
                             "conflict" -> conflicts++
                             else -> Unit
                         }
@@ -488,10 +742,12 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                 if (touchedThemes) {
                     VaultRepository.getInstance(appContext).saveIndex()
                 }
-                val totalOk = imported + overwritten + conflicts
+                saveLogs()
+                val totalOk = imported + overwritten + unchanged + conflicts
                 val parts = mutableListOf<String>()
                 if (imported > 0) parts.add("新增 $imported")
-                if (overwritten > 0) parts.add("覆盖 $overwritten")
+                if (overwritten > 0) parts.add("代码变更覆盖 $overwritten")
+                if (unchanged > 0) parts.add("无变化 $unchanged")
                 if (conflicts > 0) parts.add("待确认冲突 $conflicts")
                 lastDiagLog = if (parts.isNotEmpty()) "批量接收：" + parts.joinToString(" · ") else "批量接收完成"
                 JSONObject().apply {
@@ -522,12 +778,117 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
         return keys
     }
 
+    private fun readTagsArray(arr: JSONArray?): List<String> {
+        if (arr == null) return emptyList()
+        val out = mutableListOf<String>()
+        for (i in 0 until arr.length()) {
+            val s = arr.optString(i, "").trim()
+            if (s.isNotEmpty()) out.add(s)
+        }
+        return out
+    }
+
+    private fun extractThemeXiaTags(bytes: ByteArray): List<String> {
+        return try {
+            val text = String(bytes, Charsets.UTF_8).trimStart()
+            if (!text.startsWith("{")) return emptyList()
+            val obj = JSONObject(text)
+            val xia = obj.optJSONObject("_xia") ?: return emptyList()
+            val out = mutableListOf<String>()
+            val tagsArr = xia.optJSONArray("tags")
+            if (tagsArr != null) {
+                for (i in 0 until tagsArr.length()) {
+                    val t = tagsArr.optString(i, "").trim()
+                    if (t.isNotEmpty()) out.add(t)
+                }
+            }
+            val cat = xia.optString("category", "").trim()
+            if (cat.isNotEmpty()) out.add(cat)
+            out.distinct()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun mergeCategoriesIntoTheme(
+        sourceId: String,
+        rawTags: List<String>,
+        vaultRepo: VaultRepository,
+        deferSave: Boolean
+    ) {
+        if (rawTags.isEmpty()) return
+        val catManager = CategoryManager.getInstance(appContext)
+        val normTags = rawTags.map { catManager.normalizePath(it) }.filter { it.isNotEmpty() && it != "待整理" }
+        if (normTags.isEmpty()) return
+        for (p in normTags) {
+            catManager.addCategory(CategoryManager.SCOPE_THEMES, p)
+        }
+        val cur = vaultRepo.getSourceById(sourceId) ?: return
+        val merged = (cur.categories + normTags).distinct()
+        if (merged.size != cur.categories.size) {
+            vaultRepo.setSourceCategories(sourceId, merged)
+            if (deferSave) {
+                // setSourceCategories already saves index; safe either way
+            }
+        }
+    }
+
+    private fun readExistingRawCode(
+        module: String,
+        existingId: String,
+        vaultRepo: VaultRepository,
+        libRepo: ResourceLibraryRepository
+    ): String {
+        return try {
+            when (module) {
+                "themes" -> vaultRepo.readSourceRawText(existingId).second
+                "characters" -> {
+                    val rec = libRepo.getCharacterById(existingId) ?: return ""
+                    val f = libRepo.getCharacterFile(rec)
+                    if (!f.exists()) return ""
+                    if (rec.isPng) CharacterCardParser.extractJsonFromPng(f.readBytes()).orEmpty()
+                    else f.readText(Charsets.UTF_8)
+                }
+                "worldbooks" -> {
+                    val rec = libRepo.getWorldBookById(existingId) ?: return ""
+                    val f = libRepo.getWorldBookFile(rec)
+                    if (f.exists()) f.readText(Charsets.UTF_8) else ""
+                }
+                "presets" -> {
+                    val rec = libRepo.getPresetById(existingId) ?: return ""
+                    val f = libRepo.getPresetFile(rec)
+                    if (f.exists()) f.readText(Charsets.UTF_8) else ""
+                }
+                "components" -> {
+                    val rec = libRepo.getComponentById(existingId) ?: return ""
+                    libRepo.readComponentText(rec)
+                }
+                else -> ""
+            }
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    private fun extractIncomingRawCode(module: String, fileName: String, bytes: ByteArray): String {
+        return try {
+            if (module == "characters" && !fileName.endsWith(".json", ignoreCase = true) && CharacterCardParser.isPng(bytes)) {
+                CharacterCardParser.extractJsonFromPng(bytes).orEmpty()
+            } else {
+                String(bytes, Charsets.UTF_8)
+            }
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
     private fun ingestIncomingFromTavern(
         kind: String,
         fileName: String,
         bytes: ByteArray,
         precomputedEmbeddedWbKeys: Set<String>? = null,
-        deferThemeSave: Boolean = false
+        deferThemeSave: Boolean = false,
+        incomingTags: List<String> = emptyList()
     ): String {
         if (bytes.isEmpty()) return "empty"
         val vaultRepo = VaultRepository.getInstance(appContext)
@@ -543,6 +904,9 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
         }
 
         val incomingDisplayName = extractDisplayName(module, fileName, bytes)
+        val allIncomingTags = if (module == "themes") {
+            (incomingTags + extractThemeXiaTags(bytes)).distinct()
+        } else incomingTags
 
         // Avoid duplicate standalone worldbook if already embedded inside an existing Character Card
         if (module == "worldbooks") {
@@ -559,13 +923,37 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
             else -> emptyList()
         }
 
-        // 1. Exact same name -> Overwrite with latest code from Tavern!
+        // 1. Exact same name -> Compare code diff & Overwrite with latest code from Tavern!
         val exactMatch = existingList.firstOrNull { (_, n) ->
             normKey(n) == normKey(incomingDisplayName)
         }
         if (exactMatch != null) {
-            overwriteMatchedItem(module, exactMatch.first, fileName, bytes, vaultRepo, libRepo, deferThemeSave)
-            return "overwritten"
+            val oldRaw = readExistingRawCode(module, exactMatch.first, vaultRepo, libRepo)
+            val newRaw = extractIncomingRawCode(module, fileName, bytes)
+            val diffText = VersionDiffEngine.diffRawTexts(oldRaw, newRaw, module)
+            val codeChanged = (diffText != "代码完全一致，未发生变化")
+
+            if (codeChanged) {
+                overwriteMatchedItem(module, exactMatch.first, fileName, bytes, vaultRepo, libRepo, deferThemeSave)
+            }
+            if (module == "themes" && allIncomingTags.isNotEmpty()) {
+                mergeCategoriesIntoTheme(exactMatch.first, allIncomingTags, vaultRepo, deferThemeSave)
+            }
+            val tagInfo = if (allIncomingTags.isNotEmpty()) " · 标签：${allIncomingTags.joinToString("、")}" else ""
+            if (codeChanged) {
+                recordSyncLog(
+                    direction = "pull_from_tavern",
+                    action = "overwritten",
+                    module = module,
+                    name = exactMatch.second,
+                    summary = "从酒馆覆盖更新（代码有改动）$tagInfo",
+                    diffDetail = diffText,
+                    deferSave = deferThemeSave
+                )
+                return "overwritten"
+            } else {
+                return "unchanged"
+            }
         }
 
         // 2. Near-duplicate name -> Record conflict for user decision (skip color/form sibling variants for themes!)
@@ -607,11 +995,28 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
             synchronized(lock) {
                 conflictsMap[cid] = conflict
             }
+            recordSyncLog(
+                direction = "pull_from_tavern",
+                action = "conflict",
+                module = module,
+                name = incomingDisplayName,
+                summary = "与「${bestMatch.second}」近似 ($pct%)，待确认处理",
+                deferSave = deferThemeSave
+            )
             return "conflict"
         }
 
         // 3. Brand new -> Import directly!
-        importAndGetId(module, fileName, bytes, vaultRepo, libRepo, deferThemeSave)
+        importAndGetId(module, fileName, bytes, vaultRepo, libRepo, deferThemeSave, allIncomingTags)
+        val tagInfo = if (allIncomingTags.isNotEmpty()) "（同步标签：${allIncomingTags.joinToString("、")}）" else ""
+        recordSyncLog(
+            direction = "pull_from_tavern",
+            action = "imported",
+            module = module,
+            name = incomingDisplayName,
+            summary = "从酒馆新拉取入库$tagInfo",
+            deferSave = deferThemeSave
+        )
         return "imported"
     }
 
@@ -679,11 +1084,21 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
         bytes: ByteArray,
         vaultRepo: VaultRepository,
         libRepo: ResourceLibraryRepository,
-        deferThemeSave: Boolean = false
+        deferThemeSave: Boolean = false,
+        initialTags: List<String> = emptyList()
     ): String? {
         return when (module) {
             "themes" -> {
-                vaultRepo.importRawThemeText(String(bytes, Charsets.UTF_8), fileName, "酒馆同步", deferSave = deferThemeSave)
+                val catManager = CategoryManager.getInstance(appContext)
+                val normCats = initialTags.map { catManager.normalizePath(it) }.filter { it.isNotEmpty() && it != "待整理" }.distinct()
+                for (p in normCats) catManager.addCategory(CategoryManager.SCOPE_THEMES, p)
+                vaultRepo.importRawThemeText(
+                    rawText = String(bytes, Charsets.UTF_8),
+                    fileName = fileName,
+                    folderName = "酒馆同步",
+                    deferSave = deferThemeSave,
+                    initialCategories = normCats
+                )
                 null
             }
             "characters" -> libRepo.importCharacterFromBytes(bytes, fileName).first?.id
@@ -744,6 +1159,9 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
         val running = server?.isRunning == true
         val port = server?.boundPort ?: 0
         val connected = running && (System.currentTimeMillis() - lastContactAt < 25_000L)
+        val pushedCount = syncLogs.count { it.direction == "push_to_tavern" }
+        val pulledCount = syncLogs.count { it.direction == "pull_from_tavern" && (it.action == "imported" || it.action == "overwritten") }
+        val overCount = syncLogs.count { it.action == "overwritten" }
         _stateFlow.value = TavernBridgeState(
             running = running,
             port = port,
@@ -752,14 +1170,20 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
             installedThemesCount = installedThemes.size,
             installedCharsCount = installedChars.size,
             installedWbsCount = installedWbs.size,
-            installedPresetsCount = installedPresets.size,
+            installedPresetsCount = installedPresetsCount(),
             outboxCount = outboxMap.size,
             conflictCount = conflictsMap.size,
+            logCount = syncLogs.size,
+            pushedToTavernCount = pushedCount,
+            pulledFromTavernCount = pulledCount,
+            overwrittenCount = overCount,
             pendingPullKind = pendingPullKind,
             lastPullSummary = lastPullSummary,
             lastDiagLog = lastDiagLog
         )
     }
+
+    private fun installedPresetsCount(): Int = installedPresets.size
 
     companion object {
         @Volatile

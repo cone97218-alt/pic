@@ -233,9 +233,11 @@ class TavernBridgeServer(private val manager: TavernBridgeManager) {
             "opId" to "string", "index" to "integer", "data" to "string")
         addTool("stvault_push_end", "Finish upload and ingest", "opId" to "string")
         addTool("stvault_push_fast", "Single-shot fast upload for items <= 512KB",
-            "kind" to "string", "fileName" to "string", "data" to "string")
+            "kind" to "string", "fileName" to "string", "data" to "string", "tags" to "array")
         addTool("stvault_push_batch", "Batch upload multiple small items in one round-trip",
             "items" to "array")
+        addTool("stvault_sync_theme_tags", "Bidirectional sync of theme tags between st-theme-companion and stvault",
+            "mode" to "string", "tagPaths" to "array", "themeTags" to "object")
         return arr
     }
 
