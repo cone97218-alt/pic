@@ -2617,7 +2617,7 @@ class MainActivity : AppCompatActivity() {
                         val safeName = if (rawName.endsWith(".json", ignoreCase = true)) rawName else "${source.name}.json"
                         safeName to outText.toByteArray(Charsets.UTF_8)
                     }
-                    enqueueToTavernBridge("theme", source.name, fileName, bytes)
+                    enqueueToTavernBridge("theme", source.name, fileName, bytes, source.categories)
                 } catch (e: Exception) {
                     toast("读取美化失败：${e.message}")
                 }
@@ -2633,7 +2633,13 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun enqueueToTavernBridge(kind: String, name: String, fileName: String, bytes: ByteArray) {
+    private fun enqueueToTavernBridge(
+        kind: String,
+        name: String,
+        fileName: String,
+        bytes: ByteArray,
+        tags: List<String> = emptyList()
+    ) {
         val bridge = com.stvault.app.core.TavernBridgeManager.getInstance(this)
         val alreadyInstalled = when (kind) {
             "theme" -> bridge.isThemeInstalled(name, fileName)
@@ -2647,7 +2653,7 @@ class MainActivity : AppCompatActivity() {
                 try { com.stvault.app.service.TavernBridgeService.start(this) } catch (_: Exception) {}
                 lifecycleScope.launch(Dispatchers.IO) { bridge.startServer() }
             }
-            bridge.enqueueOutbox(kind, name, fileName, bytes)
+            bridge.enqueueOutbox(kind, name, fileName, bytes, tags)
             toast("已加入待装入队列，切回 TT 酒馆即可自动装入")
         }
         if (alreadyInstalled) {

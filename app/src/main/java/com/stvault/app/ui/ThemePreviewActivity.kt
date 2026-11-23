@@ -317,7 +317,10 @@ class ThemePreviewActivity : AppCompatActivity() {
                         try { com.stvault.app.service.TavernBridgeService.start(this@ThemePreviewActivity) } catch (_: Exception) {}
                         withContext(Dispatchers.IO) { bridge.startServer() }
                     }
-                    bridge.enqueueOutbox("theme", currentTitle, fn, bytes)
+                    val tags = withContext(Dispatchers.IO) {
+                        repo.getSourceById(currentSourceId)?.categories ?: emptyList()
+                    }
+                    bridge.enqueueOutbox("theme", currentTitle, fn, bytes, tags)
                     toast("已加入待装入队列，切回 TT 酒馆自动装入")
                 } catch (e: Exception) {
                     toast("推送失败：${e.message}")

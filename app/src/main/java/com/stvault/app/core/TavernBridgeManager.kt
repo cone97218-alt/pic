@@ -18,7 +18,8 @@ data class BridgeOutboxItem(
     val name: String,
     val fileName: String,
     val sizeBytes: Long,
-    val queuedAt: Long
+    val queuedAt: Long,
+    val tags: List<String> = emptyList()
 )
 
 data class BridgePullConflict(
@@ -164,7 +165,13 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
 
     // ==================== OUTBOX (酒馆匣 -> 酒馆) ====================
 
-    fun enqueueOutbox(kind: String, name: String, fileName: String, bytes: ByteArray): BridgeOutboxItem {
+    fun enqueueOutbox(
+        kind: String,
+        name: String,
+        fileName: String,
+        bytes: ByteArray,
+        tags: List<String> = emptyList()
+    ): BridgeOutboxItem {
         val id = "out_${UUID.randomUUID().toString().replace("-", "").take(12)}"
         val safeFile = File(outboxDir, id)
         safeFile.writeBytes(bytes)
@@ -174,7 +181,8 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
             name = name,
             fileName = fileName,
             sizeBytes = bytes.size.toLong(),
-            queuedAt = System.currentTimeMillis()
+            queuedAt = System.currentTimeMillis(),
+            tags = tags.filter { it.isNotBlank() }.distinct()
         )
         synchronized(lock) {
             outboxMap[id] = item
@@ -317,6 +325,9 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                         put("name", item.name)
                         put("fileName", item.fileName)
                         put("bytes", item.sizeBytes)
+                        if (item.tags.isNotEmpty()) {
+                            put("tags", JSONArray(item.tags))
+                        }
                     })
                 }
                 JSONObject().apply {
