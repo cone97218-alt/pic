@@ -425,13 +425,39 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
             updatedBgBindings = bgRepo.applyBindingsByThemeName(vaultRepo, map)
         }
 
-        if (addedCategoryPaths > 0 || updatedThemesInApp > 0 || updatedBgBindings > 0) {
+        // Bidirectional 1st-level background folder <-> background category sync (Plan B: top-level tags only)
+        val incomingBgFoldersObj = args.optJSONObject("backgroundFolders")
+        var updatedBgFolders = 0
+        if (incomingBgFoldersObj != null) {
+            val it = incomingBgFoldersObj.keys()
+            while (it.hasNext()) {
+                val bgFile = it.next()
+                val arr = incomingBgFoldersObj.optJSONArray(bgFile) ?: continue
+                val folderTags = mutableListOf<String>()
+                for (i in 0 until arr.length()) {
+                    val fn = arr.optString(i, "").trim()
+                    if (fn.isNotEmpty() && !fn.contains('/')) {
+                        catManager.addCategory(CategoryManager.SCOPE_BACKGROUNDS, fn)
+                        if (fn !in folderTags) folderTags.add(fn)
+                    }
+                }
+                if (folderTags.isEmpty()) continue
+                val bgRec = bgRepo.findByFileName(bgFile) ?: continue
+                val merged = (bgRec.categories + folderTags).distinct()
+                if (merged.size != bgRec.categories.size) {
+                    bgRepo.setCategories(bgRec.id, merged)
+                    updatedBgFolders++
+                }
+            }
+        }
+
+        if (addedCategoryPaths > 0 || updatedThemesInApp > 0 || updatedBgBindings > 0 || updatedBgFolders > 0) {
             recordSyncLog(
                 direction = "tag_sync",
                 action = "tags_merged",
                 module = "themes",
-                name = "美化标签与背景绑定联动",
-                summary = "从 st-theme-companion 同步：新增分类 $addedCategoryPaths 个，更新标签 $updatedThemesInApp 项，背景绑定 $updatedBgBindings 项"
+                name = "美化标签与背景联动",
+                summary = "同步完成：新增分类 $addedCategoryPaths 个，美化标签 $updatedThemesInApp 项，背景绑定 $updatedBgBindings 项，背景文件夹 $updatedBgFolders 项"
             )
         }
 
@@ -447,14 +473,23 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
         for ((tName, bgFile) in bgRepo.getBindingsByThemeName(vaultRepo)) {
             vaultBgBindingsObj.put(tName, bgFile)
         }
+        val vaultBgFoldersObj = JSONObject()
+        for (bg in bgRepo.getAll()) {
+            val topLevel = bg.categories.filter { it.isNotBlank() && !it.contains('/') && it != "待整理" }
+            if (topLevel.isNotEmpty() && bg.fileName.isNotBlank()) {
+                vaultBgFoldersObj.put(bg.fileName, JSONArray(topLevel))
+            }
+        }
 
-        lastDiagLog = "标签联动完成：更新 $updatedThemesInApp 项标签，$updatedBgBindings 项背景绑定"
+        lastDiagLog = "标签联动完成：美化 $updatedThemesInApp · 绑定 $updatedBgBindings · 背景文件夹 $updatedBgFolders"
         return JSONObject().apply {
             put("ok", true)
             put("addedCategoryPaths", addedCategoryPaths)
             put("updatedThemesInApp", updatedThemesInApp)
             put("updatedBgBindings", updatedBgBindings)
+            put("updatedBgFolders", updatedBgFolders)
             put("backgroundBindings", vaultBgBindingsObj)
+            put("vaultBackgroundFolders", vaultBgFoldersObj)
             put("vaultTagPaths", JSONArray(allVaultPaths))
             put("vaultThemeTags", vaultThemeTagsObj)
         }

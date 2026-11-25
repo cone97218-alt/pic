@@ -2940,8 +2940,10 @@ class MainActivity : AppCompatActivity() {
                     val f = bgRepo.getFile(bg)
                     if (f.exists()) f.readBytes() else null
                 }
-                if (bytes != null) enqueueToTavernBridge("background", bg.name, bg.fileName, bytes)
-                else toast("找不到背景文件")
+                if (bytes != null) {
+                    val topTags = bg.categories.filter { it.isNotBlank() && !it.contains('/') && it != "待整理" }
+                    enqueueToTavernBridge("background", bg.name, bg.fileName, bytes, topTags)
+                } else toast("找不到背景文件")
             }
         })
         actions.add(SheetAction("重命名", "修改背景显示名称") {
@@ -3759,7 +3761,8 @@ class MainActivity : AppCompatActivity() {
                         val bg = bgRepo.getById(id) ?: continue
                         val f = bgRepo.getFile(bg)
                         if (f.exists()) {
-                            bridge.enqueueOutbox("background", bg.name, bg.fileName, f.readBytes())
+                            val topTags = bg.categories.filter { it.isNotBlank() && !it.contains('/') && it != "待整理" }
+                            bridge.enqueueOutbox("background", bg.name, bg.fileName, f.readBytes(), topTags)
                             cnt++
                         }
                     }

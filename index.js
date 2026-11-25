@@ -419,16 +419,110 @@
         return { tagPaths, themeTags, backgroundBindings };
     }
 
+    async function fetchStBackgroundFolders() {
+        try {
+            const headers = await getHeaders();
+            headers['Content-Type'] = 'application/json';
+            const r = await mainFetch('/api/backgrounds/folders', { method: 'POST', headers, body: '{}' });
+            if (!r.ok) return { folders: [], bgFoldersByFile: {} };
+            const data = await r.json();
+            const folders = asArray(data && data.folders);
+            const idToName = new Map();
+            for (const f of folders) {
+                if (f && f.id && f.name) idToName.set(String(f.id), String(f.name).trim());
+            }
+            const rawMap = asObject(data && data.imageFolderMap) || {};
+            const bgFoldersByFile = {};
+            for (const [file, fIds] of Object.entries(rawMap)) {
+                const names = asArray(fIds).map(id => idToName.get(String(id))).filter(Boolean);
+                if (file && names.length > 0) bgFoldersByFile[file] = names;
+            }
+            return { folders, bgFoldersByFile, imageFolderMap: rawMap };
+        } catch (_) {
+            return { folders: [], bgFoldersByFile: {}, imageFolderMap: {} };
+        }
+    }
+
+    async function applyBackgroundFoldersInSt(vaultBgFoldersObj) {
+        if (!vaultBgFoldersObj || typeof vaultBgFoldersObj !== 'object') return 0;
+        const entries = Object.entries(vaultBgFoldersObj);
+        if (entries.length === 0) return 0;
+        try {
+            const headers = await getHeaders();
+            headers['Content-Type'] = 'application/json';
+            const existingBgs = new Set((await fetchStBackgrounds()).map(x => String(x)));
+            const stateFolders = await fetchStBackgroundFolders();
+            const nameToId = new Map();
+            for (const f of stateFolders.folders) {
+                if (f && f.id && f.name) nameToId.set(String(f.name).trim(), String(f.id));
+            }
+            const curMap = stateFolders.imageFolderMap || {};
+            const assignByFolderId = new Map();
+
+            for (const [bgFile, rawTags] of entries) {
+                if (!bgFile || !existingBgs.has(bgFile)) continue;
+                // Plan B: only sync 1st-level tags (skip multi-level tags containing '/')
+                const topTags = asArray(rawTags)
+                    .map(t => String(t || '').trim())
+                    .filter(t => t && !t.includes('/'));
+                if (topTags.length === 0) continue;
+                const alreadyIds = new Set(asArray(curMap[bgFile]).map(String));
+                for (const tagName of topTags) {
+                    let fid = nameToId.get(tagName);
+                    if (!fid) {
+                        const cr = await mainFetch('/api/image-metadata/folders/create', {
+                            method: 'POST',
+                            headers,
+                            body: JSON.stringify({ name: tagName })
+                        });
+                        if (cr.ok) {
+                            const created = await cr.json().catch(() => null);
+                            if (created && created.id) {
+                                fid = String(created.id);
+                                nameToId.set(tagName, fid);
+                            }
+                        }
+                    }
+                    if (fid && !alreadyIds.has(fid)) {
+                        if (!assignByFolderId.has(fid)) assignByFolderId.set(fid, []);
+                        assignByFolderId.get(fid).push('backgrounds/' + bgFile);
+                        alreadyIds.add(fid);
+                    }
+                }
+            }
+
+            let assignedCount = 0;
+            for (const [fid, paths] of assignByFolderId.entries()) {
+                if (paths.length === 0) continue;
+                const ar = await mainFetch('/api/image-metadata/folders/assign', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ id: fid, paths })
+                });
+                if (ar.ok) assignedCount += paths.length;
+            }
+            return assignedCount;
+        } catch (_) {
+            return 0;
+        }
+    }
+
     async function syncThemeTagsBidirectional(silent) {
         if (!state.connected) return;
         try {
             const payload = extractCompanionTagPayload();
+            const bgFolderState = await fetchStBackgroundFolders();
+            payload.backgroundFolders = bgFolderState.bgFoldersByFile || {};
             const res = await callToolWithRetry('stvault_sync_theme_tags', payload);
             if (!res || !res.ok) return;
 
             const vaultPaths = asArray(res.vaultTagPaths);
             const vaultThemeTags = asObject(res.vaultThemeTags) || {};
             const vaultBgBindings = asObject(res.backgroundBindings) || {};
+            const vaultBgFolders = asObject(res.vaultBackgroundFolders) || {};
+
+            // Apply APP top-level background tags -> SillyTavern native background folders
+            const assignedFoldersInSt = await applyBackgroundFoldersInSt(vaultBgFolders);
 
             // Broadcast vault tags & background bindings to st-theme-companion
             try {
@@ -445,7 +539,8 @@
                 const uApp = res.updatedThemesInApp || 0;
                 const aCat = res.addedCategoryPaths || 0;
                 const uBg = res.updatedBgBindings || 0;
-                log('联动同步完成：标签更新 ' + uApp + ' 项（新分类 ' + aCat + '），背景绑定 ' + uBg + ' 项');
+                const uFld = res.updatedBgFolders || 0;
+                log('联动同步完成：美化标签 ' + uApp + '（新分类 ' + aCat + '），背景绑定 ' + uBg + '，背景文件夹 ' + (uFld + assignedFoldersInSt));
             }
         } catch (e) {
             if (!silent) log('标签同步失败：' + (e && e.message ? e.message : String(e)));
@@ -827,6 +922,11 @@
             form.append('avatar', new Blob([bytes], { type: mime }), fn);
             const r = await mainFetch('/api/backgrounds/upload', { method: 'POST', headers, body: form });
             if (!r.ok) throw new Error('上传背景图失败');
+            const savedName = (await r.text().catch(() => '')).trim() || fn;
+            const topTags = asArray(item.tags).map(t => String(t || '').trim()).filter(t => t && !t.includes('/'));
+            if (topTags.length > 0) {
+                await applyBackgroundFoldersInSt({ [savedName]: topTags });
+            }
         }
     }
 

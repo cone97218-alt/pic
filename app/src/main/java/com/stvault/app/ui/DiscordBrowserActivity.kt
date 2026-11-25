@@ -1416,9 +1416,17 @@ class DiscordBrowserActivity : AppCompatActivity() {
         }
     }
 
+    private fun dismissDiscordPopouts() {
+        try {
+            binding.webDiscord.evaluateJavascript(DISMISS_FORUM_SORT_MENU_JS, null)
+        } catch (_: Exception) {
+        }
+    }
+
     private fun cancelWatchSweep() {
         watchSweepJob?.cancel()
         watchSweepJob = null
+        dismissDiscordPopouts()
         binding.btnStopProgress.visibility = View.GONE
         setBusy(false)
         toast("已停止巡检")
@@ -1469,10 +1477,13 @@ class DiscordBrowserActivity : AppCompatActivity() {
                                     if (clickRes.contains("CLICKED")) {
                                         // Wait for Discord to re-fetch and re-render posts sorted by publish time
                                         delay(850L)
+                                        evaluateJsSuspend(DISMISS_FORUM_SORT_MENU_JS)
                                         val sortedObj = unwrapJsJsonObject(evaluateJsSuspend(CHANNEL_POSTS_SCAN_JS))
                                         val sortedParsed = sortedObj?.optJSONArray("posts")?.let { parseObservedPosts(it, ch) }.orEmpty()
                                         collected = if (sortedParsed.isNotEmpty()) sortedParsed else parsed
                                         break
+                                    } else {
+                                        evaluateJsSuspend(DISMISS_FORUM_SORT_MENU_JS)
                                     }
                                 }
                             }
@@ -1526,6 +1537,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 toast("巡检中断：${e.message?.take(40) ?: "请重试"}")
             } finally {
+                dismissDiscordPopouts()
                 binding.btnStopProgress.visibility = View.GONE
                 setBusy(false)
                 watchSweepJob = null
@@ -2249,6 +2261,37 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 }
                 document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
                 return 'NOT_FOUND';
+              } catch (e) {
+                return 'ERR';
+              }
+            })();
+        """.trimIndent()
+
+        /**
+         * Cleanly closes any lingering Discord sort dropdown / popout menu after sweeping.
+         */
+        private val DISMISS_FORUM_SORT_MENU_JS = """
+            (function() {
+              try {
+                var openMenu = document.querySelector('[role="menu"], div[class*="popout_"][role="dialog"], div[class*="layer_"] [role="menuitemradio"]');
+                if (!openMenu) {
+                  var expBtn = document.querySelector('button[class*="sortDropdown_"][aria-expanded="true"], [aria-label*="排序"][aria-expanded="true"], [aria-label*="Sort"][aria-expanded="true"]');
+                  if (expBtn) expBtn.click();
+                  return 'CLEAN';
+                }
+                var ev = new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true });
+                document.dispatchEvent(ev);
+                if (document.activeElement && document.activeElement.dispatchEvent) {
+                  document.activeElement.dispatchEvent(ev);
+                }
+                var exp = document.querySelector('button[class*="sortDropdown_"][aria-expanded="true"], [aria-label*="排序"][aria-expanded="true"], [aria-label*="Sort"][aria-expanded="true"]');
+                if (exp) exp.click();
+                var still = document.querySelector('[role="menu"], div[class*="popout_"][role="dialog"]');
+                if (still) {
+                  var safeArea = document.querySelector('section[class*="title_"], main');
+                  if (safeArea) safeArea.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                }
+                return 'DISMISSED';
               } catch (e) {
                 return 'ERR';
               }
