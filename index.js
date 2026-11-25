@@ -431,10 +431,11 @@
             const worldbooks = asArray(src.world_names).map(w => String(w || '').trim()).filter(Boolean);
             const presets = extractPresetNames(src);
             const characters = chars.map(c => c && (c.name || c.avatar)).filter(Boolean);
+            const backgrounds = await fetchStBackgrounds().catch(() => []);
 
-            await callTool('stvault_sync_inventory', { themes, characters, worldbooks, presets });
-            setStatus('已连接 · 美化 ' + themes.length + ' · 卡 ' + characters.length + ' · 书 ' + worldbooks.length + ' · 预设 ' + presets.length, 'stv-ok');
-            log('同步清单完成：美化 ' + themes.length + ' · 角色卡 ' + characters.length + ' · 世界书 ' + worldbooks.length + ' · 预设 ' + presets.length);
+            await callTool('stvault_sync_inventory', { themes, characters, worldbooks, presets, backgrounds });
+            setStatus('已连接 · 美化 ' + themes.length + ' · 卡 ' + characters.length + ' · 书 ' + worldbooks.length + ' · 预设 ' + presets.length + ' · 背景 ' + backgrounds.length, 'stv-ok');
+            log('同步清单完成：美化 ' + themes.length + ' · 角色卡 ' + characters.length + ' · 世界书 ' + worldbooks.length + ' · 预设 ' + presets.length + ' · 背景 ' + backgrounds.length);
         } catch (e) {
             log('同步清单失败：' + (e && e.message ? e.message : String(e)));
         }

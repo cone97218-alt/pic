@@ -130,6 +130,61 @@
             android:layout_width="32dp"
             android:layout_height="32dp"
             android:layout_gravity="center" />
+
+        <!-- Draggable Translucent Mini Background Pill (zero top-bar crowding) -->
+        <LinearLayout
+            android:id="@+id/boxPreviewBgFab"
+            android:layout_width="wrap_content"
+            android:layout_height="34dp"
+            android:layout_gravity="bottom|end"
+            android:layout_marginEnd="14dp"
+            android:layout_marginBottom="18dp"
+            android:alpha="0.88"
+            android:background="@drawable/bg_dock_item_active"
+            android:elevation="6dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="2dp">
+
+            <TextView
+                android:id="@+id/btnPreviewBgPrev"
+                android:layout_width="26dp"
+                android:layout_height="match_parent"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="‹"
+                android:textColor="@color/on_accent"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/btnPreviewBgSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingHorizontal="11dp"
+                android:text="背景"
+                android:textColor="@color/on_accent"
+                android:textSize="11.5sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btnPreviewBgNext"
+                android:layout_width="26dp"
+                android:layout_height="match_parent"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="›"
+                android:textColor="@color/on_accent"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
+        </LinearLayout>
     </FrameLayout>
 
 </LinearLayout>

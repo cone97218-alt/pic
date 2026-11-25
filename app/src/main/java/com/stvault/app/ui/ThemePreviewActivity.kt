@@ -48,6 +48,9 @@ class ThemePreviewActivity : AppCompatActivity() {
     private var currentFileName: String = ""
     private var siblingVariants: List<com.stvault.app.model.SourceRecord> = emptyList()
     private var pickingAvatarType: String = "ai" // "ai" | "user"
+    private val bgRepo by lazy { com.stvault.app.core.BackgroundRepository.getInstance(this) }
+    // null = use theme default bound bg; "" = temporarily no bg; non-empty = specific bgId
+    private var activePreviewBgId: String? = null
 
     private val prefs by lazy { getSharedPreferences("st_preview_prefs", Context.MODE_PRIVATE) }
     private val aiAvatarFile by lazy { File(filesDir, "preview_ai_avatar.img") }
@@ -106,6 +109,9 @@ class ThemePreviewActivity : AppCompatActivity() {
         binding.tvPreviewTitle.setOnClickListener {
             if (siblingVariants.size > 1) showVariantPickerSheet()
         }
+        setupDraggableBgFab()
+        binding.btnPreviewBgPrev.setOnClickListener { cyclePreviewBackground(-1) }
+        binding.btnPreviewBgNext.setOnClickListener { cyclePreviewBackground(1) }
 
         val web = binding.webPreview
         // Horizontal swipe gesture to switch between series variants (does not interfere with vertical scroll or edge-back)
@@ -163,10 +169,15 @@ class ThemePreviewActivity : AppCompatActivity() {
             ): WebResourceResponse? {
                 val url = request?.url?.toString() ?: return null
 
-                // 1. Custom local preview avatars & bound theme background (with exact detected MIME type)
+                // 1. Custom local preview avatars & bound/trial theme background (with exact detected MIME type)
                 if (url.startsWith("${ST_LOCAL_ORIGIN}__preview__/bound_bg")) {
-                    val bgRepo = com.stvault.app.core.BackgroundRepository.getInstance(this@ThemePreviewActivity)
-                    val bgRec = bgRepo.getBoundBackground(currentSourceId)
+                    val reqId = request?.url?.getQueryParameter("id")?.trim().orEmpty()
+                    val resolvedId = when {
+                        reqId.isNotEmpty() -> reqId
+                        activePreviewBgId != null -> activePreviewBgId.orEmpty()
+                        else -> bgRepo.getBoundBgId(currentSourceId)
+                    }
+                    val bgRec = if (resolvedId.isNotEmpty()) bgRepo.getById(resolvedId) else null
                     val bgFile = bgRec?.let { bgRepo.getFile(it) }
                     if (bgFile != null && bgFile.exists()) {
                         return try {
@@ -177,6 +188,7 @@ class ThemePreviewActivity : AppCompatActivity() {
                             null
                         }
                     }
+                    return WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
                 }
                 if (url.startsWith("${ST_LOCAL_ORIGIN}__preview__/ai_avatar") && aiAvatarFile.exists()) {
                     return try {
@@ -254,6 +266,8 @@ class ThemePreviewActivity : AppCompatActivity() {
 
     private fun loadThemeById(sourceId: String) {
         currentSourceId = sourceId
+        activePreviewBgId = null
+        refreshPreviewBgPill()
         binding.pbPreviewLoading.visibility = View.VISIBLE
         lifecycleScope.launch {
             try {
@@ -397,6 +411,194 @@ class ThemePreviewActivity : AppCompatActivity() {
                 binding.webPreview.loadDataWithBaseURL(ST_LOCAL_ORIGIN, html, "text/html", "UTF-8", null)
             }
         }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupDraggableBgFab() {
+        val dock = binding.boxPreviewBgFab
+        val touchSlop = 8f * resources.displayMetrics.density
+        var downRawX = 0f
+        var downRawY = 0f
+        var startX = 0f
+        var startY = 0f
+        var isDragging = false
+
+        binding.btnPreviewBgSwitch.setOnTouchListener { _, event ->
+            val parent = dock.parent as? View ?: return@setOnTouchListener false
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downRawX = event.rawX
+                    downRawY = event.rawY
+                    startX = dock.x
+                    startY = dock.y
+                    isDragging = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - downRawX
+                    val dy = event.rawY - downRawY
+                    if (!isDragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
+                        isDragging = true
+                    }
+                    if (isDragging) {
+                        val maxX = (parent.width - dock.width).coerceAtLeast(0).toFloat()
+                        val maxY = (parent.height - dock.height).coerceAtLeast(0).toFloat()
+                        dock.x = (startX + dx).coerceIn(0f, maxX)
+                        dock.y = (startY + dy).coerceIn(0f, maxY)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (!isDragging) showPreviewBgSwitcherSheet()
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    isDragging = false
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    private fun currentEffectiveBgId(): String {
+        return activePreviewBgId ?: bgRepo.getBoundBgId(currentSourceId)
+    }
+
+    private fun refreshPreviewBgPill() {
+        val allBgs = bgRepo.getAll()
+        if (allBgs.isEmpty()) {
+            binding.boxPreviewBgFab.visibility = View.GONE
+            return
+        }
+        binding.boxPreviewBgFab.visibility = View.VISIBLE
+        val boundIds = bgRepo.getBoundBgIds(currentSourceId)
+        val effId = currentEffectiveBgId()
+        val isTrial = effId.isNotEmpty() && effId !in boundIds
+        val canCycle = if (boundIds.size >= 2) true else allBgs.size >= 2
+        binding.btnPreviewBgPrev.visibility = if (canCycle) View.VISIBLE else View.GONE
+        binding.btnPreviewBgNext.visibility = if (canCycle) View.VISIBLE else View.GONE
+        binding.btnPreviewBgSwitch.text = when {
+            isTrial -> "背景·试搭"
+            boundIds.size > 1 -> {
+                val idx = boundIds.indexOf(effId)
+                if (idx >= 0) "背景 ${idx + 1}/${boundIds.size}" else "背景"
+            }
+            else -> "背景"
+        }
+    }
+
+    private fun applyLiveBackground(bgId: String?) {
+        activePreviewBgId = bgId
+        val eff = currentEffectiveBgId()
+        val url = if (eff.isNotEmpty()) {
+            "${ST_LOCAL_ORIGIN}__preview__/bound_bg?id=$eff&t=${System.currentTimeMillis()}"
+        } else {
+            ""
+        }
+        val escaped = org.json.JSONObject.quote(url)
+        val js = """
+            (function(u) {
+              var el = document.getElementById('bg1');
+              if (!el) return;
+              if (u) {
+                el.style.setProperty('background-image', 'url("' + u + '")', 'important');
+                el.style.setProperty('background-size', 'cover', 'important');
+                el.style.setProperty('background-position', 'center', 'important');
+                el.style.setProperty('background-repeat', 'no-repeat', 'important');
+              } else {
+                el.style.removeProperty('background-image');
+              }
+            })($escaped);
+        """.trimIndent()
+        binding.webPreview.evaluateJavascript(js, null)
+        refreshPreviewBgPill()
+    }
+
+    private fun cyclePreviewBackground(delta: Int) {
+        val bound = bgRepo.getBoundBackgrounds(currentSourceId)
+        val pool = if (bound.size >= 2) bound else bgRepo.getAll()
+        if (pool.size < 2) return
+        val curId = currentEffectiveBgId()
+        val curIdx = pool.indexOfFirst { it.id == curId }
+        val nextIdx = if (curIdx < 0) 0 else (curIdx + delta + pool.size) % pool.size
+        val nextBg = pool[nextIdx]
+        applyLiveBackground(nextBg.id)
+        toast("预览背景：${nextBg.name}")
+    }
+
+    private fun showPreviewBgSwitcherSheet() {
+        val allBgs = bgRepo.getAll()
+        if (allBgs.isEmpty()) {
+            toast("背景库暂无图片")
+            return
+        }
+        val boundBgs = bgRepo.getBoundBackgrounds(currentSourceId)
+        val boundIds = boundBgs.map { it.id }.toSet()
+        val effId = currentEffectiveBgId()
+        val effBg = if (effId.isNotEmpty()) bgRepo.getById(effId) else null
+        val isTrial = effBg != null && effBg.id !in boundIds
+
+        val actions = mutableListOf<SheetAction>()
+        if (isTrial && effBg != null) {
+            actions.add(SheetAction("绑定当前试搭背景「${effBg.name}」", "追加到此美化的绑定列表") {
+                bgRepo.addThemeBinding(currentSourceId, effBg.id, makeDefault = boundBgs.isEmpty())
+                toast("已绑定背景：${effBg.name}")
+                refreshPreviewBgPill()
+            })
+            if (boundBgs.isNotEmpty()) {
+                actions.add(SheetAction("绑定并设为默认背景", "下次打开预览优先显示这张") {
+                    bgRepo.addThemeBinding(currentSourceId, effBg.id, makeDefault = true)
+                    toast("已将「${effBg.name}」设为默认背景")
+                    refreshPreviewBgPill()
+                })
+            }
+        }
+
+        boundBgs.forEachIndexed { idx, bg ->
+            val isCurrent = bg.id == effId
+            val sub = when {
+                idx == 0 && isCurrent -> "默认背景 · 正在预览"
+                idx == 0 -> "默认背景 · 点击切换预览"
+                isCurrent -> "已绑 #${idx + 1} · 正在预览（点击设为默认）"
+                else -> "已绑 #${idx + 1} · 点击切换预览"
+            }
+            actions.add(SheetAction(bg.name, sub, checked = isCurrent) {
+                if (isCurrent && idx > 0) {
+                    bgRepo.setDefaultThemeBinding(currentSourceId, bg.id)
+                    toast("已将「${bg.name}」设为默认背景")
+                    refreshPreviewBgPill()
+                } else {
+                    applyLiveBackground(bg.id)
+                }
+            })
+        }
+
+        actions.add(SheetAction("从背景库换图试搭 (${allBgs.size})", "点击即刻生效，满意后再绑定") {
+            val items = allBgs.map { bg ->
+                val tag = if (bg.id in boundIds) "已绑 · ${bg.fileName}" else bg.fileName
+                PickerItem(bg.id, bg.name, tag)
+            }
+            VaultSheets.searchablePicker(
+                ctx = this,
+                title = "选择背景试搭",
+                items = items,
+                selectedId = effId,
+                searchHint = "搜索背景名称..."
+            ) { picked ->
+                applyLiveBackground(picked.id)
+                toast("正在试搭：${picked.title}")
+            }
+        })
+
+        if (effId.isNotEmpty()) {
+            actions.add(SheetAction("暂时隐藏背景", "仅本次预览隐藏，不解除绑定") {
+                applyLiveBackground("")
+            })
+        }
+
+        val sheetTitle = if (effBg != null) "换背景 · ${effBg.name}" else "换背景试搭"
+        VaultSheets.actionList(ctx = this, title = sheetTitle, actions = actions)
     }
 
     private fun showPreviewSettingsDialog() {
@@ -593,9 +795,10 @@ class ThemePreviewActivity : AppCompatActivity() {
         val bodyClassAttr = bodyClasses.joinToString(" ")
 
         val stamp = System.currentTimeMillis()
-        val hasBoundBg = com.stvault.app.core.BackgroundRepository.getInstance(this).getBoundBackground(currentSourceId) != null
+        val resolvedBgId = activePreviewBgId ?: bgRepo.getBoundBgId(currentSourceId)
+        val hasBoundBg = resolvedBgId.isNotEmpty() && bgRepo.getById(resolvedBgId) != null
         val boundBgCss = if (hasBoundBg) {
-            """#bg1 { background-image: url("__preview__/bound_bg?t=$stamp") !important; background-size: cover !important; background-position: center !important; background-repeat: no-repeat !important; }"""
+            """#bg1 { background-image: url("__preview__/bound_bg?id=$resolvedBgId&t=$stamp") !important; background-size: cover !important; background-position: center !important; background-repeat: no-repeat !important; }"""
         } else ""
         val botAvatar = if (aiAvatarFile.exists()) {
             "__preview__/ai_avatar?t=$stamp"

@@ -192,6 +192,7 @@ class CategoryManager private constructor(context: Context) {
         const val SCOPE_THEMES = "themes"
         const val SCOPE_CHARACTERS = "characters"
         const val SCOPE_WORLDBOOKS = "worldbooks"
+        const val SCOPE_BACKGROUNDS = "backgrounds"
 
         @Volatile
         private var INSTANCE: CategoryManager? = null

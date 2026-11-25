@@ -15,12 +15,14 @@ data class BackgroundRecord(
     val imageFile: String,
     val fileSize: Long = 0L,
     val contentHash: String = "",
-    val addedAt: Long = System.currentTimeMillis()
+    val addedAt: Long = System.currentTimeMillis(),
+    val categories: List<String> = emptyList()
 )
 
 /**
  * Lightweight, deduplicated repository for Theme Background Images and Theme<->Background bindings.
- * Stored under <vaultRoot>/backgrounds/ with a separate theme_bg_bindings.json mapping.
+ * Supports 1 theme bound to multiple backgrounds (first bound background = default),
+ * custom categories, and backward-compatible JSON persistence.
  */
 class BackgroundRepository private constructor(private val appContext: Context) {
 
@@ -30,7 +32,8 @@ class BackgroundRepository private constructor(private val appContext: Context) 
     private val bindingsFile = File(rootDir, "theme_bg_bindings.json")
 
     private val bgMap = LinkedHashMap<String, BackgroundRecord>()
-    private val themeBindings = LinkedHashMap<String, String>() // sourceId -> bgId
+    // sourceId -> ordered list of bgIds (first = default preview background)
+    private val themeBindings = LinkedHashMap<String, MutableList<String>>()
 
     init {
         rootDir.mkdirs()
@@ -48,6 +51,14 @@ class BackgroundRepository private constructor(private val appContext: Context) 
                         val o = arr.optJSONObject(i) ?: continue
                         val id = o.optString("id", "")
                         if (id.isEmpty()) continue
+                        val catsArr = o.optJSONArray("categories")
+                        val cats = mutableListOf<String>()
+                        if (catsArr != null) {
+                            for (j in 0 until catsArr.length()) {
+                                val c = catsArr.optString(j, "").trim()
+                                if (c.isNotEmpty() && c !in cats) cats.add(c)
+                            }
+                        }
                         bgMap[id] = BackgroundRecord(
                             id = id,
                             name = o.optString("name", "背景图"),
@@ -55,7 +66,8 @@ class BackgroundRepository private constructor(private val appContext: Context) 
                             imageFile = o.optString("imageFile", ""),
                             fileSize = o.optLong("fileSize", 0L),
                             contentHash = o.optString("contentHash", ""),
-                            addedAt = o.optLong("addedAt", 0L)
+                            addedAt = o.optLong("addedAt", 0L),
+                            categories = cats
                         )
                     }
                 } catch (_: Exception) {
@@ -67,9 +79,25 @@ class BackgroundRepository private constructor(private val appContext: Context) 
                     val it = obj.keys()
                     while (it.hasNext()) {
                         val k = it.next()
-                        val v = obj.optString(k, "")
-                        if (k.isNotEmpty() && v.isNotEmpty() && v in bgMap) {
-                            themeBindings[k] = v
+                        if (k.isEmpty()) continue
+                        val rawVal = obj.opt(k)
+                        val validIds = mutableListOf<String>()
+                        when (rawVal) {
+                            is JSONArray -> {
+                                for (i in 0 until rawVal.length()) {
+                                    val bid = rawVal.optString(i, "").trim()
+                                    if (bid.isNotEmpty() && bid in bgMap && bid !in validIds) {
+                                        validIds.add(bid)
+                                    }
+                                }
+                            }
+                            is String -> {
+                                val bid = rawVal.trim()
+                                if (bid.isNotEmpty() && bid in bgMap) validIds.add(bid)
+                            }
+                        }
+                        if (validIds.isNotEmpty()) {
+                            themeBindings[k] = validIds
                         }
                     }
                 } catch (_: Exception) {
@@ -90,6 +118,9 @@ class BackgroundRepository private constructor(private val appContext: Context) 
                     put("fileSize", b.fileSize)
                     put("contentHash", b.contentHash)
                     put("addedAt", b.addedAt)
+                    if (b.categories.isNotEmpty()) {
+                        put("categories", JSONArray(b.categories))
+                    }
                 })
             }
             arr.toString()
@@ -106,7 +137,9 @@ class BackgroundRepository private constructor(private val appContext: Context) 
     private fun saveBindings() {
         val json = synchronized(lock) {
             val obj = JSONObject()
-            for ((k, v) in themeBindings) obj.put(k, v)
+            for ((k, v) in themeBindings) {
+                if (v.isNotEmpty()) obj.put(k, JSONArray(v))
+            }
             obj.toString()
         }
         try {
@@ -120,11 +153,23 @@ class BackgroundRepository private constructor(private val appContext: Context) 
 
     fun getFile(rec: BackgroundRecord): File = File(rootDir, rec.imageFile)
 
-    fun getAll(query: String = ""): List<BackgroundRecord> {
+    fun getAll(
+        query: String = "",
+        categoryFilter: String = "",
+        catMgr: CategoryManager? = null
+    ): List<BackgroundRecord> {
         val q = query.trim().lowercase()
         return synchronized(lock) {
             bgMap.values
-                .filter { q.isEmpty() || it.name.lowercase().contains(q) || it.fileName.lowercase().contains(q) }
+                .filter { rec ->
+                    val matchQ = q.isEmpty() ||
+                        rec.name.lowercase().contains(q) ||
+                        rec.fileName.lowercase().contains(q) ||
+                        rec.categories.any { it.lowercase().contains(q) }
+                    val matchCat = if (categoryFilter.isBlank() || catMgr == null) true
+                    else catMgr.matchesFilter(rec.categories, categoryFilter)
+                    matchQ && matchCat
+                }
                 .sortedByDescending { it.addedAt }
         }
     }
@@ -203,11 +248,65 @@ class BackgroundRepository private constructor(private val appContext: Context) 
         return true
     }
 
+    fun setCategories(id: String, categories: List<String>) {
+        val clean = categories.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        synchronized(lock) {
+            val cur = bgMap[id] ?: return
+            bgMap[id] = cur.copy(categories = clean)
+        }
+        saveIndex()
+    }
+
+    fun renameCategoryPrefix(oldPrefix: String, newPrefix: String): Int {
+        if (oldPrefix.isBlank() || newPrefix.isBlank() || oldPrefix == newPrefix) return 0
+        var migrated = 0
+        synchronized(lock) {
+            for ((id, rec) in bgMap.entries.toList()) {
+                if (rec.categories.isEmpty()) continue
+                val updated = rec.categories.map { cat ->
+                    when {
+                        cat == oldPrefix -> newPrefix
+                        cat.startsWith("$oldPrefix/") -> newPrefix + cat.removePrefix(oldPrefix)
+                        else -> cat
+                    }
+                }.distinct()
+                if (updated != rec.categories) {
+                    bgMap[id] = rec.copy(categories = updated)
+                    migrated++
+                }
+            }
+        }
+        if (migrated > 0) saveIndex()
+        return migrated
+    }
+
+    fun removeCategoryPrefix(prefix: String): Int {
+        if (prefix.isBlank()) return 0
+        var cleaned = 0
+        synchronized(lock) {
+            for ((id, rec) in bgMap.entries.toList()) {
+                if (rec.categories.isEmpty()) continue
+                val updated = rec.categories.filterNot { it == prefix || it.startsWith("$prefix/") }
+                if (updated.size != rec.categories.size) {
+                    bgMap[id] = rec.copy(categories = updated)
+                    cleaned++
+                }
+            }
+        }
+        if (cleaned > 0) saveIndex()
+        return cleaned
+    }
+
     fun delete(id: String): Boolean {
         val removed = synchronized(lock) {
             val r = bgMap.remove(id)
             if (r != null) {
-                themeBindings.entries.removeAll { it.value == id }
+                val iter = themeBindings.entries.iterator()
+                while (iter.hasNext()) {
+                    val entry = iter.next()
+                    entry.value.removeAll { it == id }
+                    if (entry.value.isEmpty()) iter.remove()
+                }
             }
             r
         } ?: return false
@@ -217,38 +316,94 @@ class BackgroundRepository private constructor(private val appContext: Context) 
         return true
     }
 
-    fun bindTheme(sourceId: String, bgId: String) {
+    /** Replaces all bound backgrounds for a theme (first item = default preview background). */
+    fun setThemeBindings(sourceId: String, bgIds: List<String>) {
         if (sourceId.isBlank()) return
         synchronized(lock) {
-            if (bgId.isBlank() || bgId !in bgMap) {
+            val valid = bgIds.filter { it.isNotBlank() && it in bgMap }.distinct().toMutableList()
+            if (valid.isEmpty()) {
                 themeBindings.remove(sourceId)
             } else {
-                themeBindings[sourceId] = bgId
+                themeBindings[sourceId] = valid
             }
         }
         saveBindings()
     }
 
-    fun getBoundBgId(sourceId: String): String = synchronized(lock) { themeBindings[sourceId].orEmpty() }
+    /** Adds a background to a theme's bound list (optionally making it the default first item). */
+    fun addThemeBinding(sourceId: String, bgId: String, makeDefault: Boolean = false) {
+        if (sourceId.isBlank() || bgId.isBlank()) return
+        synchronized(lock) {
+            if (bgId !in bgMap) return
+            val list = themeBindings.getOrPut(sourceId) { mutableListOf() }
+            if (makeDefault) {
+                list.remove(bgId)
+                list.add(0, bgId)
+            } else if (bgId !in list) {
+                list.add(bgId)
+            }
+        }
+        saveBindings()
+    }
+
+    fun removeThemeBinding(sourceId: String, bgId: String) {
+        if (sourceId.isBlank() || bgId.isBlank()) return
+        synchronized(lock) {
+            val list = themeBindings[sourceId] ?: return
+            list.remove(bgId)
+            if (list.isEmpty()) themeBindings.remove(sourceId)
+        }
+        saveBindings()
+    }
+
+    fun setDefaultThemeBinding(sourceId: String, bgId: String) {
+        addThemeBinding(sourceId, bgId, makeDefault = true)
+    }
+
+    /** Legacy single-bind helper: blank clears all; non-blank adds (preserving existing, first = default). */
+    fun bindTheme(sourceId: String, bgId: String) {
+        if (sourceId.isBlank()) return
+        if (bgId.isBlank()) {
+            setThemeBindings(sourceId, emptyList())
+        } else {
+            addThemeBinding(sourceId, bgId, makeDefault = false)
+        }
+    }
+
+    fun getBoundBgIds(sourceId: String): List<String> = synchronized(lock) {
+        themeBindings[sourceId]?.toList() ?: emptyList()
+    }
+
+    fun getBoundBgId(sourceId: String): String = synchronized(lock) {
+        themeBindings[sourceId]?.firstOrNull().orEmpty()
+    }
+
+    fun getBoundBackgrounds(sourceId: String): List<BackgroundRecord> = synchronized(lock) {
+        themeBindings[sourceId]?.mapNotNull { bgMap[it] } ?: emptyList()
+    }
 
     fun getBoundBackground(sourceId: String): BackgroundRecord? = synchronized(lock) {
-        themeBindings[sourceId]?.let { bgMap[it] }
+        themeBindings[sourceId]?.firstOrNull()?.let { bgMap[it] }
+    }
+
+    fun getThemesBoundTo(bgId: String): List<String> = synchronized(lock) {
+        themeBindings.entries.filter { bgId in it.value }.map { it.key }
     }
 
     fun countThemesBoundTo(bgId: String): Int = synchronized(lock) {
-        themeBindings.values.count { it == bgId }
+        themeBindings.values.count { bgId in it }
     }
 
-    /** Returns { themeName -> bgFileName } for syncing with st-theme-companion. */
+    /** Returns { themeName -> defaultBgFileName } for syncing with st-theme-companion. */
     fun getBindingsByThemeName(vaultRepo: VaultRepository): Map<String, String> {
         val sources = vaultRepo.getAllSources().associateBy { it.id }
         val out = LinkedHashMap<String, String>()
         synchronized(lock) {
-            for ((sid, bid) in themeBindings) {
+            for ((sid, bids) in themeBindings) {
                 val src = sources[sid] ?: continue
-                val bg = bgMap[bid] ?: continue
-                if (src.name.isNotBlank() && bg.fileName.isNotBlank()) {
-                    out[src.name] = bg.fileName
+                val firstBg = bids.firstOrNull()?.let { bgMap[it] } ?: continue
+                if (src.name.isNotBlank() && firstBg.fileName.isNotBlank()) {
+                    out[src.name] = firstBg.fileName
                 }
             }
         }
@@ -264,8 +419,9 @@ class BackgroundRepository private constructor(private val appContext: Context) 
             val src = sourcesByName[tName.trim().lowercase()] ?: continue
             val bg = findByFileName(bgFile) ?: continue
             synchronized(lock) {
-                if (themeBindings[src.id] != bg.id) {
-                    themeBindings[src.id] = bg.id
+                val list = themeBindings.getOrPut(src.id) { mutableListOf() }
+                if (bg.id !in list) {
+                    list.add(0, bg.id)
                     updated++
                 }
             }

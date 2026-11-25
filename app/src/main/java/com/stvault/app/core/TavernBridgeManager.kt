@@ -79,6 +79,7 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
     private val installedChars = HashSet<String>()
     private val installedWbs = HashSet<String>()
     private val installedPresets = HashSet<String>()
+    private val installedBgs = HashSet<String>()
 
     private val outboxMap = LinkedHashMap<String, BridgeOutboxItem>()
     private val conflictsMap = LinkedHashMap<String, BridgePullConflict>()
@@ -158,7 +159,7 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
     private fun normKey(raw: String): String {
         return raw.trim()
             .substringAfterLast('/')
-            .replace(Regex("\\.(json|png|css|html|htm|txt|js)$", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("\\.(json|png|jpg|jpeg|webp|gif|css|html|htm|txt|js)$", RegexOption.IGNORE_CASE), "")
             .trim()
             .lowercase()
     }
@@ -181,6 +182,11 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
     fun isPresetInstalled(name: String, fileName: String = ""): Boolean = synchronized(lock) {
         if (installedPresets.isEmpty()) return false
         normKey(name) in installedPresets || (fileName.isNotEmpty() && normKey(fileName) in installedPresets)
+    }
+
+    fun isBackgroundInstalled(name: String, fileName: String = ""): Boolean = synchronized(lock) {
+        if (installedBgs.isEmpty()) return false
+        normKey(name) in installedBgs || (fileName.isNotEmpty() && normKey(fileName) in installedBgs)
     }
 
     // ==================== OUTBOX (酒馆匣 -> 酒馆) ====================
@@ -621,6 +627,7 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                             "character" -> nk in installedChars
                             "worldbook" -> nk in installedWbs
                             "preset" -> nk in installedPresets
+                            "background" -> nk in installedBgs || normKey(item.fileName) in installedBgs
                             else -> false
                         }
                         when (item.kind) {
@@ -628,6 +635,10 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                             "character" -> installedChars.add(nk)
                             "worldbook" -> installedWbs.add(nk)
                             "preset" -> installedPresets.add(nk)
+                            "background" -> {
+                                installedBgs.add(nk)
+                                if (item.fileName.isNotBlank()) installedBgs.add(normKey(item.fileName))
+                            }
                             else -> Unit
                         }
                         had
@@ -1161,6 +1172,7 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
             readSet("characters", installedChars)
             readSet("worldbooks", installedWbs)
             readSet("presets", installedPresets)
+            readSet("backgrounds", installedBgs)
         }
         saveInventory()
     }
@@ -1181,6 +1193,7 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                 put("characters", JSONArray(installedChars.toList()))
                 put("worldbooks", JSONArray(installedWbs.toList()))
                 put("presets", JSONArray(installedPresets.toList()))
+                put("backgrounds", JSONArray(installedBgs.toList()))
             }.toString()
         }
         try {

@@ -28,14 +28,14 @@ object LinkedComponentPushHelper {
     ) {
         if (hostId.isBlank() || hostType !in setOf("theme", "character", "worldbook", "preset")) return
         activity.lifecycleScope.launch {
-            val (linked, boundBg) = withContext(Dispatchers.IO) {
+            val (linked, boundBgs) = withContext(Dispatchers.IO) {
                 val comps = libRepo.getComponentsLinkedTo(hostType, hostId)
-                val bg = if (hostType == "theme") {
-                    com.stvault.app.core.BackgroundRepository.getInstance(activity).getBoundBackground(hostId)
-                } else null
-                comps to bg
+                val bgs = if (hostType == "theme") {
+                    com.stvault.app.core.BackgroundRepository.getInstance(activity).getBoundBackgrounds(hostId)
+                } else emptyList()
+                comps to bgs
             }
-            if ((linked.isEmpty() && boundBg == null) || activity.isFinishing || activity.isDestroyed) return@launch
+            if ((linked.isEmpty() && boundBgs.isEmpty()) || activity.isFinishing || activity.isDestroyed) return@launch
 
             val pushable = linked.filter { it.type == "regex" || it.type == "qr" }
             val helpers = linked.filter { it.type == "helper" }
@@ -51,12 +51,14 @@ object LinkedComponentPushHelper {
                 )
             }
 
-            if (pushable.isNotEmpty() || boundBg != null) {
+            if (pushable.isNotEmpty() || boundBgs.isNotEmpty()) {
                 val items = mutableListOf<PickerItem>()
                 val preselected = HashSet<String>()
-                if (boundBg != null) {
-                    items.add(PickerItem("__BOUND_BG__", boundBg.name, "绑定背景图 · 一并装入酒馆"))
-                    preselected.add("__BOUND_BG__")
+                boundBgs.forEachIndexed { idx, bg ->
+                    val pid = "__BOUND_BG__${bg.id}"
+                    val sub = if (idx == 0) "默认绑定背景 · 一并装入酒馆" else "绑定背景 #${idx + 1} · 一并装入酒馆"
+                    items.add(PickerItem(pid, bg.name, sub))
+                    preselected.add(pid)
                 }
                 for (c in pushable) {
                     items.add(
@@ -69,7 +71,7 @@ object LinkedComponentPushHelper {
                     preselected.add(c.id)
                 }
                 val title = when {
-                    boundBg != null && pushable.isEmpty() -> "一并推送绑定背景"
+                    boundBgs.isNotEmpty() && pushable.isEmpty() -> "一并推送绑定背景 (${boundBgs.size})"
                     helpers.isNotEmpty() -> "一并推送关联项（另有 ${helpers.size} 个助手脚本）"
                     else -> "一并推送关联项"
                 }
@@ -81,18 +83,20 @@ object LinkedComponentPushHelper {
                     primaryConfirmText = "一并装入",
                     searchHint = "搜索..."
                 ) { selectedIds ->
-                    val pushBg = boundBg != null && "__BOUND_BG__" in selectedIds
+                    val chosenBgs = boundBgs.filter { "__BOUND_BG__${it.id}" in selectedIds }
                     val chosen = pushable.filter { it.id in selectedIds }
-                    if (chosen.isNotEmpty() || pushBg) {
+                    if (chosen.isNotEmpty() || chosenBgs.isNotEmpty()) {
                         activity.lifecycleScope.launch {
                             var count = 0
                             withContext(Dispatchers.IO) {
-                                if (pushBg && boundBg != null) {
+                                if (chosenBgs.isNotEmpty()) {
                                     val bgRepo = com.stvault.app.core.BackgroundRepository.getInstance(activity)
-                                    val bf = bgRepo.getFile(boundBg)
-                                    if (bf.exists()) {
-                                        bridge.enqueueOutbox("background", boundBg.name, boundBg.fileName, bf.readBytes())
-                                        count++
+                                    for (bg in chosenBgs) {
+                                        val bf = bgRepo.getFile(bg)
+                                        if (bf.exists()) {
+                                            bridge.enqueueOutbox("background", bg.name, bg.fileName, bf.readBytes())
+                                            count++
+                                        }
                                     }
                                 }
                                 for (c in chosen) {

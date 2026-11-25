@@ -83,6 +83,7 @@ class MainActivity : AppCompatActivity() {
     private var activeWbFilter = "all"
     private var activeCompFilter = "all"
     private var activeThemeCategory = ""
+    private var activeBgCategory = ""
     private var activeCharCategory = ""
     private var activeWbCategory = ""
     private var activeThemeTab = "cache"
@@ -96,6 +97,7 @@ class MainActivity : AppCompatActivity() {
     private var vaultSearchModeSources = true
     private var vaultModeBgs = false
     private var activeSourceFilter = "all"
+    private var activeBgFilter = "all"
     private var activeUrlFilter = "all"
     private var activeThemeSort = "newest"
     private var activeCharSort = "newest"
@@ -515,8 +517,12 @@ class MainActivity : AppCompatActivity() {
         binding.rvVault.layoutManager = LinearLayoutManager(this)
         bgGridAdapter = BackgroundGridAdapter(
             bgRepo = bgRepo,
+            isInstalled = { bg ->
+                com.stvault.app.core.TavernBridgeManager.getInstance(this).isBackgroundInstalled(bg.name, bg.fileName)
+            },
             onClick = { bg -> showBgActionMenu(bg) },
-            onLongClick = { bg -> showBgActionMenu(bg) }
+            onLongClick = { bg -> showBgActionMenu(bg) },
+            onToggleSelect = { id -> toggleBatchSelection(id) }
         )
         binding.rvBackgrounds.layoutManager = androidx.recyclerview.widget.GridLayoutManager(this, 2)
         binding.rvBackgrounds.adapter = bgGridAdapter
@@ -1021,17 +1027,22 @@ class MainActivity : AppCompatActivity() {
         binding.divThemeSort.visibility = sortVis
         val group = binding.chipGroupFilter
         group.removeAllViews()
-        if (vaultModeBgs) return
-        val options = if (vaultSearchModeSources) {
-            listOf(
+        val options = when {
+            vaultModeBgs -> listOf(
+                "all" to "全部",
+                "bound" to "已绑定",
+                "unbound" to "未绑定",
+                "installed" to "已装",
+                "not_installed" to "未装"
+            )
+            vaultSearchModeSources -> listOf(
                 "all" to "全部",
                 "multi_version" to "多版本",
                 "installed" to "已装",
                 "not_installed" to "未装",
                 "incomplete" to "未下完"
             )
-        } else {
-            listOf(
+            else -> listOf(
                 "all" to "全部",
                 "ok" to "已缓存",
                 "fonts" to "字体",
@@ -1041,7 +1052,11 @@ class MainActivity : AppCompatActivity() {
                 "largest" to "大图优先"
             )
         }
-        val current = if (vaultSearchModeSources) activeSourceFilter else activeUrlFilter
+        val current = when {
+            vaultModeBgs -> activeBgFilter
+            vaultSearchModeSources -> activeSourceFilter
+            else -> activeUrlFilter
+        }
         val surface2 = ContextCompat.getColor(this, R.color.surface_2)
         val accent = ContextCompat.getColor(this, R.color.accent)
         val onAccent = ContextCompat.getColor(this, R.color.on_accent)
@@ -1074,7 +1089,11 @@ class MainActivity : AppCompatActivity() {
                 chipCornerRadius = 20f
                 textSize = 12f
                 setOnClickListener {
-                    if (vaultSearchModeSources) activeSourceFilter = key else activeUrlFilter = key
+                    when {
+                        vaultModeBgs -> activeBgFilter = key
+                        vaultSearchModeSources -> activeSourceFilter = key
+                        else -> activeUrlFilter = key
+                    }
                     refreshVaultList()
                 }
             }
@@ -1130,14 +1149,17 @@ class MainActivity : AppCompatActivity() {
         if (vaultModeBgs) {
             binding.btnImportInVault.visibility = View.VISIBLE
             binding.btnImportInVault.text = "+ 导入背景"
-            binding.btnThemeCatFilter.visibility = View.GONE
-            binding.btnThemeBatch.visibility = View.GONE
+            binding.btnThemeCatFilter.visibility = View.VISIBLE
+            binding.btnThemeCatFilter.text = if (activeBgCategory.isEmpty()) "分类 ▾" else "${activeBgCategory.substringAfterLast('/')} ▾"
+            binding.btnThemeBatch.visibility = View.VISIBLE
             if (batchMode) exitBatchMode()
         } else if (vaultSearchModeSources) {
             binding.btnImportInVault.visibility = View.VISIBLE
             binding.btnImportInVault.text = "+ 导入文件"
             binding.btnThemeCatFilter.visibility = View.VISIBLE
+            binding.btnThemeCatFilter.text = if (activeThemeCategory.isEmpty()) "分类 ▾" else "${activeThemeCategory.substringAfterLast('/')} ▾"
             binding.btnThemeBatch.visibility = View.VISIBLE
+            if (batchMode) exitBatchMode()
         } else {
             binding.btnImportInVault.visibility = View.GONE
             binding.btnThemeCatFilter.visibility = View.GONE
@@ -1196,10 +1218,18 @@ class MainActivity : AppCompatActivity() {
             }
         }
         binding.btnThemeCatFilter.setOnClickListener {
-            showCategoryFilterPicker(CategoryManager.SCOPE_THEMES, activeThemeCategory) { picked ->
-                activeThemeCategory = picked
-                binding.btnThemeCatFilter.text = if (picked.isEmpty()) "分类 ▾" else "${picked.substringAfterLast('/')} ▾"
-                refreshVaultList()
+            if (vaultModeBgs) {
+                showCategoryFilterPicker(CategoryManager.SCOPE_BACKGROUNDS, activeBgCategory) { picked ->
+                    activeBgCategory = picked
+                    binding.btnThemeCatFilter.text = if (picked.isEmpty()) "分类 ▾" else "${picked.substringAfterLast('/')} ▾"
+                    refreshVaultList()
+                }
+            } else {
+                showCategoryFilterPicker(CategoryManager.SCOPE_THEMES, activeThemeCategory) { picked ->
+                    activeThemeCategory = picked
+                    binding.btnThemeCatFilter.text = if (picked.isEmpty()) "分类 ▾" else "${picked.substringAfterLast('/')} ▾"
+                    refreshVaultList()
+                }
             }
         }
         bindDebouncedSearch(binding.etSearch) { refreshVaultList() }
@@ -1770,7 +1800,18 @@ class MainActivity : AppCompatActivity() {
         val q = binding.etSearch.text?.toString().orEmpty()
         lifecycleScope.launch {
             if (vaultModeBgs) {
-                val bgs = withContext(Dispatchers.IO) { bgRepo.getAll(q) }
+                val bgs = withContext(Dispatchers.IO) {
+                    val bridge = com.stvault.app.core.TavernBridgeManager.getInstance(this@MainActivity)
+                    bgRepo.getAll(q, activeBgCategory, catManager).filter { rec ->
+                        when (activeBgFilter) {
+                            "bound" -> bgRepo.countThemesBoundTo(rec.id) > 0
+                            "unbound" -> bgRepo.countThemesBoundTo(rec.id) == 0
+                            "installed" -> bridge.isBackgroundInstalled(rec.name, rec.fileName)
+                            "not_installed" -> !bridge.isBackgroundInstalled(rec.name, rec.fileName)
+                            else -> true
+                        }
+                    }
+                }
                 bgGridAdapter.submitList(bgs)
                 binding.tvVaultCount.text = "共 ${bgs.size} 张背景"
                 return@launch
@@ -2495,6 +2536,7 @@ class MainActivity : AppCompatActivity() {
                                 val migrated = when (scope) {
                                     CategoryManager.SCOPE_THEMES -> repo.renameSourceCategoryPrefix(picked.id, newPath)
                                     CategoryManager.SCOPE_WORLDBOOKS -> libRepo.renameWorldBookCategoryPrefix(picked.id, newPath)
+                                    CategoryManager.SCOPE_BACKGROUNDS -> bgRepo.renameCategoryPrefix(picked.id, newPath)
                                     else -> libRepo.renameCharacterCategoryPrefix(picked.id, newPath)
                                 }
                                 if (currentFilter == picked.id || currentFilter.startsWith("${picked.id}/")) {
@@ -2520,6 +2562,7 @@ class MainActivity : AppCompatActivity() {
                             val cleaned = when (scope) {
                                 CategoryManager.SCOPE_THEMES -> repo.removeSourceCategoryPrefix(picked.id)
                                 CategoryManager.SCOPE_WORLDBOOKS -> libRepo.removeWorldBookCategoryPrefix(picked.id)
+                                CategoryManager.SCOPE_BACKGROUNDS -> bgRepo.removeCategoryPrefix(picked.id)
                                 else -> libRepo.removeCharacterCategoryPrefix(picked.id)
                             }
                             if (currentFilter == picked.id || currentFilter.startsWith("${picked.id}/")) {
@@ -2715,13 +2758,51 @@ class MainActivity : AppCompatActivity() {
         actions.add(SheetAction("编辑代码", "可视化调节样式与 CSS，或切换 JSON 源码") {
             CodeEditorActivity.open(this, CodeEditorActivity.MODULE_THEME, source.id, source.name)
         })
-        val curBg = bgRepo.getBoundBackground(source.id)
-        actions.add(SheetAction("绑定背景", if (curBg != null) "当前：${curBg.name}" else "关联推荐背景图，预览与推送联动") {
-            showBindBgToThemePicker(source)
+        val boundBgs = bgRepo.getBoundBackgrounds(source.id)
+        val bgSub = when {
+            boundBgs.isEmpty() -> "关联推荐背景图，支持绑定多张"
+            boundBgs.size == 1 -> "默认：${boundBgs.first().name}"
+            else -> "默认：${boundBgs.first().name}（共 ${boundBgs.size} 张）"
+        }
+        actions.add(SheetAction("绑定背景", bgSub) {
+            if (boundBgs.isNotEmpty()) {
+                showThemeBindingDetails(source)
+            } else {
+                showBindBgToThemePicker(source)
+            }
         })
         actions.add(SheetAction("设置分类标签", "多选 1~3 级分类") { showThemeCategoryAssignDialog(source) })
         actions.add(SheetAction("删除美化", destructive = true) { confirmDeleteSource(source) })
         VaultSheets.actionList(ctx = this, title = source.name, actions = actions)
+    }
+
+    private fun showThemeBindingDetails(source: SourceRecord) {
+        val boundBgs = bgRepo.getBoundBackgrounds(source.id)
+        val actions = mutableListOf<SheetAction>()
+        boundBgs.forEachIndexed { idx, bg ->
+            val tag = if (idx == 0) "默认背景 · 点击预览" else "候选 #${idx + 1} · 点击设为默认"
+            actions.add(SheetAction(bg.name, tag, checked = idx == 0) {
+                if (idx == 0) {
+                    ThemePreviewActivity.open(this, source.id)
+                } else {
+                    bgRepo.setDefaultThemeBinding(source.id, bg.id)
+                    toast("已将「${bg.name}」设为默认背景")
+                    refreshVaultList()
+                    showThemeBindingDetails(source)
+                }
+            })
+        }
+        actions.add(SheetAction("管理 / 增减绑定背景", "支持多选绑定多张背景") {
+            showBindBgToThemePicker(source)
+        })
+        if (boundBgs.isNotEmpty()) {
+            actions.add(SheetAction("清空全部绑定", destructive = true) {
+                bgRepo.setThemeBindings(source.id, emptyList())
+                toast("已清空背景绑定")
+                refreshVaultList()
+            })
+        }
+        VaultSheets.actionList(ctx = this, title = "${source.name} · 绑定背景 (${boundBgs.size})", actions = actions)
     }
 
     private fun showBindBgToThemePicker(source: SourceRecord) {
@@ -2737,87 +2818,159 @@ class MainActivity : AppCompatActivity() {
             }
             return
         }
-        val curBgId = bgRepo.getBoundBgId(source.id)
-        val items = mutableListOf<PickerItem>()
-        if (curBgId.isNotEmpty()) {
-            items.add(PickerItem("__UNBIND__", "取消绑定背景", "恢复默认预览背景"))
-        }
-        allBgs.forEach { bg ->
-            items.add(PickerItem(bg.id, bg.name, bg.fileName))
-        }
-        VaultSheets.searchablePicker(
-            ctx = this,
-            title = "选择绑定背景",
-            items = items,
-            selectedId = curBgId,
-            searchHint = "搜索背景名称..."
-        ) { picked ->
-            if (picked.id == "__UNBIND__") {
-                bgRepo.bindTheme(source.id, "")
-                toast("已取消背景绑定")
-            } else {
-                bgRepo.bindTheme(source.id, picked.id)
-                toast("已绑定背景：${picked.title}")
+        val curIds = bgRepo.getBoundBgIds(source.id)
+        val items = allBgs.map { bg ->
+            val idx = curIds.indexOf(bg.id)
+            val sub = when {
+                idx == 0 -> "默认绑定 · ${bg.fileName}"
+                idx > 0 -> "已绑 #${idx + 1} · ${bg.fileName}"
+                else -> bg.fileName
             }
+            PickerItem(bg.id, bg.name, sub)
+        }
+        VaultSheets.multiSelect(
+            ctx = this,
+            title = "绑定背景（可多选，首张为默认）",
+            items = items,
+            preselectedIds = curIds.toSet(),
+            primaryConfirmText = "保存绑定",
+            searchHint = "搜索背景名称..."
+        ) { pickedIds ->
+            // Keep existing order for retained items so default stays first, append newly selected items
+            val retained = curIds.filter { it in pickedIds }
+            val added = pickedIds.filter { it !in curIds }
+            val finalIds = retained + added
+            bgRepo.setThemeBindings(source.id, finalIds)
+            toast(if (finalIds.isEmpty()) "已取消全部背景绑定" else "已绑定 ${finalIds.size} 张背景")
+            refreshVaultList()
+        }
+    }
+
+    private fun showBgBindingDetails(bg: com.stvault.app.core.BackgroundRecord) {
+        val boundThemeIds = bgRepo.getThemesBoundTo(bg.id)
+        val allSources = repo.getAllSources().associateBy { it.id }
+        val boundSources = boundThemeIds.mapNotNull { allSources[it] }
+        val actions = mutableListOf<SheetAction>()
+        for (src in boundSources) {
+            val isDefault = bgRepo.getBoundBgId(src.id) == bg.id
+            val sub = if (isDefault) "默认背景 · 点击操作" else "候选背景 · 点击操作"
+            actions.add(SheetAction(src.name, sub, checked = isDefault) {
+                VaultSheets.actionList(
+                    ctx = this,
+                    title = "${src.name} ↔ ${bg.name}",
+                    actions = listOfNotNull(
+                        SheetAction("打开美化预览") { ThemePreviewActivity.open(this, src.id) },
+                        if (!isDefault) SheetAction("设为该美化的默认背景") {
+                            bgRepo.setDefaultThemeBinding(src.id, bg.id)
+                            toast("已设为「${src.name}」的默认背景")
+                            refreshVaultList()
+                        } else null,
+                        SheetAction("解除绑定", destructive = true) {
+                            bgRepo.removeThemeBinding(src.id, bg.id)
+                            toast("已解除与「${src.name}」的绑定")
+                            refreshVaultList()
+                        }
+                    )
+                )
+            })
+        }
+        actions.add(SheetAction("+ 绑定到更多美化", "可同时绑定多个美化") {
+            showBindBgToMultipleThemesPicker(bg)
+        })
+        VaultSheets.actionList(ctx = this, title = "${bg.name} · 已绑美化 (${boundSources.size})", actions = actions)
+    }
+
+    private fun showBindBgToMultipleThemesPicker(bg: com.stvault.app.core.BackgroundRecord) {
+        val themes = repo.getAllSources().sortedByDescending { it.scannedAt }
+        if (themes.isEmpty()) {
+            toast("库中暂无美化")
+            return
+        }
+        val preBound = bgRepo.getThemesBoundTo(bg.id).toSet()
+        VaultSheets.multiSelect(
+            ctx = this,
+            title = "绑定到美化（可多选）",
+            items = themes.map { PickerItem(it.id, it.name, it.variantTag.ifBlank { it.fileName }) },
+            preselectedIds = preBound,
+            primaryConfirmText = "保存",
+            searchHint = "搜索美化..."
+        ) { picked ->
+            val pickedSet = picked.toSet()
+            for (tid in pickedSet - preBound) bgRepo.addThemeBinding(tid, bg.id)
+            for (tid in preBound - pickedSet) bgRepo.removeThemeBinding(tid, bg.id)
+            toast("已更新绑定（当前关联 ${pickedSet.size} 个美化）")
+            refreshVaultList()
+        }
+    }
+
+    private fun showBgCategoryAssignDialog(bg: com.stvault.app.core.BackgroundRecord) {
+        val allCats = catManager.getCategories(CategoryManager.SCOPE_BACKGROUNDS)
+        if (allCats.isEmpty()) {
+            showQuickAddCategoryDialog(CategoryManager.SCOPE_BACKGROUNDS) { showBgCategoryAssignDialog(bg) }
+            return
+        }
+        val items = allCats.map { PickerItem(it, catManager.formatIndentedLabel(it)) }
+        VaultSheets.multiSelect(
+            ctx = this,
+            title = "背景分类标签",
+            items = items,
+            preselectedIds = bg.categories.toSet(),
+            headerAction = "+ 新建" to { showQuickAddCategoryDialog(CategoryManager.SCOPE_BACKGROUNDS) { showBgCategoryAssignDialog(bg) } },
+            primaryConfirmText = "保存"
+        ) { picked ->
+            bgRepo.setCategories(bg.id, picked)
+            toast("已更新背景分类")
             refreshVaultList()
         }
     }
 
     private fun showBgActionMenu(bg: com.stvault.app.core.BackgroundRecord) {
-        VaultSheets.actionList(
-            ctx = this,
-            title = bg.name,
-            actions = listOf(
-                SheetAction("绑定到美化", "选择要使用此背景的美化") {
-                    val themes = repo.getAllSources().sortedByDescending { it.scannedAt }
-                    if (themes.isEmpty()) {
-                        toast("库中暂无美化")
-                    } else {
-                        VaultSheets.searchablePicker(
-                            ctx = this,
-                            title = "绑定到美化",
-                            items = themes.map { PickerItem(it.id, it.name, it.variantTag.ifBlank { it.fileName }) },
-                            searchHint = "搜索美化..."
-                        ) { picked ->
-                            bgRepo.bindTheme(picked.id, bg.id)
-                            toast("已将「${bg.name}」绑定到「${picked.title}」")
-                            refreshVaultList()
-                        }
-                    }
-                },
-                SheetAction("装入酒馆", "将背景图推送到 TT 酒馆背景库") {
-                    lifecycleScope.launch {
-                        val bytes = withContext(Dispatchers.IO) {
-                            val f = bgRepo.getFile(bg)
-                            if (f.exists()) f.readBytes() else null
-                        }
-                        if (bytes != null) enqueueToTavernBridge("background", bg.name, bg.fileName, bytes)
-                        else toast("找不到背景文件")
-                    }
-                },
-                SheetAction("重命名", "修改背景显示名称") {
-                    showRenameDialog("重命名背景", bg.name) { newName ->
-                        if (bgRepo.rename(bg.id, newName)) {
-                            toast("已重命名")
-                            refreshVaultList()
-                        }
-                    }
-                },
-                SheetAction("删除背景", destructive = true) {
-                    VaultSheets.confirm(
-                        ctx = this,
-                        title = "删除背景",
-                        message = "确定删除背景「${bg.name}」？已绑定此背景的美化将自动解绑。",
-                        confirmText = "删除",
-                        destructive = true
-                    ) {
-                        bgRepo.delete(bg.id)
-                        toast("已删除背景")
-                        refreshVaultList()
-                    }
+        val boundCount = bgRepo.countThemesBoundTo(bg.id)
+        val installed = com.stvault.app.core.TavernBridgeManager.getInstance(this).isBackgroundInstalled(bg.name, bg.fileName)
+        val actions = mutableListOf<SheetAction>()
+        if (boundCount > 0) {
+            actions.add(SheetAction("查看绑定详情 ($boundCount)", "查看已绑美化、设默认或解绑") {
+                showBgBindingDetails(bg)
+            })
+        }
+        actions.add(SheetAction("绑定到美化", if (boundCount > 0) "增减关联的美化（可多选）" else "选择要使用此背景的美化") {
+            showBindBgToMultipleThemesPicker(bg)
+        })
+        actions.add(SheetAction("设置分类标签", if (bg.categories.isNotEmpty()) bg.categories.joinToString(" · ") else "归类背景风格") {
+            showBgCategoryAssignDialog(bg)
+        })
+        actions.add(SheetAction("装入酒馆", if (installed) "酒馆已装 · 再次推送将覆盖" else "将背景图推送到酒馆背景库") {
+            lifecycleScope.launch {
+                val bytes = withContext(Dispatchers.IO) {
+                    val f = bgRepo.getFile(bg)
+                    if (f.exists()) f.readBytes() else null
                 }
-            )
-        )
+                if (bytes != null) enqueueToTavernBridge("background", bg.name, bg.fileName, bytes)
+                else toast("找不到背景文件")
+            }
+        })
+        actions.add(SheetAction("重命名", "修改背景显示名称") {
+            showRenameDialog("重命名背景", bg.name) { newName ->
+                if (bgRepo.rename(bg.id, newName)) {
+                    toast("已重命名")
+                    refreshVaultList()
+                }
+            }
+        })
+        actions.add(SheetAction("删除背景", destructive = true) {
+            VaultSheets.confirm(
+                ctx = this,
+                title = "删除背景",
+                message = "确定删除背景「${bg.name}」？已绑定此背景的美化将自动解绑。",
+                confirmText = "删除",
+                destructive = true
+            ) {
+                bgRepo.delete(bg.id)
+                toast("已删除背景")
+                refreshVaultList()
+            }
+        })
+        VaultSheets.actionList(ctx = this, title = bg.name, actions = actions)
     }
 
     private fun pushThemeToTavern(source: SourceRecord) {
@@ -3395,7 +3548,11 @@ class MainActivity : AppCompatActivity() {
         binding.btnBatchCategorize.visibility =
             if (activeWorkspace == "themes" || activeWorkspace == "characters") View.VISIBLE else View.GONE
         binding.btnBatchMergeVersion.visibility = View.VISIBLE
-        binding.btnBatchMergeVersion.text = if (activeWorkspace == "themes") "合并系列" else "合并版本"
+        binding.btnBatchMergeVersion.text = when {
+            activeWorkspace == "themes" && vaultModeBgs -> "推酒馆"
+            activeWorkspace == "themes" -> "合并系列"
+            else -> "合并版本"
+        }
         syncBatchUi()
     }
 
@@ -3414,7 +3571,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun currentVisibleIds(): List<String> = when (activeWorkspace) {
-        "themes" -> sourcesAdapter.getVisibleIds()
+        "themes" -> if (vaultModeBgs) bgGridAdapter.getVisibleIds() else sourcesAdapter.getVisibleIds()
         "characters" -> charactersAdapter.getVisibleIds()
         "worldbooks" -> worldBooksAdapter.getVisibleIds()
         "presets" -> presetsAdapter.getVisibleIds()
@@ -3425,7 +3582,8 @@ class MainActivity : AppCompatActivity() {
     private fun syncBatchUi() {
         binding.tvBatchCount.text = "已选 ${batchSelectedIds.size} 项"
         val snap = batchSelectedIds.toSet()
-        sourcesAdapter.updateSelection(batchMode && activeWorkspace == "themes", snap)
+        sourcesAdapter.updateSelection(batchMode && activeWorkspace == "themes" && !vaultModeBgs, snap)
+        bgGridAdapter.updateSelection(batchMode && activeWorkspace == "themes" && vaultModeBgs, snap)
         charactersAdapter.updateSelection(batchMode && activeWorkspace == "characters", snap)
         worldBooksAdapter.updateSelection(batchMode && activeWorkspace == "worldbooks", snap)
         presetsAdapter.updateSelection(batchMode && activeWorkspace == "presets", snap)
@@ -3479,7 +3637,12 @@ class MainActivity : AppCompatActivity() {
             toast("请先勾选要分类的项目")
             return
         }
-        val scope = if (activeWorkspace == "themes") CategoryManager.SCOPE_THEMES else CategoryManager.SCOPE_CHARACTERS
+        val isBgBatch = activeWorkspace == "themes" && vaultModeBgs
+        val scope = when {
+            isBgBatch -> CategoryManager.SCOPE_BACKGROUNDS
+            activeWorkspace == "themes" -> CategoryManager.SCOPE_THEMES
+            else -> CategoryManager.SCOPE_CHARACTERS
+        }
         val allCats = catManager.getCategories(scope)
         if (allCats.isEmpty()) {
             showQuickAddCategoryDialog(scope) { runBatchCategorize() }
@@ -3487,12 +3650,19 @@ class MainActivity : AppCompatActivity() {
         }
         val items = allCats.map { PickerItem(it, catManager.formatIndentedLabel(it)) }
         // Pre-select tags shared by ALL currently selected items (e.g. "待整理") so unchecking removes them in 1 tap
-        val selectedCatLists: List<Set<String>> = if (activeWorkspace == "themes") {
-            val map = repo.getAllSources().associateBy { it.id }
-            ids.mapNotNull { map[it]?.categories?.toSet() }
-        } else {
-            val map = libRepo.getAllCharacters().associateBy { it.id }
-            ids.mapNotNull { map[it]?.categories?.toSet() }
+        val selectedCatLists: List<Set<String>> = when {
+            isBgBatch -> {
+                val map = bgRepo.getAll().associateBy { it.id }
+                ids.mapNotNull { map[it]?.categories?.toSet() }
+            }
+            activeWorkspace == "themes" -> {
+                val map = repo.getAllSources().associateBy { it.id }
+                ids.mapNotNull { map[it]?.categories?.toSet() }
+            }
+            else -> {
+                val map = libRepo.getAllCharacters().associateBy { it.id }
+                ids.mapNotNull { map[it]?.categories?.toSet() }
+            }
         }
         val commonCats: Set<String> = if (selectedCatLists.isEmpty()) {
             emptySet()
@@ -3529,7 +3699,16 @@ class MainActivity : AppCompatActivity() {
     private fun applyBatchCategoryDelta(ids: List<String>, added: Set<String>, removed: Set<String>) {
         lifecycleScope.launch {
             val targetCount = withContext(Dispatchers.IO) {
-                if (activeWorkspace == "themes") {
+                if (activeWorkspace == "themes" && vaultModeBgs) {
+                    var cnt = 0
+                    for (id in ids) {
+                        val cur = bgRepo.getById(id) ?: continue
+                        val next = (cur.categories.toSet() + added - removed).toList()
+                        bgRepo.setCategories(id, next)
+                        cnt++
+                    }
+                    cnt
+                } else if (activeWorkspace == "themes") {
                     val fold = prefs.getBoolean("fold_theme_variants", true)
                     val expanded = if (fold) {
                         ids.flatMap { id ->
@@ -3569,6 +3748,34 @@ class MainActivity : AppCompatActivity() {
 
     private fun runBatchMergeVersions() {
         val ids = batchSelectedIds.toList()
+        if (activeWorkspace == "themes" && vaultModeBgs) {
+            if (ids.isEmpty()) {
+                toast("请先勾选要推送的背景")
+                return
+            }
+            lifecycleScope.launch {
+                val bridge = com.stvault.app.core.TavernBridgeManager.getInstance(this@MainActivity)
+                if (!bridge.stateFlow.value.running) {
+                    bridge.start()
+                }
+                val pushed = withContext(Dispatchers.IO) {
+                    var cnt = 0
+                    for (id in ids) {
+                        val bg = bgRepo.getById(id) ?: continue
+                        val f = bgRepo.getFile(bg)
+                        if (f.exists()) {
+                            bridge.enqueueOutbox("background", bg.name, bg.fileName, f.readBytes())
+                            cnt++
+                        }
+                    }
+                    cnt
+                }
+                toast(if (pushed > 0) "已将 $pushed 张背景加入酒馆推送队列" else "未找到可推送的背景文件")
+                batchSelectedIds.clear()
+                syncBatchUi()
+            }
+            return
+        }
         if (ids.size < 2) {
             toast("请至少勾选 2 项进行版本合并")
             return
@@ -3636,7 +3843,7 @@ class MainActivity : AppCompatActivity() {
             lifecycleScope.launch {
                 withContext(Dispatchers.IO) {
                     when (activeWorkspace) {
-                        "themes" -> repo.batchDeleteSources(ids)
+                        "themes" -> if (vaultModeBgs) ids.forEach { bgRepo.delete(it) } else repo.batchDeleteSources(ids)
                         "characters" -> ids.forEach { libRepo.deleteCharacter(it) }
                         "worldbooks" -> ids.forEach { libRepo.deleteWorldBook(it) }
                         "presets" -> ids.forEach { libRepo.deletePreset(it) }
