@@ -513,6 +513,32 @@ class VaultRepository private constructor(private val appContext: Context) {
         return DeleteSourceResult(removedUrls, freedBytes)
     }
 
+    /** Clears locally cached image files owned exclusively by ownerKey (e.g. "char:id", "wb:id") without removing the resource. */
+    fun clearExclusiveCachedFiles(ownerKey: String): Pair<Int, Long> {
+        var cleared = 0
+        var freedBytes = 0L
+        val toDelete = mutableListOf<File>()
+        synchronized(lock) {
+            for ((url, rec) in urlsMap.entries.toList()) {
+                if (ownerKey in rec.sources && rec.sources.size == 1 && rec.file.isNotEmpty()) {
+                    val f = resolveAssetFile(rec.file, rec.mime, rec.url)
+                    if (f.exists()) {
+                        freedBytes += f.length()
+                        toDelete.add(f)
+                    }
+                    urlsMap[url] = rec.copy(status = CacheStatus.PENDING, file = "", size = 0L)
+                    cleared++
+                }
+            }
+            if (cleared > 0) refreshStatsLocked()
+        }
+        for (f in toDelete) {
+            try { f.delete() } catch (_: Exception) {}
+        }
+        if (cleared > 0) saveIndex()
+        return cleared to freedBytes
+    }
+
     fun getUrlRecordsForUrls(urls: List<String>): List<UrlRecord> {
         synchronized(lock) {
             return urls.map { u ->

@@ -616,7 +616,7 @@
             android:paddingHorizontal="16dp"
             android:visibility="gone">
 
-            <!-- Clean Segmented Toggle -->
+            <!-- Clean 3-Way Segmented Toggle (美化 | 背景 | 图床) -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="40dp"
@@ -631,10 +631,23 @@
                     android:layout_weight="1"
                     android:insetTop="0dp"
                     android:insetBottom="0dp"
-                    android:text="美化文件"
+                    android:text="美化"
                     android:textColor="@color/on_accent"
                     android:textSize="13sp"
                     app:backgroundTint="@color/accent"
+                    app:cornerRadius="8dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnModeBgs"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:text="背景"
+                    android:textColor="@color/text_muted"
+                    android:textSize="13sp"
                     app:cornerRadius="8dp" />
 
                 <com.google.android.material.button.MaterialButton
@@ -645,7 +658,7 @@
                     android:layout_weight="1"
                     android:insetTop="0dp"
                     android:insetBottom="0dp"
-                    android:text="全部图片"
+                    android:text="图床"
                     android:textColor="@color/text_muted"
                     android:textSize="13sp"
                     app:cornerRadius="8dp" />
@@ -806,6 +819,14 @@
                     android:layout_height="match_parent"
                     android:clipToPadding="false"
                     android:paddingBottom="88dp" />
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/rvBackgrounds"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:clipToPadding="false"
+                    android:paddingBottom="88dp"
+                    android:visibility="gone" />
 
                 <LinearLayout
                     android:id="@+id/boxVaultScrollJump"

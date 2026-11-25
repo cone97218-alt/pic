@@ -404,13 +404,27 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
             }
         }
 
-        if (addedCategoryPaths > 0 || updatedThemesInApp > 0) {
+        val bgRepo = BackgroundRepository.getInstance(appContext)
+        val incomingBgObj = args.optJSONObject("backgroundBindings")
+        var updatedBgBindings = 0
+        if (incomingBgObj != null) {
+            val map = LinkedHashMap<String, String>()
+            val it = incomingBgObj.keys()
+            while (it.hasNext()) {
+                val tName = it.next()
+                val bgFile = incomingBgObj.optString(tName, "").trim()
+                if (tName.isNotBlank() && bgFile.isNotBlank()) map[tName] = bgFile
+            }
+            updatedBgBindings = bgRepo.applyBindingsByThemeName(vaultRepo, map)
+        }
+
+        if (addedCategoryPaths > 0 || updatedThemesInApp > 0 || updatedBgBindings > 0) {
             recordSyncLog(
                 direction = "tag_sync",
                 action = "tags_merged",
                 module = "themes",
-                name = "美化分类标签联动",
-                summary = "从 st-theme-companion 同步：新增分类 $addedCategoryPaths 个，更新匣内美化标签 $updatedThemesInApp 项"
+                name = "美化标签与背景绑定联动",
+                summary = "从 st-theme-companion 同步：新增分类 $addedCategoryPaths 个，更新标签 $updatedThemesInApp 项，背景绑定 $updatedBgBindings 项"
             )
         }
 
@@ -422,12 +436,18 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
                 vaultThemeTagsObj.put(src.name, JSONArray(cleanCats))
             }
         }
+        val vaultBgBindingsObj = JSONObject()
+        for ((tName, bgFile) in bgRepo.getBindingsByThemeName(vaultRepo)) {
+            vaultBgBindingsObj.put(tName, bgFile)
+        }
 
-        lastDiagLog = "标签联动完成：更新 $updatedThemesInApp 项美化标签"
+        lastDiagLog = "标签联动完成：更新 $updatedThemesInApp 项标签，$updatedBgBindings 项背景绑定"
         return JSONObject().apply {
             put("ok", true)
             put("addedCategoryPaths", addedCategoryPaths)
             put("updatedThemesInApp", updatedThemesInApp)
+            put("updatedBgBindings", updatedBgBindings)
+            put("backgroundBindings", vaultBgBindingsObj)
             put("vaultTagPaths", JSONArray(allVaultPaths))
             put("vaultThemeTags", vaultThemeTagsObj)
         }

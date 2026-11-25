@@ -68,7 +68,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var repo: VaultRepository
     private lateinit var libRepo: ResourceLibraryRepository
+    private lateinit var bgRepo: com.stvault.app.core.BackgroundRepository
     private lateinit var catManager: CategoryManager
+    private lateinit var bgGridAdapter: BackgroundGridAdapter
     private lateinit var sourcesAdapter: SourcesAdapter
     private lateinit var urlsAdapter: UrlsAdapter
     private lateinit var charactersAdapter: CharactersAdapter
@@ -92,6 +94,7 @@ class MainActivity : AppCompatActivity() {
     private var savedTreeUri: Uri? = null
     private var savedLocalDirPath: String? = null
     private var vaultSearchModeSources = true
+    private var vaultModeBgs = false
     private var activeSourceFilter = "all"
     private var activeUrlFilter = "all"
     private var activeThemeSort = "newest"
@@ -161,6 +164,23 @@ class MainActivity : AppCompatActivity() {
         }
 
     // 2. Pick Broken Theme File for Repair
+    private val pickBgImagesLauncher =
+        registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+            if (uris.isNullOrEmpty()) return@registerForActivityResult
+            lifecycleScope.launch {
+                val (added, dups) = withContext(Dispatchers.IO) {
+                    var a = 0; var d = 0
+                    for (u in uris) {
+                        val (rec, isDup) = bgRepo.importUri(u)
+                        if (isDup) d++ else if (rec != null) a++
+                    }
+                    a to d
+                }
+                toast(if (added > 0) "已导入 $added 张背景" + if (dups > 0) "（重复 $dups）" else "" else "所选图片已在背景库中")
+                refreshVaultList()
+            }
+        }
+
     private val pickRepairFileLauncher =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             if (uri == null) return@registerForActivityResult
@@ -396,6 +416,7 @@ class MainActivity : AppCompatActivity() {
 
         repo = VaultRepository.getInstance(this)
         libRepo = ResourceLibraryRepository.getInstance(this)
+        bgRepo = com.stvault.app.core.BackgroundRepository.getInstance(this)
         catManager = CategoryManager.getInstance(this)
         savedTreeUri = prefs.getString("tree_uri", null)?.let { Uri.parse(it) }
         savedLocalDirPath = prefs.getString("local_dir_path", null)
@@ -492,6 +513,13 @@ class MainActivity : AppCompatActivity() {
     private fun setupRecyclerViews() {
         // 1. Themes
         binding.rvVault.layoutManager = LinearLayoutManager(this)
+        bgGridAdapter = BackgroundGridAdapter(
+            bgRepo = bgRepo,
+            onClick = { bg -> showBgActionMenu(bg) },
+            onLongClick = { bg -> showBgActionMenu(bg) }
+        )
+        binding.rvBackgrounds.layoutManager = androidx.recyclerview.widget.GridLayoutManager(this, 2)
+        binding.rvBackgrounds.adapter = bgGridAdapter
         sourcesAdapter = SourcesAdapter(
             onClick = { source -> ThemePreviewActivity.open(this, source.id) },
             onPreviewClick = { source -> showSourceDetailDialog(source) },
@@ -988,11 +1016,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun rebuildFilterChips() {
-        val sortVis = if (vaultSearchModeSources) View.VISIBLE else View.GONE
+        val sortVis = if (vaultSearchModeSources && !vaultModeBgs) View.VISIBLE else View.GONE
         binding.btnThemeSort.visibility = sortVis
         binding.divThemeSort.visibility = sortVis
         val group = binding.chipGroupFilter
         group.removeAllViews()
+        if (vaultModeBgs) return
         val options = if (vaultSearchModeSources) {
             listOf(
                 "all" to "全部",
@@ -1087,19 +1116,29 @@ class MainActivity : AppCompatActivity() {
         val transparent = android.graphics.Color.TRANSPARENT
         val muted = ContextCompat.getColor(this, R.color.text_muted)
 
-        if (vaultSearchModeSources) {
-            binding.btnModeSources.backgroundTintList = ColorStateList.valueOf(accent)
-            binding.btnModeSources.setTextColor(onAccent)
-            binding.btnModeUrls.backgroundTintList = ColorStateList.valueOf(transparent)
-            binding.btnModeUrls.setTextColor(muted)
+        fun styleBtn(btn: com.google.android.material.button.MaterialButton, active: Boolean) {
+            btn.backgroundTintList = ColorStateList.valueOf(if (active) accent else transparent)
+            btn.setTextColor(if (active) onAccent else muted)
+        }
+        styleBtn(binding.btnModeSources, vaultSearchModeSources && !vaultModeBgs)
+        styleBtn(binding.btnModeBgs, vaultModeBgs)
+        styleBtn(binding.btnModeUrls, !vaultSearchModeSources && !vaultModeBgs)
+
+        binding.rvVault.visibility = if (vaultModeBgs) View.GONE else View.VISIBLE
+        binding.rvBackgrounds.visibility = if (vaultModeBgs) View.VISIBLE else View.GONE
+
+        if (vaultModeBgs) {
             binding.btnImportInVault.visibility = View.VISIBLE
+            binding.btnImportInVault.text = "+ 导入背景"
+            binding.btnThemeCatFilter.visibility = View.GONE
+            binding.btnThemeBatch.visibility = View.GONE
+            if (batchMode) exitBatchMode()
+        } else if (vaultSearchModeSources) {
+            binding.btnImportInVault.visibility = View.VISIBLE
+            binding.btnImportInVault.text = "+ 导入文件"
             binding.btnThemeCatFilter.visibility = View.VISIBLE
             binding.btnThemeBatch.visibility = View.VISIBLE
         } else {
-            binding.btnModeUrls.backgroundTintList = ColorStateList.valueOf(accent)
-            binding.btnModeUrls.setTextColor(onAccent)
-            binding.btnModeSources.backgroundTintList = ColorStateList.valueOf(transparent)
-            binding.btnModeSources.setTextColor(muted)
             binding.btnImportInVault.visibility = View.GONE
             binding.btnThemeCatFilter.visibility = View.GONE
             binding.btnThemeBatch.visibility = View.GONE
@@ -1180,10 +1219,7 @@ class MainActivity : AppCompatActivity() {
         binding.wsCharacters.btnCharScanFolder.setOnClickListener {
             openFileBrowser("characters", FileBrowserActivity.MODE_FOLDER, "扫描角色卡目录")
         }
-        binding.wsCharacters.btnCharStartCache.setOnClickListener {
-            VaultDownloadService.start(this, mode = "pending", concurrency = downloadConcurrency)
-            toast("开始后台缓存")
-        }
+        // Per-item image caching lives inside each card's action menu and detail view (no permanent top bar clutter)
 
         // Workspace 3: World Books Listeners
         binding.wsWorldBooks.btnWbSearch.setOnClickListener { refreshWorldBooksList() }
@@ -1196,10 +1232,7 @@ class MainActivity : AppCompatActivity() {
         binding.wsWorldBooks.btnWbScanFolder.setOnClickListener {
             openFileBrowser("worldbooks", FileBrowserActivity.MODE_FOLDER, "扫描世界书目录")
         }
-        binding.wsWorldBooks.btnWbStartCache.setOnClickListener {
-            VaultDownloadService.start(this, mode = "pending", concurrency = downloadConcurrency)
-            toast("开始后台缓存")
-        }
+        // Per-item image caching lives inside each worldbook's action menu and detail view
 
         // Workspace 4: Presets Listeners
         binding.wsPresets.btnPresetSearch.setOnClickListener { refreshPresetsList() }
@@ -1233,7 +1266,11 @@ class MainActivity : AppCompatActivity() {
             openFileBrowser("themes", FileBrowserActivity.MODE_FILES, "导入美化文件")
         }
         binding.btnImportInVault.setOnClickListener {
-            openFileBrowser("themes", FileBrowserActivity.MODE_FILES, "导入美化文件")
+            if (vaultModeBgs) {
+                pickBgImagesLauncher.launch("image/*")
+            } else {
+                openFileBrowser("themes", FileBrowserActivity.MODE_FILES, "导入美化文件")
+            }
         }
         binding.btnOpenTTFolder.setOnClickListener { openTauriTavernThemesFolder() }
         binding.btnScanFolder.setOnClickListener {
@@ -1302,13 +1339,21 @@ class MainActivity : AppCompatActivity() {
 
         // Tab 2: Vault Search
         binding.btnModeSources.setOnClickListener {
+            vaultModeBgs = false
             vaultSearchModeSources = true
             binding.rvVault.adapter = sourcesAdapter
             updateSegmentedStyle()
             rebuildFilterChips()
             refreshVaultList()
         }
+        binding.btnModeBgs.setOnClickListener {
+            vaultModeBgs = true
+            updateSegmentedStyle()
+            rebuildFilterChips()
+            refreshVaultList()
+        }
         binding.btnModeUrls.setOnClickListener {
+            vaultModeBgs = false
             vaultSearchModeSources = false
             binding.rvVault.adapter = urlsAdapter
             updateSegmentedStyle()
@@ -1724,6 +1769,12 @@ class MainActivity : AppCompatActivity() {
     private fun refreshVaultList() {
         val q = binding.etSearch.text?.toString().orEmpty()
         lifecycleScope.launch {
+            if (vaultModeBgs) {
+                val bgs = withContext(Dispatchers.IO) { bgRepo.getAll(q) }
+                bgGridAdapter.submitList(bgs)
+                binding.tvVaultCount.text = "共 ${bgs.size} 张背景"
+                return@launch
+            }
             if (vaultSearchModeSources) {
                 val groupVars = prefs.getBoolean("group_theme_variants", true)
                 val list = withContext(Dispatchers.IO) {
@@ -2232,12 +2283,6 @@ class MainActivity : AppCompatActivity() {
             charactersAdapter.submitList(grouped)
             binding.wsCharacters.tvCharCount.text =
                 if (groupVersions && grouped.size < totalRaw) "共 ${grouped.size} 作品 ($totalRaw 版)" else "共 ${grouped.size} 张"
-            if (pendingCount > 0) {
-                binding.wsCharacters.btnCharStartCache.visibility = View.VISIBLE
-                binding.wsCharacters.btnCharStartCache.text = "缓存图床 ($pendingCount)"
-            } else {
-                binding.wsCharacters.btnCharStartCache.visibility = View.GONE
-            }
         }
     }
 
@@ -2300,12 +2345,6 @@ class MainActivity : AppCompatActivity() {
             worldBooksAdapter.submitList(grouped)
             binding.wsWorldBooks.tvWbCount.text =
                 if (groupVersions && grouped.size < totalRaw) "共 ${grouped.size} 部 ($totalRaw 版)" else "共 ${grouped.size} 本"
-            if (pendingCount > 0) {
-                binding.wsWorldBooks.btnWbStartCache.visibility = View.VISIBLE
-                binding.wsWorldBooks.btnWbStartCache.text = "缓存图床 ($pendingCount)"
-            } else {
-                binding.wsWorldBooks.btnWbStartCache.visibility = View.GONE
-            }
         }
     }
 
@@ -2676,9 +2715,109 @@ class MainActivity : AppCompatActivity() {
         actions.add(SheetAction("编辑代码", "可视化调节样式与 CSS，或切换 JSON 源码") {
             CodeEditorActivity.open(this, CodeEditorActivity.MODULE_THEME, source.id, source.name)
         })
+        val curBg = bgRepo.getBoundBackground(source.id)
+        actions.add(SheetAction("绑定背景", if (curBg != null) "当前：${curBg.name}" else "关联推荐背景图，预览与推送联动") {
+            showBindBgToThemePicker(source)
+        })
         actions.add(SheetAction("设置分类标签", "多选 1~3 级分类") { showThemeCategoryAssignDialog(source) })
         actions.add(SheetAction("删除美化", destructive = true) { confirmDeleteSource(source) })
         VaultSheets.actionList(ctx = this, title = source.name, actions = actions)
+    }
+
+    private fun showBindBgToThemePicker(source: SourceRecord) {
+        val allBgs = bgRepo.getAll()
+        if (allBgs.isEmpty()) {
+            VaultSheets.confirm(
+                ctx = this,
+                title = "背景库暂无图片",
+                message = "先从相册导入一张背景图，或用囤囤从帖子导入纯图片即可绑定。",
+                confirmText = "去导入"
+            ) {
+                pickBgImagesLauncher.launch("image/*")
+            }
+            return
+        }
+        val curBgId = bgRepo.getBoundBgId(source.id)
+        val items = mutableListOf<PickerItem>()
+        if (curBgId.isNotEmpty()) {
+            items.add(PickerItem("__UNBIND__", "取消绑定背景", "恢复默认预览背景"))
+        }
+        allBgs.forEach { bg ->
+            items.add(PickerItem(bg.id, bg.name, bg.fileName))
+        }
+        VaultSheets.searchablePicker(
+            ctx = this,
+            title = "选择绑定背景",
+            items = items,
+            selectedId = curBgId,
+            searchHint = "搜索背景名称..."
+        ) { picked ->
+            if (picked.id == "__UNBIND__") {
+                bgRepo.bindTheme(source.id, "")
+                toast("已取消背景绑定")
+            } else {
+                bgRepo.bindTheme(source.id, picked.id)
+                toast("已绑定背景：${picked.title}")
+            }
+            refreshVaultList()
+        }
+    }
+
+    private fun showBgActionMenu(bg: com.stvault.app.core.BackgroundRecord) {
+        VaultSheets.actionList(
+            ctx = this,
+            title = bg.name,
+            actions = listOf(
+                SheetAction("绑定到美化", "选择要使用此背景的美化") {
+                    val themes = repo.getAllSources().sortedByDescending { it.scannedAt }
+                    if (themes.isEmpty()) {
+                        toast("库中暂无美化")
+                    } else {
+                        VaultSheets.searchablePicker(
+                            ctx = this,
+                            title = "绑定到美化",
+                            items = themes.map { PickerItem(it.id, it.name, it.variantTag.ifBlank { it.fileName }) },
+                            searchHint = "搜索美化..."
+                        ) { picked ->
+                            bgRepo.bindTheme(picked.id, bg.id)
+                            toast("已将「${bg.name}」绑定到「${picked.title}」")
+                            refreshVaultList()
+                        }
+                    }
+                },
+                SheetAction("装入酒馆", "将背景图推送到 TT 酒馆背景库") {
+                    lifecycleScope.launch {
+                        val bytes = withContext(Dispatchers.IO) {
+                            val f = bgRepo.getFile(bg)
+                            if (f.exists()) f.readBytes() else null
+                        }
+                        if (bytes != null) enqueueToTavernBridge("background", bg.name, bg.fileName, bytes)
+                        else toast("找不到背景文件")
+                    }
+                },
+                SheetAction("重命名", "修改背景显示名称") {
+                    showRenameDialog("重命名背景", bg.name) { newName ->
+                        if (bgRepo.rename(bg.id, newName)) {
+                            toast("已重命名")
+                            refreshVaultList()
+                        }
+                    }
+                },
+                SheetAction("删除背景", destructive = true) {
+                    VaultSheets.confirm(
+                        ctx = this,
+                        title = "删除背景",
+                        message = "确定删除背景「${bg.name}」？已绑定此背景的美化将自动解绑。",
+                        confirmText = "删除",
+                        destructive = true
+                    ) {
+                        bgRepo.delete(bg.id)
+                        toast("已删除背景")
+                        refreshVaultList()
+                    }
+                }
+            )
+        )
     }
 
     private fun pushThemeToTavern(source: SourceRecord) {
@@ -2766,6 +2905,13 @@ class MainActivity : AppCompatActivity() {
                 SheetAction("编辑内容", "分段编辑设定、开场白或 JSON 源码") {
                     CodeEditorActivity.open(this, CodeEditorActivity.MODULE_CHARACTER, c.id, c.name)
                 },
+                SheetAction("缓存图床", "下载外链图片到本地缓存") {
+                    if (c.urls.isEmpty()) toast("该角色卡没有外链图床")
+                    else {
+                        VaultDownloadService.start(this, mode = "pending", concurrency = downloadConcurrency)
+                        toast("开始后台缓存图床")
+                    }
+                },
                 SheetAction("重命名", "修改角色卡显示名称") {
                     showRenameDialog("重命名角色卡", c.name) { newName ->
                         if (libRepo.renameCharacter(c.id, newName)) {
@@ -2803,6 +2949,13 @@ class MainActivity : AppCompatActivity() {
                 },
                 SheetAction("分类标签", "多选 1~3 级分类") {
                     showWorldBookCategoryAssignDialog(w)
+                },
+                SheetAction("缓存图床", "下载外链图片到本地缓存") {
+                    if (w.urls.isEmpty()) toast("该世界书没有外链图床")
+                    else {
+                        VaultDownloadService.start(this, mode = "pending", concurrency = downloadConcurrency)
+                        toast("开始后台缓存图床")
+                    }
                 },
                 SheetAction("重命名", "修改世界书显示名称") {
                     showRenameDialog("重命名世界书", w.name) { newName ->

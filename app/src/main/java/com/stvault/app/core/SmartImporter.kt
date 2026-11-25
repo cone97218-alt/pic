@@ -15,11 +15,12 @@ data class SmartImportSummary(
     var worldBooks: Int = 0,
     var presets: Int = 0,
     var components: Int = 0,
+    var backgrounds: Int = 0,
     var duplicates: Int = 0,
     var newUrls: Int = 0,
     var skipped: Int = 0
 ) {
-    val totalImported: Int get() = themes + characters + worldBooks + presets + components
+    val totalImported: Int get() = themes + characters + worldBooks + presets + components + backgrounds
 
     fun formatMessage(): String {
         val parts = mutableListOf<String>()
@@ -27,6 +28,7 @@ data class SmartImportSummary(
         if (worldBooks > 0) parts.add("世界书 $worldBooks")
         if (presets > 0) parts.add("预设 $presets")
         if (themes > 0) parts.add("美化 $themes")
+        if (backgrounds > 0) parts.add("背景 $backgrounds")
         if (components > 0) parts.add("组件 $components")
         if (parts.isEmpty()) {
             return if (duplicates > 0) "所选资源已在库中（重复 $duplicates）"
@@ -159,6 +161,7 @@ object SmartImporter {
         }
         val vaultRepo = VaultRepository.getInstance(context)
         val libRepo = ResourceLibraryRepository.getInstance(context)
+        val bgRepo = BackgroundRepository.getInstance(context)
         val catMgr = CategoryManager.getInstance(context)
         val allTags = mergeTags(autoTag, extraTags)
         try {
@@ -169,12 +172,19 @@ object SmartImporter {
                     rec != null -> summary.components++
                     else -> summary.skipped++
                 }
+            } else if (isPureBackgroundImageFileName(fileName)) {
+                val (rec, isDup) = bgRepo.importBytes(bytes, fileName)
+                when {
+                    isDup -> summary.duplicates++
+                    rec != null -> summary.backgrounds++
+                    else -> summary.skipped++
+                }
             } else if (fileName.endsWith(".zip", ignoreCase = true) || isZipBytes(bytes)) {
                 ByteArrayInputStream(bytes).use { bis ->
-                    importZipStream(bis, vaultRepo, libRepo, catMgr, preferredModule, allTags, summary, onProgress)
+                    importZipStream(bis, vaultRepo, libRepo, bgRepo, catMgr, preferredModule, allTags, summary, onProgress)
                 }
             } else {
-                routeBytes(bytes, fileName, sourceRef, vaultRepo, libRepo, catMgr, preferredModule, allTags, summary)
+                routeBytes(bytes, fileName, sourceRef, vaultRepo, libRepo, bgRepo, catMgr, preferredModule, allTags, summary)
             }
         } catch (_: Exception) {
             summary.skipped++
@@ -185,6 +195,11 @@ object SmartImporter {
     private fun isDocumentFileName(fileName: String): Boolean {
         val ext = fileName.substringAfterLast('.', "").lowercase()
         return ext in setOf("docx", "doc", "pdf", "rtf", "md")
+    }
+
+    private fun isPureBackgroundImageFileName(fileName: String): Boolean {
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        return ext in setOf("jpg", "jpeg", "webp", "gif")
     }
 
     private fun mergeTags(autoTag: String, extraTags: List<String> = emptyList()): List<String> {
@@ -198,6 +213,7 @@ object SmartImporter {
         inputStream: InputStream,
         vaultRepo: VaultRepository,
         libRepo: ResourceLibraryRepository,
+        bgRepo: BackgroundRepository,
         catMgr: CategoryManager,
         preferredModule: String,
         tags: List<String>,
@@ -219,7 +235,7 @@ object SmartImporter {
                     continue
                 }
                 val ext = entryName.substringAfterLast('.', "").lowercase()
-                if (ext !in setOf("png", "json", "css", "js", "txt", "html", "htm", "docx", "doc", "pdf", "md", "rtf")) {
+                if (ext !in setOf("png", "jpg", "jpeg", "webp", "gif", "json", "css", "js", "txt", "html", "htm", "docx", "doc", "pdf", "md", "rtf")) {
                     zis.closeEntry()
                     continue
                 }
@@ -244,7 +260,7 @@ object SmartImporter {
                 if (zipCount % 3 == 0 || zipCount == 1) {
                     onProgress(zipCount, entryName)
                 }
-                routeBytes(baos.toByteArray(), entryName, "zip://$entryName", vaultRepo, libRepo, catMgr, preferredModule, tags, summary)
+                routeBytes(baos.toByteArray(), entryName, "zip://$entryName", vaultRepo, libRepo, bgRepo, catMgr, preferredModule, tags, summary)
             }
         }
     }
@@ -255,6 +271,7 @@ object SmartImporter {
         sourceRef: String,
         vaultRepo: VaultRepository,
         libRepo: ResourceLibraryRepository,
+        bgRepo: BackgroundRepository,
         catMgr: CategoryManager,
         preferredModule: String,
         tags: List<String>,
@@ -263,8 +280,33 @@ object SmartImporter {
         if (bytes.isEmpty()) return
         val ext = fileName.substringAfterLast('.', "").lowercase()
 
-        // 1. PNG -> Character Card
+        // 0. Pure image (JPG/WebP/GIF) -> Background Vault
+        if (isPureBackgroundImageFileName(fileName)) {
+            val (rec, isDup) = bgRepo.importBytes(bytes, fileName)
+            when {
+                isDup -> summary.duplicates++
+                rec != null -> summary.backgrounds++
+                else -> summary.skipped++
+            }
+            return
+        }
+
+        // 1. PNG -> Auto-route: has chara/ccv3 chunk -> Character Card; plain PNG -> Background Vault!
         if (ext == "png" || CharacterCardParser.isPng(bytes)) {
+            val isCharCard = CharacterCardParser.extractJsonFromPng(bytes) != null
+            if (!isCharCard) {
+                if (preferredModule.isNotEmpty() && preferredModule != "themes" && preferredModule != "backgrounds") {
+                    summary.skipped++
+                    return
+                }
+                val (bgRec, bgDup) = bgRepo.importBytes(bytes, fileName)
+                when {
+                    bgDup -> summary.duplicates++
+                    bgRec != null -> summary.backgrounds++
+                    else -> summary.skipped++
+                }
+                return
+            }
             if (preferredModule.isNotEmpty() && preferredModule != "characters") {
                 summary.skipped++
                 return

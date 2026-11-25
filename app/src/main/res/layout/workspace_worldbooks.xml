@@ -131,21 +131,6 @@
             android:textColor="@color/text_muted"
             android:textSize="11sp" />
 
-        <TextView
-            android:id="@+id/btnWbStartCache"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginEnd="6dp"
-            android:background="@drawable/bg_pill_accent"
-            android:clickable="true"
-            android:focusable="true"
-            android:paddingHorizontal="8dp"
-            android:paddingVertical="3dp"
-            android:text="缓存图床"
-            android:textColor="@color/text_muted"
-            android:textSize="11sp"
-            android:visibility="gone" />
-
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnWbScanFolder"
             style="@style/Widget.Material3.Button.TextButton"

@@ -221,12 +221,35 @@ class ResourceDetailActivity : AppCompatActivity() {
             currentCharacter?.let { c ->
                 actions.add(SheetAction("分类标签", "多选 1~3 级分类") { showCharacterCategoryDialog(c) })
                 if (c.urls.isNotEmpty()) {
-                    actions.add(SheetAction("图床换链复活", "保留原 PNG 无损替换失效链接") { runCharacterRepair(c) })
+                    actions.add(SheetAction("缓存图床", "下载该角色卡内的外链图片") {
+                        com.stvault.app.service.VaultDownloadService.start(this, mode = "pending", concurrency = 4)
+                        toast("开始后台缓存图床")
+                    })
+                    actions.add(SheetAction("清理图床", "释放仅由该卡独享的缓存图片") {
+                        lifecycleScope.launch {
+                            val (cnt, freed) = withContext(Dispatchers.IO) { vaultRepo.clearExclusiveCachedFiles("char:${c.id}") }
+                            toast(if (cnt > 0) "已清理 $cnt 张图（释放 ${formatBytes(freed)}）" else "没有可清理的独享图床")
+                            rebuildCurrentList()
+                        }
+                    })
+                    actions.add(SheetAction("换链复活", "保留原 PNG 无损替换失效链接") { runCharacterRepair(c) })
                 }
             }
         } else if (resType == TYPE_WORLDBOOK) {
             currentWorldBook?.let { w ->
                 actions.add(SheetAction("分类标签", "多选 1~3 级分类") { showWorldBookCategoryDialog(w) })
+                if (w.urls.isNotEmpty()) {
+                    actions.add(SheetAction("缓存图床", "下载该世界书内的外链图片") {
+                        com.stvault.app.service.VaultDownloadService.start(this, mode = "pending", concurrency = 4)
+                        toast("开始后台缓存图床")
+                    })
+                    actions.add(SheetAction("清理图床", "释放仅由该书独享的缓存图片") {
+                        lifecycleScope.launch {
+                            val (cnt, freed) = withContext(Dispatchers.IO) { vaultRepo.clearExclusiveCachedFiles("wb:${w.id}") }
+                            toast(if (cnt > 0) "已清理 $cnt 张图（释放 ${formatBytes(freed)}）" else "没有可清理的独享图床")
+                        }
+                    })
+                }
             }
         }
         actions.add(SheetAction("修改版本号", "自定义当前版本的版本标签") { showEditVersionTagDialog() })
@@ -614,11 +637,9 @@ class ResourceDetailActivity : AppCompatActivity() {
                 (parsed?.embeddedHelperScripts?.size ?: 0) + linked.size
             val tabs = mutableListOf(
                 "prompts" to "提示词 ($linkedCount)",
-                "sent" to "发送 ($sentCount)"
+                "sent" to "发送 ($sentCount)",
+                "unlinked" to "未连接 ($unlinkedCount)"
             )
-            if (unlinkedCount > 0) {
-                tabs.add("unlinked" to "未连接 ($unlinkedCount)")
-            }
             if (scriptCount > 0) {
                 tabs.add("scripts" to "脚本 ($scriptCount)")
             }

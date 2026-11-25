@@ -1340,7 +1340,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
             (function() {
               try {
                 function runCollector(includeMessages) {
-                  var exts = /\.(png|json|zip|css|js|html|htm|txt|md|doc|docx|pdf|rtf)(\?|$)/i;
+                  var exts = /\.(png|jpg|jpeg|webp|gif|json|zip|css|js|html|htm|txt|md|doc|docx|pdf|rtf)(\?|$)/i;
                   var layer = document.querySelector('div[class*="chatLayerWrapper_"]');
                   var layerTitle = '';
                   if (layer) {

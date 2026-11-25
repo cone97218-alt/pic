@@ -163,7 +163,21 @@ class ThemePreviewActivity : AppCompatActivity() {
             ): WebResourceResponse? {
                 val url = request?.url?.toString() ?: return null
 
-                // 1. Custom local preview avatars (with exact detected MIME type)
+                // 1. Custom local preview avatars & bound theme background (with exact detected MIME type)
+                if (url.startsWith("${ST_LOCAL_ORIGIN}__preview__/bound_bg")) {
+                    val bgRepo = com.stvault.app.core.BackgroundRepository.getInstance(this@ThemePreviewActivity)
+                    val bgRec = bgRepo.getBoundBackground(currentSourceId)
+                    val bgFile = bgRec?.let { bgRepo.getFile(it) }
+                    if (bgFile != null && bgFile.exists()) {
+                        return try {
+                            val bytes = bgFile.readBytes()
+                            val mime = ImageDownloader.detectImageMime(bytes) ?: "image/png"
+                            WebResourceResponse(mime, null, 200, "OK", mapOf("Access-Control-Allow-Origin" to "*"), ByteArrayInputStream(bytes))
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                }
                 if (url.startsWith("${ST_LOCAL_ORIGIN}__preview__/ai_avatar") && aiAvatarFile.exists()) {
                     return try {
                         val bytes = aiAvatarFile.readBytes()
@@ -579,6 +593,10 @@ class ThemePreviewActivity : AppCompatActivity() {
         val bodyClassAttr = bodyClasses.joinToString(" ")
 
         val stamp = System.currentTimeMillis()
+        val hasBoundBg = com.stvault.app.core.BackgroundRepository.getInstance(this).getBoundBackground(currentSourceId) != null
+        val boundBgCss = if (hasBoundBg) {
+            """#bg1 { background-image: url("__preview__/bound_bg?t=$stamp") !important; background-size: cover !important; background-position: center !important; background-repeat: no-repeat !important; }"""
+        } else ""
         val botAvatar = if (aiAvatarFile.exists()) {
             "__preview__/ai_avatar?t=$stamp"
         } else {
@@ -661,6 +679,7 @@ $safeCustomCss
 </style>
 </head>
 <body class="$bodyClassAttr">
+  <style>$boundBgCss</style>
   <div id="bg1"></div>
   <div id="bg_custom"></div>
 
