@@ -227,6 +227,18 @@ class ResourceDetailActivity : AppCompatActivity() {
         codeEditorLauncher.launch(CodeEditorActivity.createIntent(this, mod, resId, title))
     }
 
+    private fun openSingleItemEditor(
+        module: String,
+        title: String,
+        itemType: String,
+        itemKey: String = "",
+        itemIndex: Int = -1
+    ) {
+        codeEditorLauncher.launch(
+            CodeEditorActivity.createSingleItemIntent(this, module, resId, title, itemType, itemKey, itemIndex)
+        )
+    }
+
     private fun showEditVersionTagDialog() {
         val currentTag = when (resType) {
             TYPE_CHARACTER -> currentCharacter?.versionTag.orEmpty()
@@ -590,46 +602,71 @@ class ResourceDetailActivity : AppCompatActivity() {
             }
             out.add(DetailItem.CharHeader(rec.name, sub, rec.tags.take(6), coverFile))
             if (parsed != null) {
-                if (parsed.description.isNotBlank()) out.add(DetailItem.TextBlock("角色设定", parsed.description, false))
-                if (parsed.personality.isNotBlank()) out.add(DetailItem.TextBlock("性格摘要", parsed.personality, false))
-                if (parsed.scenario.isNotBlank()) out.add(DetailItem.TextBlock("情景设定", parsed.scenario, false))
-                if (parsed.creatorNotes.isNotBlank()) out.add(DetailItem.TextBlock("说明备注", parsed.creatorNotes, false))
-                if (parsed.systemPrompt.isNotBlank()) out.add(DetailItem.TextBlock("系统提示词", parsed.systemPrompt, false))
-                if (parsed.mesExample.isNotBlank()) out.add(DetailItem.TextBlock("对话示例", parsed.mesExample, false))
+                fun editCharField(label: String, key: String) = {
+                    openSingleItemEditor(CodeEditorActivity.MODULE_CHARACTER, label, CodeEditorActivity.ITEM_CHAR_FIELD, itemKey = key)
+                }
+                if (parsed.description.isNotBlank()) out.add(DetailItem.TextBlock("角色设定", parsed.description, false, onEdit = editCharField("角色设定", "description")))
+                if (parsed.personality.isNotBlank()) out.add(DetailItem.TextBlock("性格摘要", parsed.personality, false, onEdit = editCharField("性格摘要", "personality")))
+                if (parsed.scenario.isNotBlank()) out.add(DetailItem.TextBlock("情景设定", parsed.scenario, false, onEdit = editCharField("情景设定", "scenario")))
+                if (parsed.creatorNotes.isNotBlank()) out.add(DetailItem.TextBlock("说明备注", parsed.creatorNotes, false, onEdit = editCharField("说明备注", "creator_notes")))
+                if (parsed.systemPrompt.isNotBlank()) out.add(DetailItem.TextBlock("系统提示词", parsed.systemPrompt, false, onEdit = editCharField("系统提示词", "system_prompt")))
+                if (parsed.mesExample.isNotBlank()) out.add(DetailItem.TextBlock("对话示例", parsed.mesExample, false, onEdit = editCharField("对话示例", "mes_example")))
             }
         } else if (activeTabKey == "greetings" && parsed != null) {
             val allGreetings = listOf("默认开场白" to parsed.firstMes) +
                 parsed.alternateGreetings.mapIndexed { i, g -> "备用开场白 #${i + 1}" to g }
+            val rules = parsed.embeddedRegexScripts.map {
+                Triple(it.findRegex, it.replaceString, it.disabled)
+            }
             out.add(
                 DetailItem.ActionStrip(
                     leftText = "共 ${allGreetings.size} 条开场白",
                     actionLabel = "酒馆渲染预览"
                 ) {
-                    val rules = parsed.embeddedRegexScripts.map {
-                        Triple(it.findRegex, it.replaceString, it.disabled)
-                    }
-                    if (allGreetings.size == 1) {
-                        ComponentPreviewActivity.openCharacterGreeting(
-                            this, rec.id, rec.name, parsed.firstMes, rules
-                        )
-                    } else {
-                        VaultSheets.actionList(
-                            this,
-                            title = "选择要渲染的开场白",
-                            actions = allGreetings.map { (label, text) ->
-                                SheetAction(label, text.take(40).replace('\n', ' ')) {
-                                    ComponentPreviewActivity.openCharacterGreeting(
-                                        this, rec.id, rec.name, text, rules
-                                    )
-                                }
-                            }
-                        )
-                    }
+                    ComponentPreviewActivity.openCharacterGreeting(
+                        this, rec.id, rec.name, parsed.firstMes, rules, allGreetings, 0
+                    )
                 }
             )
-            out.add(DetailItem.TextBlock("默认开场白", parsed.firstMes.ifBlank { "（空）" }, false))
+            out.add(
+                DetailItem.TextBlock(
+                    title = "默认开场白",
+                    body = parsed.firstMes.ifBlank { "（空）" },
+                    compact = false,
+                    defaultPreviewChars = GREETING_PREVIEW_CHARS,
+                    onPreview = {
+                        ComponentPreviewActivity.openCharacterGreeting(
+                            this, rec.id, rec.name, parsed.firstMes, rules, allGreetings, 0
+                        )
+                    },
+                    onEdit = {
+                        openSingleItemEditor(
+                            CodeEditorActivity.MODULE_CHARACTER, "默认开场白",
+                            CodeEditorActivity.ITEM_CHAR_FIELD, itemKey = "first_mes"
+                        )
+                    }
+                )
+            )
             parsed.alternateGreetings.forEachIndexed { idx, g ->
-                out.add(DetailItem.TextBlock("备用开场白 #${idx + 1}", g, false))
+                out.add(
+                    DetailItem.TextBlock(
+                        title = "备用开场白 #${idx + 1}",
+                        body = g,
+                        compact = false,
+                        defaultPreviewChars = GREETING_PREVIEW_CHARS,
+                        onPreview = {
+                            ComponentPreviewActivity.openCharacterGreeting(
+                                this, rec.id, rec.name, g, rules, allGreetings, idx + 1
+                            )
+                        },
+                        onEdit = {
+                            openSingleItemEditor(
+                                CodeEditorActivity.MODULE_CHARACTER, "备用开场白 #${idx + 1}",
+                                CodeEditorActivity.ITEM_CHAR_ALT_GREETING, itemIndex = idx
+                            )
+                        }
+                    )
+                )
             }
         } else if (activeTabKey == "book" && parsed?.embeddedWorldBook != null) {
             val book = parsed.embeddedWorldBook
@@ -647,7 +684,17 @@ class ResourceDetailActivity : AppCompatActivity() {
                 }
             )
             val filtered = filterWorldEntries(book.entries, "all", q)
-            out.addAll(filtered.map { toEntryItem(it) })
+            out.addAll(filtered.map { e ->
+                toEntryItem(e) {
+                    openSingleItemEditor(
+                        CodeEditorActivity.MODULE_CHARACTER,
+                        e.title.ifBlank { "内置世界书条目" },
+                        CodeEditorActivity.ITEM_CHAR_WB_ENTRY,
+                        itemKey = e.title,
+                        itemIndex = e.uid
+                    )
+                }
+            })
         } else if (activeTabKey == "scripts" && parsed != null) {
             if (parsed.embeddedRegexScripts.isNotEmpty()) {
                 out.add(DetailItem.SectionTitle("内嵌正则 (${parsed.embeddedRegexScripts.size})"))
@@ -728,7 +775,17 @@ class ResourceDetailActivity : AppCompatActivity() {
         if (filtered.isEmpty()) {
             out.add(DetailItem.CompactSummary("没有匹配的条目"))
         } else {
-            out.addAll(filtered.map { toEntryItem(it) })
+            out.addAll(filtered.map { e ->
+                toEntryItem(e) {
+                    openSingleItemEditor(
+                        CodeEditorActivity.MODULE_WORLDBOOK,
+                        e.title.ifBlank { "世界书条目" },
+                        CodeEditorActivity.ITEM_WB_ENTRY,
+                        itemKey = e.title,
+                        itemIndex = e.uid
+                    )
+                }
+            })
         }
         return out
     }
@@ -756,7 +813,18 @@ class ResourceDetailActivity : AppCompatActivity() {
                 val dot = if (p.enabled) DOT_GREEN else DOT_GRAY
                 val sub = if (p.isMarker) "#${idx + 1} · ${p.role} · 系统占位" else "#${idx + 1} · ${p.role}"
                 val body = if (p.isMarker && p.content.isBlank()) "系统占位符标记" else p.content.ifBlank { "（空内容）" }
-                out.add(DetailItem.CollapsibleEntry(p.name, sub, body, dot, dimmed = !p.enabled || p.isMarker))
+                val editCb: (() -> Unit)? = if (!p.isMarker) {
+                    {
+                        openSingleItemEditor(
+                            CodeEditorActivity.MODULE_PRESET,
+                            p.name.ifBlank { "提示词 #${idx + 1}" },
+                            CodeEditorActivity.ITEM_PRESET_PROMPT,
+                            itemKey = p.identifier,
+                            itemIndex = idx
+                        )
+                    }
+                } else null
+                out.add(DetailItem.CollapsibleEntry(p.name, sub, body, dot, dimmed = !p.enabled || p.isMarker, onEdit = editCb))
             }
         } else {
             if (parsed.embeddedRegexScripts.isNotEmpty()) {
@@ -824,7 +892,7 @@ class ResourceDetailActivity : AppCompatActivity() {
         }
     }
 
-    private fun toEntryItem(e: ParsedWorldEntry): DetailItem.CollapsibleEntry {
+    private fun toEntryItem(e: ParsedWorldEntry, onEdit: (() -> Unit)? = null): DetailItem.CollapsibleEntry {
         val dot = when {
             !e.enabled -> DOT_GRAY
             e.constant -> DOT_BLUE
@@ -836,7 +904,8 @@ class ResourceDetailActivity : AppCompatActivity() {
             subtitle = keyLine,
             body = e.content.ifBlank { "（空条目）" },
             dotColor = dot,
-            dimmed = !e.enabled
+            dimmed = !e.enabled,
+            onEdit = onEdit
         )
     }
 
@@ -894,14 +963,22 @@ class ResourceDetailActivity : AppCompatActivity() {
         data class CompactSummary(val text: String) : DetailItem()
         data class SectionTitle(val title: String) : DetailItem()
         data class ActionStrip(val leftText: String, val actionLabel: String, val onAction: () -> Unit) : DetailItem()
-        data class TextBlock(val title: String, val body: String, val compact: Boolean) : DetailItem()
+        data class TextBlock(
+            val title: String,
+            val body: String,
+            val compact: Boolean,
+            val defaultPreviewChars: Int? = null,
+            val onPreview: (() -> Unit)? = null,
+            val onEdit: (() -> Unit)? = null
+        ) : DetailItem()
         data class CollapsibleEntry(
             val title: String,
             val subtitle: String,
             val body: String,
             val dotColor: Int,
             val dimmed: Boolean = false,
-            val onPreview: (() -> Unit)? = null
+            val onPreview: (() -> Unit)? = null,
+            val onEdit: (() -> Unit)? = null
         ) : DetailItem()
     }
 
@@ -1070,30 +1147,83 @@ class ResourceDetailActivity : AppCompatActivity() {
                 }
 
                 is DetailItem.TextBlock -> {
+                    val isExpanded = position in expandedPositions
                     val box = LinearLayout(ctx).apply {
                         orientation = LinearLayout.VERTICAL
                         setPadding(dp(if (editorial) 4 else 14), dp(if (editorial) 10 else 12), dp(if (editorial) 4 else 14), dp(if (editorial) 14 else 12))
                     }
-                    box.addView(TextView(ctx).apply {
+                    val titleRow = LinearLayout(ctx).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                    }
+                    titleRow.addView(TextView(ctx).apply {
                         text = item.title
                         setTextColor(col(R.color.text_primary))
                         textSize = if (editorial && !item.compact) 14f else 13f
                         setTypeface(null, Typeface.BOLD)
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                     })
-                    val displayBody = if (item.body.length > MAX_DETAIL_TEXT_CHARS) {
-                        item.body.take(MAX_DETAIL_TEXT_CHARS) + "\n\n……（内容较长，共 ${item.body.length} 字，仅预览前 20,000 字）"
-                    } else item.body
+                    if (item.onPreview != null) {
+                        titleRow.addView(TextView(ctx).apply {
+                            text = "预览"
+                            setTextColor(col(R.color.text_primary))
+                            textSize = 11f
+                            setTypeface(null, Typeface.BOLD)
+                            setBackgroundResource(R.drawable.bg_pill_accent)
+                            setPadding(dp(9), dp(3), dp(9), dp(3))
+                            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                                marginStart = dp(6)
+                            }
+                            setOnClickListener { item.onPreview.invoke() }
+                        })
+                    }
+                    if (item.onEdit != null) {
+                        titleRow.addView(TextView(ctx).apply {
+                            text = "编辑"
+                            setTextColor(col(R.color.text_muted))
+                            textSize = 11f
+                            setBackgroundResource(R.drawable.bg_pill_accent)
+                            setPadding(dp(9), dp(3), dp(9), dp(3))
+                            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                                marginStart = dp(6)
+                            }
+                            setOnClickListener { item.onEdit.invoke() }
+                        })
+                    }
+                    box.addView(titleRow)
+
+                    val previewCap = item.defaultPreviewChars
+                    val canCollapse = previewCap != null && item.body.length > previewCap
+                    val displayBody = when {
+                        canCollapse && !isExpanded -> item.body.take(previewCap!!) + "……"
+                        item.body.length > MAX_DETAIL_TEXT_CHARS ->
+                            item.body.take(MAX_DETAIL_TEXT_CHARS) + "\n\n……（内容较长，共 ${item.body.length} 字，仅预览前 20,000 字）"
+                        else -> item.body
+                    }
                     box.addView(TextView(ctx).apply {
                         text = displayBody
                         setTextColor(col(if (editorial && !item.compact) R.color.text_primary else R.color.text_muted))
                         alpha = if (editorial && !item.compact) 0.86f else 1f
                         textSize = if (editorial && !item.compact) 14f else 12.5f
                         setLineSpacing(dp(if (editorial && !item.compact) 5 else 2).toFloat(), 1f)
-                        if (displayBody.length <= 12_000) setTextIsSelectable(true)
+                        if (displayBody.length <= 12_000 && !canCollapse) setTextIsSelectable(true)
                         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                             topMargin = dp(6)
                         }
                     })
+                    if (canCollapse) {
+                        box.addView(TextView(ctx).apply {
+                            text = if (isExpanded) "收起 ▴" else "展开全文（共 ${item.body.length} 字）▾"
+                            setTextColor(col(R.color.text_muted))
+                            textSize = 11.5f
+                            setPadding(0, dp(6), 0, dp(2))
+                            setOnClickListener {
+                                if (position in expandedPositions) expandedPositions.remove(position)
+                                else expandedPositions.add(position)
+                                notifyItemChanged(position)
+                            }
+                        })
+                    }
                     holder.container.addView(wrapStyle(ctx, box, editorial, dp(10)))
                 }
 
@@ -1137,6 +1267,19 @@ class ResourceDetailActivity : AppCompatActivity() {
                                 marginStart = dp(8)
                             }
                             setOnClickListener { item.onPreview.invoke() }
+                        })
+                    }
+                    if (item.onEdit != null) {
+                        titleRow.addView(TextView(ctx).apply {
+                            text = "编辑"
+                            setTextColor(col(R.color.text_muted))
+                            textSize = 11f
+                            setBackgroundResource(R.drawable.bg_pill_accent)
+                            setPadding(dp(9), dp(3), dp(9), dp(3))
+                            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                                marginStart = dp(6)
+                            }
+                            setOnClickListener { item.onEdit.invoke() }
                         })
                     }
                     box.addView(titleRow)
@@ -1226,6 +1369,7 @@ class ResourceDetailActivity : AppCompatActivity() {
         private val DOT_GREEN = Color.parseColor("#2F7D57")
         private val DOT_GRAY = Color.parseColor("#8E8E98")
         private const val MAX_DETAIL_TEXT_CHARS = 20_000
+        private const val GREETING_PREVIEW_CHARS = 500
 
         fun open(context: Context, type: String, id: String) {
             context.startActivity(Intent(context, ResourceDetailActivity::class.java).apply {

@@ -1,13 +1,19 @@
 package com.stvault.app.ui
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -42,6 +48,12 @@ class TavernBridgeActivity : AppCompatActivity() {
     private var guideExpanded = false
     private var activeLogFilter = "all" // "all" | "overwritten" | "pull" | "push" | "tags"
     private val expandedLogIds = HashSet<String>()
+
+    private val notifPermLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
+            requestBatteryOptimizationIfNeeded()
+            refreshKeepAliveBadge()
+        }
 
     private val exportHelperScriptLauncher =
         registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
@@ -80,6 +92,8 @@ class TavernBridgeActivity : AppCompatActivity() {
         }
 
         binding.btnBridgeClose.setOnClickListener { finish() }
+        binding.btnBridgeKeepAlive.setOnClickListener { triggerKeepAliveSetup() }
+        refreshKeepAliveBadge()
         binding.btnBridgeToggle.setOnClickListener {
             if (bridge.isRunning()) {
                 TavernBridgeService.stop(this)
@@ -140,6 +154,58 @@ class TavernBridgeActivity : AppCompatActivity() {
         lifecycleScope.launch {
             bridge.stateFlow.collectLatest { st ->
                 renderState(st)
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshKeepAliveBadge()
+    }
+
+    private fun isKeepAliveReady(): Boolean {
+        val notifOk = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+        val batteryOk = pm?.isIgnoringBatteryOptimizations(packageName) == true
+        return notifOk && batteryOk
+    }
+
+    private fun refreshKeepAliveBadge() {
+        val ready = isKeepAliveReady()
+        binding.btnBridgeKeepAlive.text = if (ready) "已开启" else "去开启"
+        binding.btnBridgeKeepAlive.setTextColor(
+            if (ready) Color.parseColor("#16A34A") else ContextCompat.getColor(this, R.color.text_primary)
+        )
+    }
+
+    private fun triggerKeepAliveSetup() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        if (!requestBatteryOptimizationIfNeeded()) {
+            toast("后台保活已开启")
+        }
+    }
+
+    private fun requestBatteryOptimizationIfNeeded(): Boolean {
+        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+        if (pm?.isIgnoringBatteryOptimizations(packageName) == true) return false
+        return try {
+            startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:$packageName")
+            })
+            true
+        } catch (_: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                true
+            } catch (_: Exception) {
+                toast("请在系统电池设置中允许酒馆匣后台运行")
+                false
             }
         }
     }

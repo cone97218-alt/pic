@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.os.Bundle
+import android.view.GestureDetector
+import android.view.MotionEvent
 import android.view.View
 import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
@@ -16,14 +18,19 @@ import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.stvault.app.R
 import com.stvault.app.core.ResourceLibraryRepository
 import com.stvault.app.core.VaultRepository
 import com.stvault.app.databinding.ActivityComponentPreviewBinding
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.FileInputStream
+import kotlin.math.abs
 
 /**
  * Sandboxed SillyTavern WebView previewer for:
@@ -44,12 +51,15 @@ class ComponentPreviewActivity : AppCompatActivity() {
     private var scriptCode: String = ""
     private var rawSource: String = ""
     private var greetingText: String = ""
+    private var greetingItems: List<Pair<String, String>> = emptyList()
+    private var greetingIndex: Int = 0
     private var regexListJson: String = ""
     private var charId: String = ""
     private var showingSource: Boolean = false
+    private var sourcePopulated: Boolean = false
     private var previewDark: Boolean = false
 
-    @SuppressLint("SetJavaScriptEnabled")
+    @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityComponentPreviewBinding.inflate(layoutInflater)
@@ -65,7 +75,9 @@ class ComponentPreviewActivity : AppCompatActivity() {
         replaceString = payload?.replaceString ?: ""
         scriptCode = payload?.scriptCode ?: ""
         rawSource = payload?.rawSource ?: ""
-        greetingText = payload?.greetingText ?: ""
+        greetingItems = payload?.greetingItems ?: emptyList()
+        greetingIndex = (payload?.greetingIndex ?: 0).coerceIn(0, (greetingItems.size - 1).coerceAtLeast(0))
+        greetingText = if (greetingItems.isNotEmpty()) greetingItems[greetingIndex].second else (payload?.greetingText ?: "")
         regexListJson = payload?.regexListJson ?: ""
         charId = payload?.charId ?: ""
 
@@ -82,25 +94,22 @@ class ComponentPreviewActivity : AppCompatActivity() {
             renderCurrentMode()
         }
 
-        // Cap displayed source text at 200k chars to keep TextView layout fast for huge scripts
-        val fullSource = rawSource.ifBlank {
-            when (mode) {
-                MODE_REGEX -> "查找正则：\n$findRegex\n\n替换内容：\n$replaceString"
-                MODE_HELPER -> scriptCode
-                else -> greetingText
-            }
-        }
-        binding.tvSourceCode.text = if (fullSource.length > 150_000) {
-            fullSource.take(150_000) + "\n\n...（源码较长，已截断前 150,000 字符）"
-        } else {
-            fullSource
-        }
-
         binding.btnPreviewModeToggle.setOnClickListener {
             showingSource = !showingSource
+            if (showingSource && !sourcePopulated) {
+                populateSourceTextLazy()
+            }
             binding.scrollSourceView.visibility = if (showingSource) View.VISIBLE else View.GONE
             binding.webCompPreview.visibility = if (showingSource) View.GONE else View.VISIBLE
             binding.btnPreviewModeToggle.text = if (showingSource) "渲染" else "源码"
+        }
+
+        if (mode == MODE_GREETING_RENDER && greetingItems.size > 1) {
+            binding.boxGreetingNav.visibility = View.VISIBLE
+            binding.btnGreetingPrev.setOnClickListener { stepGreeting(-1) }
+            binding.btnGreetingNext.setOnClickListener { stepGreeting(1) }
+            binding.tvGreetingIndicator.setOnClickListener { showGreetingPickerSheet() }
+            updateGreetingNavBar()
         }
 
         if (mode == MODE_REGEX) {
@@ -118,6 +127,62 @@ class ComponentPreviewActivity : AppCompatActivity() {
 
         setupWebView()
         renderCurrentMode()
+    }
+
+    private fun populateSourceTextLazy() {
+        sourcePopulated = true
+        val fullSource = rawSource.ifBlank {
+            when (mode) {
+                MODE_REGEX -> "查找正则：\n$findRegex\n\n替换内容：\n$replaceString"
+                MODE_HELPER -> scriptCode
+                else -> greetingText
+            }
+        }
+        binding.tvSourceCode.text = if (fullSource.length > 60_000) {
+            fullSource.take(60_000) + "\n\n...（源码较长，已截断前 60,000 字符）"
+        } else {
+            fullSource
+        }
+    }
+
+    private fun updateGreetingNavBar() {
+        if (greetingItems.size <= 1) return
+        val label = greetingItems[greetingIndex].first
+        binding.tvGreetingIndicator.text = "$label · ${greetingIndex + 1} / ${greetingItems.size} ▾"
+    }
+
+    private fun stepGreeting(delta: Int) {
+        if (greetingItems.size <= 1) return
+        greetingIndex = (greetingIndex + delta + greetingItems.size) % greetingItems.size
+        greetingText = greetingItems[greetingIndex].second
+        sourcePopulated = false
+        if (showingSource) populateSourceTextLazy()
+        updateGreetingNavBar()
+        renderCurrentMode()
+    }
+
+    private fun showGreetingPickerSheet() {
+        if (greetingItems.size <= 1) return
+        VaultSheets.actionList(
+            ctx = this,
+            title = "切换开场白 (${greetingItems.size})",
+            actions = greetingItems.mapIndexed { idx, (label, txt) ->
+                SheetAction(
+                    label = label,
+                    subtitle = txt.take(40).replace('\n', ' '),
+                    checked = (idx == greetingIndex)
+                ) {
+                    if (idx != greetingIndex) {
+                        greetingIndex = idx
+                        greetingText = txt
+                        sourcePopulated = false
+                        if (showingSource) populateSourceTextLazy()
+                        updateGreetingNavBar()
+                        renderCurrentMode()
+                    }
+                }
+            }
+        )
     }
 
     override fun onResume() {
@@ -150,10 +215,38 @@ class ComponentPreviewActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
+    @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
     private fun setupWebView() {
         val web = binding.webCompPreview
         web.setBackgroundColor(ContextCompat.getColor(this, R.color.bg))
+        if (mode == MODE_GREETING_RENDER && greetingItems.size > 1) {
+            val density = resources.displayMetrics.density
+            val minSwipeDist = 64f * density
+            val edgeGuardPx = 24f * density
+            val swipeDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+                override fun onFling(
+                    e1: MotionEvent?,
+                    e2: MotionEvent,
+                    velocityX: Float,
+                    velocityY: Float
+                ): Boolean {
+                    if (greetingItems.size <= 1 || e1 == null) return false
+                    val w = web.width.toFloat()
+                    if (w > 0f && (e1.x < edgeGuardPx || e1.x > w - edgeGuardPx)) return false
+                    val dx = e2.x - e1.x
+                    val dy = e2.y - e1.y
+                    if (abs(dx) > minSwipeDist && abs(dx) > abs(dy) * 1.8f && abs(velocityX) > 250f) {
+                        if (dx < 0f) stepGreeting(1) else stepGreeting(-1)
+                        return true
+                    }
+                    return false
+                }
+            })
+            web.setOnTouchListener { _, event ->
+                swipeDetector.onTouchEvent(event)
+                false
+            }
+        }
         web.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -168,6 +261,14 @@ class ComponentPreviewActivity : AppCompatActivity() {
             override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean = true
         }
         web.webViewClient = object : WebViewClient() {
+            override fun onPageCommitVisible(view: WebView?, url: String?) {
+                binding.pbCompPreviewLoading.visibility = View.GONE
+            }
+
+            override fun onPageFinished(view: WebView?, url: String?) {
+                binding.pbCompPreviewLoading.visibility = View.GONE
+            }
+
             override fun shouldInterceptRequest(
                 view: WebView?,
                 request: WebResourceRequest?
@@ -225,13 +326,21 @@ class ComponentPreviewActivity : AppCompatActivity() {
         binding.webCompPreview.setBackgroundColor(
             android.graphics.Color.parseColor(if (previewDark) "#111114" else "#F7F7F5")
         )
-        val html = when (mode) {
-            MODE_REGEX -> buildRegexPreviewHtml()
-            MODE_HELPER -> buildHelperPreviewHtml()
-            MODE_GREETING_RENDER -> buildGreetingRenderHtml()
-            else -> ""
+        binding.pbCompPreviewLoading.visibility = View.VISIBLE
+        val testInputSnap = if (mode == MODE_REGEX) binding.etTestInput.text?.toString().orEmpty() else ""
+        lifecycleScope.launch {
+            val html = withContext(Dispatchers.Default) {
+                when (mode) {
+                    MODE_REGEX -> buildRegexPreviewHtml(testInputSnap)
+                    MODE_HELPER -> buildHelperPreviewHtml()
+                    MODE_GREETING_RENDER -> buildGreetingRenderHtml()
+                    else -> ""
+                }
+            }
+            if (!isFinishing && !isDestroyed) {
+                binding.webCompPreview.loadDataWithBaseURL(LOCAL_ORIGIN, html, "text/html", "UTF-8", null)
+            }
         }
-        binding.webCompPreview.loadDataWithBaseURL(LOCAL_ORIGIN, html, "text/html", "UTF-8", null)
     }
 
     /**
@@ -268,8 +377,7 @@ class ComponentPreviewActivity : AppCompatActivity() {
         return t to "gm"
     }
 
-    private fun buildRegexPreviewHtml(): String {
-        val testInput = binding.etTestInput.text?.toString().orEmpty()
+    private fun buildRegexPreviewHtml(testInput: String): String {
         val (pattern, flags) = stripRegexSlashes(findRegex)
         val inputJson = JSONObject.quote(testInput)
         val patternJson = JSONObject.quote(pattern)
@@ -300,8 +408,9 @@ class ComponentPreviewActivity : AppCompatActivity() {
                         .replace(/\{\{match\}\}/g, '示例内容')
                         .replace(/\$\d+/g, '示例内容');
                 }
-                // Strip ```html ... ``` wrappers just like SillyTavern
-                output = output.replace(/```html\s*([\s\S]*?)```/gi, '$1');
+                // Strip ``` / ```html / ```... wrappers just like SillyTavern
+                output = output.replace(/```[a-zA-Z0-9_-]*[ \t]*\r?\n?([\s\S]*?)```/g, '$1');
+                output = output.replace(/^\s*```[a-zA-Z0-9_-]*\s*$/gm, '');
                 const target = document.getElementById('st-render-slot');
                 if (target) {
                     target.innerHTML = output;
@@ -382,7 +491,8 @@ class ComponentPreviewActivity : AppCompatActivity() {
                         text = text.replace(re, r.replaceString || '');
                     } catch (e) {}
                 }
-                text = text.replace(/```html\s*([\s\S]*?)```/gi, '$1');
+                text = text.replace(/```[a-zA-Z0-9_-]*[ \t]*\r?\n?([\s\S]*?)```/g, '$1');
+                text = text.replace(/^\s*```[a-zA-Z0-9_-]*\s*$/gm, '');
                 if (!/<(div|style|table|section|details|iframe)/i.test(text)) {
                     text = text
                         .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
@@ -705,6 +815,8 @@ $themeCss
         val scriptCode: String = "",
         val rawSource: String = "",
         val greetingText: String = "",
+        val greetingItems: List<Pair<String, String>> = emptyList(),
+        val greetingIndex: Int = 0,
         val regexListJson: String = "",
         val charId: String = ""
     )
@@ -766,7 +878,9 @@ $themeCss
             charId: String,
             charName: String,
             greeting: String,
-            regexRules: List<Triple<String, String, Boolean>>
+            regexRules: List<Triple<String, String, Boolean>>,
+            allGreetings: List<Pair<String, String>> = emptyList(),
+            initialIndex: Int = 0
         ) {
             val arr = JSONArray()
             for ((find, rep, dis) in regexRules) {
@@ -781,6 +895,8 @@ $themeCss
                 title = charName,
                 charId = charId,
                 greetingText = greeting,
+                greetingItems = allGreetings,
+                greetingIndex = initialIndex,
                 regexListJson = arr.toString()
             )
             ctx.startActivity(Intent(ctx, ComponentPreviewActivity::class.java).apply {

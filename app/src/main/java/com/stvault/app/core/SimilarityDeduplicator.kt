@@ -119,8 +119,29 @@ object SimilarityDeduplicator {
         ctx: Context,
         module: String,
         moduleLabel: String,
-        items: List<DedupCandidate>
+        rawItems: List<DedupCandidate>
     ): List<DuplicateCluster> {
+        if (rawItems.size < 2) return emptyList()
+
+        // Collapse already-merged series (seriesKey shared by >= 2 items) to a single newest
+        // representative so members of a merged series never reappear as duplicates of each other.
+        val seriesCounts = HashMap<String, Int>()
+        for (it in rawItems) {
+            if (it.seriesKey.isNotEmpty()) {
+                seriesCounts[it.seriesKey] = (seriesCounts[it.seriesKey] ?: 0) + 1
+            }
+        }
+        val seenMergedSeries = HashSet<String>()
+        val items = mutableListOf<DedupCandidate>()
+        for (it in rawItems.sortedByDescending { it.timestamp }) {
+            if (it.seriesKey.isNotEmpty() && (seriesCounts[it.seriesKey] ?: 0) >= 2) {
+                if (seenMergedSeries.add(it.seriesKey)) {
+                    items.add(it)
+                }
+            } else {
+                items.add(it)
+            }
+        }
         if (items.size < 2) return emptyList()
 
         val n = items.size

@@ -366,8 +366,16 @@ class ThemePreviewActivity : AppCompatActivity() {
     private fun renderPreview() {
         if (currentRawText.isBlank()) return
         binding.pbPreviewLoading.visibility = View.VISIBLE
-        val html = buildRealSillyTavernHtml(currentTitle, currentRawText)
-        binding.webPreview.loadDataWithBaseURL(ST_LOCAL_ORIGIN, html, "text/html", "UTF-8", null)
+        val titleSnap = currentTitle
+        val rawSnap = currentRawText
+        lifecycleScope.launch {
+            val html = withContext(Dispatchers.Default) {
+                buildRealSillyTavernHtml(titleSnap, rawSnap)
+            }
+            if (!isFinishing && !isDestroyed) {
+                binding.webPreview.loadDataWithBaseURL(ST_LOCAL_ORIGIN, html, "text/html", "UTF-8", null)
+            }
+        }
     }
 
     private fun showPreviewSettingsDialog() {

@@ -51,6 +51,9 @@ class CodeEditorActivity : AppCompatActivity() {
 
     private var module: String = ""
     private var recordId: String = ""
+    private var itemType: String = ""
+    private var itemKey: String = ""
+    private var itemIndex: Int = -1
 
     private var parsedRoot: JSONObject? = null
     private var plainText: String = ""
@@ -85,7 +88,16 @@ class CodeEditorActivity : AppCompatActivity() {
 
         module = intent.getStringExtra(EXTRA_MODULE).orEmpty()
         recordId = intent.getStringExtra(EXTRA_ID).orEmpty()
+        itemType = intent.getStringExtra(EXTRA_ITEM_TYPE).orEmpty()
+        itemKey = intent.getStringExtra(EXTRA_ITEM_KEY).orEmpty()
+        itemIndex = intent.getIntExtra(EXTRA_ITEM_INDEX, -1)
         binding.tvEditorTitle.text = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "编辑" }
+
+        if (itemType.isNotEmpty()) {
+            binding.btnEditorModeToggle.visibility = View.GONE
+            binding.btnEditorSearchToggle.visibility = View.GONE
+            binding.btnEditorFormat.visibility = View.GONE
+        }
 
         binding.btnEditorClose.setOnClickListener { confirmExit() }
         binding.btnEditorModeToggle.setOnClickListener { toggleVisualRawMode() }
@@ -304,6 +316,10 @@ class CodeEditorActivity : AppCompatActivity() {
         val q = q0.lowercase()
         val root = parsedRoot
         try {
+            if (itemType.isNotEmpty()) {
+                buildSingleItemVisual(box, root)
+                return
+            }
             when (module) {
                 MODULE_THEME -> if (root != null) buildThemeVisual(box, root, q) else buildPlainVisual(box, "CSS 样式代码")
                 MODULE_CHARACTER -> if (root != null) buildCharacterVisual(box, root, q) else buildPlainVisual(box, "角色卡内容")
@@ -316,6 +332,132 @@ class CodeEditorActivity : AppCompatActivity() {
             box.removeAllViews()
             buildPlainVisual(box, "内容")
         }
+    }
+
+    private fun buildSingleItemVisual(box: LinearLayout, root: JSONObject?) {
+        when (itemType) {
+            ITEM_CHAR_FIELD -> {
+                if (root == null) { buildPlainVisual(box, binding.tvEditorTitle.text.toString()); return }
+                val target = root.optJSONObject("data") ?: root
+                val key = itemKey
+                val label = binding.tvEditorTitle.text?.toString().orEmpty().ifBlank { key }
+                val isSingle = key == "name"
+                addEntryCard(
+                    box, label, "${target.optString(key, root.optString(key, "")).length} 字", null,
+                    listOf(LazyField(
+                        label,
+                        { target.optString(key, root.optString(key, "")) },
+                        { v -> target.put(key, v); if (root !== target && root.has(key)) root.put(key, v) },
+                        single = isSingle,
+                        minLines = if (isSingle) 1 else 18
+                    )),
+                    expanded = true
+                )
+            }
+            ITEM_CHAR_ALT_GREETING -> {
+                if (root == null) { buildPlainVisual(box, "备用开场白"); return }
+                val target = root.optJSONObject("data") ?: root
+                val alt = target.optJSONArray("alternate_greetings")
+                if (alt == null || itemIndex !in 0 until alt.length()) {
+                    buildPlainRawNotice(box); return
+                }
+                val idx = itemIndex
+                addEntryCard(
+                    box, "备用开场白 #${idx + 1}", "${alt.optString(idx, "").length} 字", null,
+                    listOf(LazyField("开场白", { alt.optString(idx, "") }, { alt.put(idx, it) }, minLines = 18)),
+                    expanded = true
+                )
+            }
+            ITEM_CHAR_WB_ENTRY, ITEM_WB_ENTRY -> {
+                if (root == null) { buildPlainVisual(box, "条目"); return }
+                val container = if (itemType == ITEM_CHAR_WB_ENTRY) {
+                    (root.optJSONObject("data") ?: root).optJSONObject("character_book")
+                } else root
+                val entry = container?.let { findWorldEntryObj(it, itemIndex, itemKey) }
+                if (entry == null) {
+                    buildPlainRawNotice(box); return
+                }
+                val title = entry.optString("comment", entry.optString("name", "")).ifBlank { "条目" }
+                addEntryCard(
+                    box, title, "${entry.optString("content", "").length} 字", null,
+                    listOf(
+                        LazyField("条目名称", { entry.optString("comment", entry.optString("name", "")) }, {
+                            if (entry.has("comment") || !entry.has("name")) entry.put("comment", it.trim()) else entry.put("name", it.trim())
+                        }, single = true),
+                        LazyField("触发关键词（逗号分隔）", {
+                            val a = entry.optJSONArray("key") ?: entry.optJSONArray("keys")
+                            buildString {
+                                if (a != null) for (k in 0 until a.length()) {
+                                    if (isNotEmpty()) append(", ")
+                                    append(a.optString(k, ""))
+                                }
+                            }
+                        }, { s ->
+                            val parts = s.split(",", "，").map { it.trim() }.filter { it.isNotEmpty() }
+                            entry.put(if (entry.has("keys") && !entry.has("key")) "keys" else "key", JSONArray(parts))
+                        }, single = true),
+                        LazyField("正文", { entry.optString("content", "") }, { entry.put("content", it) }, minLines = 16)
+                    ),
+                    expanded = true
+                )
+            }
+            ITEM_PRESET_PROMPT -> {
+                val arr = root?.optJSONArray("prompts")
+                if (arr == null) { buildPlainRawNotice(box); return }
+                var found: JSONObject? = null
+                if (itemKey.isNotEmpty()) {
+                    for (i in 0 until arr.length()) {
+                        val o = arr.optJSONObject(i) ?: continue
+                        if (o.optString("identifier", "") == itemKey) { found = o; break }
+                    }
+                }
+                if (found == null && itemIndex in 0 until arr.length()) {
+                    found = arr.optJSONObject(itemIndex)
+                }
+                val p = found ?: run { buildPlainRawNotice(box); return }
+                val pName = p.optString("name", p.optString("identifier", "提示词"))
+                addEntryCard(
+                    box, pName, "${p.optString("role", "system")} · ${p.optString("content", "").length} 字", null,
+                    listOf(
+                        LazyField("标题", { p.optString("name", "") }, { p.put("name", it.trim()) }, single = true),
+                        LazyField("正文", { p.optString("content", "") }, { p.put("content", it) }, minLines = 18)
+                    ),
+                    expanded = true
+                )
+            }
+            ITEM_THEME_CSS -> {
+                if (root == null) {
+                    buildPlainVisual(box, "自定义 CSS")
+                } else {
+                    val css = root.optString("custom_css", "")
+                    addEntryCard(
+                        box, "自定义 CSS", "${css.length} 字", null,
+                        listOf(LazyField("CSS", { root.optString("custom_css", "") }, { root.put("custom_css", it) }, mono = true, minLines = 20)),
+                        expanded = true
+                    )
+                }
+            }
+            else -> buildPlainVisual(box, "内容")
+        }
+    }
+
+    private fun findWorldEntryObj(container: JSONObject, uid: Int, fallbackTitle: String): JSONObject? {
+        val list = mutableListOf<JSONObject>()
+        container.optJSONObject("entries")?.let { o ->
+            val it = o.keys()
+            while (it.hasNext()) o.optJSONObject(it.next())?.let { e -> list.add(e) }
+        } ?: container.optJSONArray("entries")?.let { a ->
+            for (i in 0 until a.length()) a.optJSONObject(i)?.let { e -> list.add(e) }
+        }
+        if (uid >= 0) {
+            list.firstOrNull { it.optInt("uid", it.optInt("id", -1)) == uid }?.let { return it }
+        }
+        if (fallbackTitle.isNotEmpty()) {
+            list.firstOrNull {
+                it.optString("comment", it.optString("name", "")) == fallbackTitle
+            }?.let { return it }
+        }
+        return if (uid in list.indices) list[uid] else null
     }
 
     private fun buildPlainVisual(box: LinearLayout, title: String) {
@@ -745,8 +887,18 @@ class CodeEditorActivity : AppCompatActivity() {
                     } else {
                         isSingleLine = false
                         minLines = fld.minLines
-                        maxLines = 30
+                        maxLines = if (itemType.isNotEmpty()) 40 else 24
                         gravity = Gravity.TOP or Gravity.START
+                        isVerticalScrollBarEnabled = true
+                        setOnTouchListener { v, event ->
+                            if (v.canScrollVertically(1) || v.canScrollVertically(-1)) {
+                                v.parent?.requestDisallowInterceptTouchEvent(true)
+                                if ((event.action and android.view.MotionEvent.ACTION_MASK) == android.view.MotionEvent.ACTION_UP) {
+                                    v.parent?.requestDisallowInterceptTouchEvent(false)
+                                }
+                            }
+                            false
+                        }
                     }
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -910,12 +1062,22 @@ class CodeEditorActivity : AppCompatActivity() {
         const val EXTRA_MODULE = "module"
         const val EXTRA_ID = "id"
         const val EXTRA_TITLE = "title"
+        const val EXTRA_ITEM_TYPE = "item_type"
+        const val EXTRA_ITEM_KEY = "item_key"
+        const val EXTRA_ITEM_INDEX = "item_index"
 
         const val MODULE_THEME = "theme"
         const val MODULE_CHARACTER = "character"
         const val MODULE_WORLDBOOK = "worldbook"
         const val MODULE_PRESET = "preset"
         const val MODULE_COMPONENT = "component"
+
+        const val ITEM_CHAR_FIELD = "char_field"
+        const val ITEM_CHAR_ALT_GREETING = "char_alt_greeting"
+        const val ITEM_CHAR_WB_ENTRY = "char_wb_entry"
+        const val ITEM_WB_ENTRY = "wb_entry"
+        const val ITEM_PRESET_PROMPT = "preset_prompt"
+        const val ITEM_THEME_CSS = "theme_css"
 
         private const val PAGE_SIZE = 30
         private const val PREVIEW_CHARS = 140
@@ -928,6 +1090,25 @@ class CodeEditorActivity : AppCompatActivity() {
                 putExtra(EXTRA_MODULE, module)
                 putExtra(EXTRA_ID, id)
                 putExtra(EXTRA_TITLE, title)
+            }
+        }
+
+        fun createSingleItemIntent(
+            ctx: Context,
+            module: String,
+            id: String,
+            title: String,
+            itemType: String,
+            itemKey: String = "",
+            itemIndex: Int = -1
+        ): Intent {
+            return Intent(ctx, CodeEditorActivity::class.java).apply {
+                putExtra(EXTRA_MODULE, module)
+                putExtra(EXTRA_ID, id)
+                putExtra(EXTRA_TITLE, title)
+                putExtra(EXTRA_ITEM_TYPE, itemType)
+                putExtra(EXTRA_ITEM_KEY, itemKey)
+                putExtra(EXTRA_ITEM_INDEX, itemIndex)
             }
         }
 

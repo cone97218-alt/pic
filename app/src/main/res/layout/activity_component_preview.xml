@@ -91,6 +91,60 @@
         android:layout_height="1dp"
         android:background="@color/border" />
 
+    <!-- Greeting Switcher Bar (shown for multi-greeting character preview) -->
+    <LinearLayout
+        android:id="@+id/boxGreetingNav"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:background="@color/surface"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="12dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/btnGreetingPrev"
+            android:layout_width="36dp"
+            android:layout_height="30dp"
+            android:background="@drawable/bg_pill_accent"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="‹"
+            android:textColor="@color/text_primary"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvGreetingIndicator"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:ellipsize="end"
+            android:focusable="true"
+            android:gravity="center"
+            android:paddingHorizontal="8dp"
+            android:singleLine="true"
+            android:text="默认开场白 · 1 / 1"
+            android:textColor="@color/text_primary"
+            android:textSize="12.5sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/btnGreetingNext"
+            android:layout_width="36dp"
+            android:layout_height="30dp"
+            android:background="@drawable/bg_pill_accent"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="›"
+            android:textColor="@color/text_primary"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
     <!-- Collapsible Test Input Panel (for Regex testing or Greeting switcher) -->
     <LinearLayout
         android:id="@+id/boxRegexTest"
@@ -157,6 +211,14 @@
             android:id="@+id/webCompPreview"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
+
+        <ProgressBar
+            android:id="@+id/pbCompPreviewLoading"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:layout_gravity="center"
+            android:indeterminateTint="@color/text_muted"
+            android:visibility="gone" />
 
         <ScrollView
             android:id="@+id/scrollSourceView"
