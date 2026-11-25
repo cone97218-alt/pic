@@ -1577,7 +1577,98 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
 
     fun readComponentText(rec: ComponentRecord): String {
         val f = getComponentFile(rec)
-        return if (f.exists()) f.readText(Charsets.UTF_8) else ""
+        if (!f.exists()) return ""
+        val lower = rec.fileName.ifBlank { rec.compFile }.lowercase()
+        if (lower.endsWith(".docx")) {
+            return extractDocxPlainText(f).ifBlank { "Word 文档（${formatBytesSimple(f.length())}），可点击「导出」保存原文件。" }
+        }
+        if (lower.endsWith(".doc") || lower.endsWith(".pdf") || lower.endsWith(".rtf")) {
+            return "文档原件（${formatBytesSimple(f.length())}），请点击「导出」保存后用系统阅读器打开。"
+        }
+        return f.readText(Charsets.UTF_8)
+    }
+
+    private fun extractDocxPlainText(file: File): String {
+        return try {
+            java.util.zip.ZipInputStream(file.inputStream().buffered()).use { zis ->
+                while (true) {
+                    val entry = zis.nextEntry ?: break
+                    if (entry.name == "word/document.xml") {
+                        val xml = zis.readBytes().toString(Charsets.UTF_8)
+                        val text = xml
+                            .replace(Regex("</w:p>"), "\n")
+                            .replace(Regex("<w:br[^>]*/?>"), "\n")
+                            .replace(Regex("<w:tab[^>]*/?>"), "\t")
+                            .replace(Regex("<[^>]+>"), "")
+                            .replace("&amp;", "&")
+                            .replace("&lt;", "<")
+                            .replace("&gt;", ">")
+                            .replace("&quot;", "\"")
+                            .replace("&apos;", "'")
+                            .replace(Regex("\n{3,}"), "\n\n")
+                            .trim()
+                        return text
+                    }
+                    zis.closeEntry()
+                }
+            }
+            ""
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    private fun formatBytesSimple(bytes: Long): String {
+        if (bytes < 1024) return "$bytes B"
+        if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0)
+        return String.format("%.2f MB", bytes / (1024.0 * 1024.0))
+    }
+
+    fun importDocumentBytes(
+        bytes: ByteArray,
+        fileName: String,
+        displayName: String = ""
+    ): Pair<ComponentRecord?, Boolean> {
+        if (bytes.isEmpty()) return null to false
+        val contentHash = sha256Short(bytes)
+        synchronized(lock) {
+            val existing = componentsMap.values.firstOrNull { it.contentHash == contentHash }
+            if (existing != null) return existing to true
+        }
+        val ext = fileName.substringAfterLast('.', "txt").lowercase()
+            .filter { it.isLetterOrDigit() }.ifBlank { "txt" }
+        val id = "comp_$contentHash"
+        val compFileName = "$id.$ext"
+        val file = File(componentsDir, compFileName)
+        file.parentFile?.mkdirs()
+        file.writeBytes(bytes)
+
+        val cleanName = displayName.trim().ifBlank { fileName.substringBeforeLast('.').ifBlank { fileName } }
+        val summary = when (ext) {
+            "docx", "doc" -> "Word 文档 · ${formatBytesSimple(file.length())}"
+            "pdf" -> "PDF 文档 · ${formatBytesSimple(file.length())}"
+            "md" -> "Markdown · ${formatBytesSimple(file.length())}"
+            "rtf" -> "RTF 文档 · ${formatBytesSimple(file.length())}"
+            else -> "文本笔记 · ${bytes.toString(Charsets.UTF_8).length} 字"
+        }
+        val (seriesKey, versionTag) = VersionGrouper.extractSeriesAndVersion(cleanName)
+        val rec = ComponentRecord(
+            id = id,
+            name = cleanName,
+            fileName = fileName,
+            type = "doc",
+            summary = summary,
+            urls = emptyList(),
+            compFile = compFileName,
+            fileSize = file.length(),
+            contentHash = contentHash,
+            seriesKey = seriesKey,
+            versionTag = versionTag,
+            addedAt = System.currentTimeMillis()
+        )
+        synchronized(lock) { componentsMap[id] = rec }
+        saveComponentsIndex()
+        return rec to false
     }
 
     fun searchComponents(query: String, filter: String = "all"): List<ComponentRecord> {

@@ -381,6 +381,15 @@ object ComponentParser {
                 rawContent = trimmed
             )
         }
+        // Plain text / Markdown note
+        if (fileName.endsWith(".txt", ignoreCase = true) || fileName.endsWith(".md", ignoreCase = true)) {
+            return ParsedComponent(
+                name = baseName,
+                type = "doc",
+                summary = "文本笔记 · ${trimmed.length} 字",
+                rawContent = trimmed
+            )
+        }
 
         if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null
         return try {

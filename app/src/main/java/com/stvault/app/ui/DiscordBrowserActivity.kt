@@ -55,6 +55,38 @@ class DiscordBrowserActivity : AppCompatActivity() {
         val authorUid: String = ""
     )
 
+    private data class ScanPayload(
+        val opName: String = "",
+        val opUid: String = "",
+        val selectedText: String = "",
+        val attachments: List<PageAttachment> = emptyList()
+    )
+
+    private data class HoardStatusLookup(
+        val hoardedUrls: Set<String>,
+        val hoardedNames: Set<String>,
+        val bridge: com.stvault.app.core.TavernBridgeManager
+    ) {
+        fun isHoarded(att: PageAttachment): Boolean {
+            val urlKey = normalizeCdnPathKey(att.url)
+            if (urlKey.isNotEmpty() && urlKey in hoardedUrls) return true
+            val fnLow = att.fileName.trim().lowercase()
+            if (fnLow.isNotEmpty() && fnLow in hoardedNames) return true
+            val stem = fnLow.substringBeforeLast('.')
+            if (stem.length >= 2 && stem in hoardedNames) return true
+            return false
+        }
+
+        fun isInstalled(att: PageAttachment): Boolean {
+            val fn = att.fileName.trim()
+            val stem = fn.substringBeforeLast('.')
+            return bridge.isThemeInstalled(stem, fn) ||
+                bridge.isCharacterInstalled(stem, fn) ||
+                bridge.isWorldBookInstalled(stem, fn) ||
+                bridge.isPresetInstalled(stem, fn)
+        }
+    }
+
     @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -350,62 +382,218 @@ class DiscordBrowserActivity : AppCompatActivity() {
 
     private fun scanVisibleAttachments() {
         binding.webDiscord.evaluateJavascript(DOM_SCAN_JS) { rawResult ->
-            val parsed = parseScanResult(rawResult)
-            if (parsed.isEmpty()) {
-                toast("当前屏幕未发现可囤的酒馆附件（滑到附件位置再点囤囤）")
+            val payload = parseScanResult(rawResult)
+            val hasText = payload.selectedText.isNotBlank()
+            val hasAtts = payload.attachments.isNotEmpty()
+            if (!hasText && !hasAtts) {
+                toast("当前屏幕未发现可囤的附件或选中文字")
                 return@evaluateJavascript
             }
-            showHoardPicker(parsed)
+            if (hasText && !hasAtts) {
+                showHoardTextDialog(payload.selectedText, payload.opName, payload.opUid)
+                return@evaluateJavascript
+            }
+            if (hasText && hasAtts) {
+                VaultSheets.actionList(
+                    ctx = this,
+                    title = "选择要囤入的内容",
+                    actions = listOf(
+                        SheetAction("囤入选中文字", payload.selectedText.take(44).replace('\n', ' ')) {
+                            showHoardTextDialog(payload.selectedText, payload.opName, payload.opUid)
+                        },
+                        SheetAction("囤入页面附件 (${payload.attachments.size})", "选择要导入的文件与文档") {
+                            openHoardPickerAsync(payload)
+                        }
+                    )
+                )
+                return@evaluateJavascript
+            }
+            openHoardPickerAsync(payload)
         }
     }
 
-    private fun parseScanResult(raw: String?): List<PageAttachment> {
-        if (raw.isNullOrBlank() || raw == "null") return emptyList()
+    private fun parseScanResult(raw: String?): ScanPayload {
+        if (raw.isNullOrBlank() || raw == "null") return ScanPayload()
         return try {
-            // evaluateJavascript wraps string returns in JSON quotes, so unwrap once
-            val unwrapped = JSONTokener(raw).nextValue() as? String ?: return emptyList()
-            val arr = JSONArray(unwrapped)
-            val list = mutableListOf<PageAttachment>()
-            for (i in 0 until arr.length()) {
-                val obj = arr.optJSONObject(i) ?: continue
-                val url = obj.optString("url").trim()
-                val fn = obj.optString("fileName").trim()
-                val author = obj.optString("author").trim()
-                val authorUid = obj.optString("authorUid").trim()
-                if (url.isNotBlank() && fn.isNotBlank()) {
-                    list.add(PageAttachment(id = "att_$i", url = url, fileName = fn, author = author, authorUid = authorUid))
+            val unwrapped = JSONTokener(raw).nextValue() as? String ?: return ScanPayload()
+            val t = unwrapped.trim()
+            if (t.startsWith("{")) {
+                val root = JSONObject(t)
+                val opObj = root.optJSONObject("op")
+                val opName = opObj?.optString("name", "").orEmpty().trim()
+                val opUid = opObj?.optString("uid", "").orEmpty().trim()
+                val selText = root.optString("selectedText", "").trim()
+                val arr = root.optJSONArray("attachments") ?: JSONArray()
+                val list = mutableListOf<PageAttachment>()
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val url = obj.optString("url").trim()
+                    val fn = obj.optString("fileName").trim()
+                    val author = obj.optString("author").trim()
+                    val authorUid = obj.optString("authorUid").trim()
+                    if (url.isNotBlank() && fn.isNotBlank()) {
+                        list.add(PageAttachment(id = "att_$i", url = url, fileName = fn, author = author, authorUid = authorUid))
+                    }
+                }
+                ScanPayload(opName = opName, opUid = opUid, selectedText = selText, attachments = list)
+            } else {
+                val arr = JSONArray(t)
+                val list = mutableListOf<PageAttachment>()
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val url = obj.optString("url").trim()
+                    val fn = obj.optString("fileName").trim()
+                    val author = obj.optString("author").trim()
+                    val authorUid = obj.optString("authorUid").trim()
+                    if (url.isNotBlank() && fn.isNotBlank()) {
+                        list.add(PageAttachment(id = "att_$i", url = url, fileName = fn, author = author, authorUid = authorUid))
+                    }
+                }
+                ScanPayload(attachments = list)
+            }
+        } catch (_: Exception) {
+            ScanPayload()
+        }
+    }
+
+    private fun buildHoardLookup(): HoardStatusLookup {
+        val prefs = getSharedPreferences("st_inbox_prefs", Context.MODE_PRIVATE)
+        val urlSet = HashSet(prefs.getStringSet("dc_hoarded_url_keys", emptySet()) ?: emptySet())
+        val nameSet = HashSet<String>()
+        val vaultRepo = com.stvault.app.core.VaultRepository.getInstance(this)
+        val libRepo = com.stvault.app.core.ResourceLibraryRepository.getInstance(this)
+        for (s in vaultRepo.getAllSources()) {
+            nameSet.add(s.fileName.trim().lowercase())
+            nameSet.add(s.name.trim().lowercase())
+        }
+        for (c in libRepo.getAllCharacters()) {
+            nameSet.add(c.fileName.trim().lowercase())
+            nameSet.add(c.name.trim().lowercase())
+        }
+        for (w in libRepo.getAllWorldBooks()) {
+            nameSet.add(w.fileName.trim().lowercase())
+            nameSet.add(w.name.trim().lowercase())
+        }
+        for (p in libRepo.getAllPresets()) {
+            nameSet.add(p.fileName.trim().lowercase())
+            nameSet.add(p.name.trim().lowercase())
+        }
+        for (comp in libRepo.getAllComponents()) {
+            nameSet.add(comp.fileName.trim().lowercase())
+            nameSet.add(comp.name.trim().lowercase())
+        }
+        val bridge = com.stvault.app.core.TavernBridgeManager.getInstance(this)
+        return HoardStatusLookup(urlSet, nameSet, bridge)
+    }
+
+    private fun rememberHoardedUrl(url: String) {
+        val key = normalizeCdnPathKey(url)
+        if (key.isEmpty()) return
+        val prefs = getSharedPreferences("st_inbox_prefs", Context.MODE_PRIVATE)
+        val cur = HashSet(prefs.getStringSet("dc_hoarded_url_keys", emptySet()) ?: emptySet())
+        if (cur.add(key)) {
+            if (cur.size > 4000) {
+                val trimmed = cur.toList().takeLast(3500).toSet()
+                prefs.edit().putStringSet("dc_hoarded_url_keys", trimmed).apply()
+            } else {
+                prefs.edit().putStringSet("dc_hoarded_url_keys", cur).apply()
+            }
+        }
+    }
+
+    private fun openHoardPickerAsync(payload: ScanPayload) {
+        lifecycleScope.launch {
+            val lookup = withContext(Dispatchers.IO) { buildHoardLookup() }
+            showHoardPicker(payload, lookup)
+        }
+    }
+
+    private fun showHoardTextDialog(selectedText: String, opName: String, opUid: String) {
+        val firstLine = selectedText.lineSequence().firstOrNull { it.trim().isNotEmpty() }
+            ?.trim()?.take(24).orEmpty()
+        val defaultTitle = firstLine.ifBlank {
+            if (opName.isNotBlank()) "笔记_$opName" else "囤囤笔记_${System.currentTimeMillis() % 10000}"
+        }
+        VaultSheets.input(
+            ctx = this,
+            title = "囤入选中文字（${selectedText.length} 字）",
+            message = "将以文本笔记存入「组件」模块，支持随时查看、编辑与导出。",
+            initialValue = defaultTitle,
+            hint = "输入笔记名称",
+            confirmText = "保存笔记"
+        ) { rawTitle ->
+            val title = rawTitle.trim().ifBlank { defaultTitle }
+            val safeFile = title.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(60) + ".txt"
+            lifecycleScope.launch {
+                val (rec, isDup) = withContext(Dispatchers.IO) {
+                    val libRepo = com.stvault.app.core.ResourceLibraryRepository.getInstance(this@DiscordBrowserActivity)
+                    libRepo.importDocumentBytes(selectedText.toByteArray(Charsets.UTF_8), safeFile, title)
+                }
+                if (isDup) {
+                    toast("该段文字已囤过")
+                } else if (rec != null) {
+                    com.stvault.app.core.AppLogManager.record(
+                        this@DiscordBrowserActivity,
+                        com.stvault.app.core.AppLogManager.CAT_INBOX,
+                        "入库",
+                        title,
+                        detail = "选中文字笔记（${selectedText.length} 字）" + if (opName.isNotBlank()) " · 作者：$opName" else "",
+                        source = "囤囤网页"
+                    )
+                    toast("已囤入笔记：$title")
+                } else {
+                    toast("保存失败")
                 }
             }
-            list
-        } catch (_: Exception) {
-            emptyList()
         }
     }
 
-    private fun showHoardPicker(found: List<PageAttachment>) {
+    private fun showHoardPicker(payload: ScanPayload, lookup: HoardStatusLookup) {
+        val found = payload.attachments
         val byId = found.associateBy { it.id }
+        val hoardedIdSet = HashSet<String>()
         val pickerItems = found.map { att ->
-            val sub = if (att.author.isNotBlank()) "作者：${att.author}" else ""
+            val isHoarded = lookup.isHoarded(att)
+            val isInstalled = lookup.isInstalled(att)
+            if (isHoarded) hoardedIdSet.add(att.id)
+            val statusBadges = buildList {
+                if (isHoarded) add("已囤")
+                if (isInstalled) add("已装")
+            }
+            val sub = buildString {
+                if (statusBadges.isNotEmpty()) append("【${statusBadges.joinToString(" · ")}】")
+                if (att.author.isNotBlank()) {
+                    if (isNotEmpty()) append(" ")
+                    append("作者：${att.author}")
+                }
+            }
             PickerItem(id = att.id, title = att.fileName, subtitle = sub)
         }
-        val allIds = found.map { it.id }.toSet()
         val firstWithAuthor = found.firstOrNull { it.author.isNotBlank() || it.authorUid.isNotBlank() }
 
         val extChips = listOf<Pair<String, (PickerItem) -> Boolean>>(
             "全部" to { true },
+            "未囤" to { it.id !in hoardedIdSet },
             "PNG" to { it.title.endsWith(".png", ignoreCase = true) },
             "JSON" to { it.title.endsWith(".json", ignoreCase = true) },
-            "ZIP" to { it.title.endsWith(".zip", ignoreCase = true) },
-            "其他" to {
-                !it.title.endsWith(".png", ignoreCase = true) &&
-                    !it.title.endsWith(".json", ignoreCase = true) &&
-                    !it.title.endsWith(".zip", ignoreCase = true)
-            }
+            "文档" to {
+                val l = it.title.lowercase()
+                l.endsWith(".docx") || l.endsWith(".doc") || l.endsWith(".pdf") ||
+                    l.endsWith(".md") || l.endsWith(".txt") || l.endsWith(".rtf")
+            },
+            "ZIP" to { it.title.endsWith(".zip", ignoreCase = true) }
         )
+
+        val hoardedCount = hoardedIdSet.size
+        val sheetTitle = if (hoardedCount > 0) {
+            "发现 ${found.size} 个附件（$hoardedCount 个已囤）"
+        } else {
+            "发现 ${found.size} 个附件"
+        }
 
         VaultSheets.multiSelect(
             ctx = this,
-            title = "发现 ${found.size} 个附件",
+            title = sheetTitle,
             items = pickerItems,
             preselectedIds = emptySet(),
             primaryConfirmText = "带标签囤入",
@@ -426,9 +614,13 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 toast("未勾选任何附件")
                 return@multiSelect
             }
-            val refAtt = chosen.firstOrNull { it.author.isNotBlank() || it.authorUid.isNotBlank() } ?: firstWithAuthor
-            val refAuthor = refAtt?.author.orEmpty()
-            val refUid = refAtt?.authorUid.orEmpty()
+            // Prefer verified thread OP for author tag suggestion; fallback to attachment sender
+            val refAuthor = payload.opName.ifBlank {
+                (chosen.firstOrNull { it.author.isNotBlank() } ?: firstWithAuthor)?.author.orEmpty()
+            }
+            val refUid = payload.opUid.ifBlank {
+                (chosen.firstOrNull { it.authorUid.isNotBlank() } ?: firstWithAuthor)?.authorUid.orEmpty()
+            }
             val suggested = suggestAuthorTagPath(refAuthor, refUid)
             VaultSheets.input(
                 ctx = this,
@@ -504,13 +696,14 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 runOnUiThread {
                     binding.tvHoardProgress.text = "正在囤入 (${idx + 1}/${items.size})：${item.fileName}"
                 }
-                InboxManager.downloadAndImportSingleUrl(
+                val ok = InboxManager.downloadAndImportSingleUrl(
                     context = this@DiscordBrowserActivity,
                     url = item.url,
                     fallbackName = item.fileName,
                     extraTags = overrideTags,
                     summary = summary
                 )
+                if (ok) rememberHoardedUrl(item.url)
             }
             withContext(Dispatchers.Main) {
                 setBusy(false)
@@ -571,6 +764,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
         val cmds = loadQuickCommands()
         val active = getActiveQuickCommand()
         val items = mutableListOf(
+            PickerItem(id = "__HOARD_SELECTION__", title = "囤选中文字", subtitle = "把网页中选中的文字存为笔记"),
             PickerItem(id = "__PRESS_ENTER__", title = "发送输入框", subtitle = "发送当前输入框里的已选指令或内容"),
             PickerItem(id = "__SEND_CUSTOM_TEXT__", title = "发送口令", subtitle = "用原生输入框安全发送口令")
         )
@@ -616,6 +810,16 @@ class DiscordBrowserActivity : AppCompatActivity() {
             }
         ) { picked ->
             when (picked.id) {
+                "__HOARD_SELECTION__" -> {
+                    binding.webDiscord.evaluateJavascript(DOM_SCAN_JS) { rawResult ->
+                        val payload = parseScanResult(rawResult)
+                        if (payload.selectedText.isBlank()) {
+                            toast("请先在网页中长按选中要囤入的文字")
+                        } else {
+                            showHoardTextDialog(payload.selectedText, payload.opName, payload.opUid)
+                        }
+                    }
+                }
                 "__PRESS_ENTER__" -> {
                     binding.webDiscord.evaluateJavascript(
                         "(function(){ var l=document.querySelector('div[class*=\"chatLayerWrapper_\"]'); var b=(l&&l.querySelector('div[role=\"textbox\"][contenteditable=\"true\"]'))||document.querySelector('div[role=\"textbox\"][contenteditable=\"true\"]'); if(b) b.focus(); })();"
@@ -889,16 +1093,27 @@ class DiscordBrowserActivity : AppCompatActivity() {
         val fn = url.substringBefore('?').substringAfterLast('/')
         setBusy(true, "正在囤入：$fn")
         lifecycleScope.launch(Dispatchers.IO) {
+            val lookup = buildHoardLookup()
+            val probe = PageAttachment("direct", url, fn, "")
+            val alreadyHoarded = lookup.isHoarded(probe)
+            val alreadyInstalled = lookup.isInstalled(probe)
             val summary = SmartImportSummary()
-            InboxManager.downloadAndImportSingleUrl(
+            val ok = InboxManager.downloadAndImportSingleUrl(
                 context = this@DiscordBrowserActivity,
                 url = url,
                 fallbackName = fn,
                 summary = summary
             )
+            if (ok) rememberHoardedUrl(url)
             withContext(Dispatchers.Main) {
                 setBusy(false)
-                toast(summary.formatMessage())
+                val prefix = when {
+                    alreadyHoarded && alreadyInstalled -> "提示：之前已囤过且酒馆已装 · "
+                    alreadyHoarded -> "提示：之前已囤过 · "
+                    alreadyInstalled -> "提示：酒馆中已装过 · "
+                    else -> ""
+                }
+                toast(prefix + summary.formatMessage())
             }
         }
     }
@@ -942,6 +1157,11 @@ class DiscordBrowserActivity : AppCompatActivity() {
     }
 
     companion object {
+        private fun normalizeCdnPathKey(rawUrl: String): String {
+            val clean = rawUrl.trim().substringBefore('?').substringBefore('#').lowercase()
+            val idx = clean.indexOf("/attachments/")
+            return if (idx >= 0) clean.substring(idx) else clean
+        }
         /**
          * Injects a lightweight mobile-adaptation CSS layer into Discord Web:
          * - Hides the right-hand online members list to free screen space
@@ -1037,7 +1257,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
             (function() {
               try {
                 function runCollector() {
-                  var exts = /\.(png|json|zip|css|js|html|htm|txt)(\?|$)/i;
+                  var exts = /\.(png|json|zip|css|js|html|htm|txt|md|doc|docx|pdf|rtf)(\?|$)/i;
                   var layer = document.querySelector('div[class*="chatLayerWrapper_"]');
                   var layerTitle = '';
                   if (layer) {
@@ -1046,7 +1266,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
                   }
                   var ctxKey = location.pathname + '|' + layerTitle;
                   if (!window.__stHoardPool || window.__stHoardPool.ctxKey !== ctxKey) {
-                    window.__stHoardPool = { ctxKey: ctxKey, order: [], map: {} };
+                    window.__stHoardPool = { ctxKey: ctxKey, order: [], map: {}, op: null };
                   }
                   var pool = window.__stHoardPool;
                   function cleanCdnUrl(raw) {
@@ -1066,30 +1286,36 @@ class DiscordBrowserActivity : AppCompatActivity() {
                     return u;
                   }
                   function readMsgMeta(msgEl) {
-                    if (!msgEl) return { name: '', uid: '', isBot: false };
+                    if (!msgEl) return { name: '', uid: '', isBot: false, verified: false };
                     var cur = msgEl;
                     for (var steps = 0; steps < 10 && cur; steps++) {
                       var u = cur.querySelector('[id^="message-username-"], span[class*="username_"], h3 [class*="username"]');
                       if (u && u.textContent && u.textContent.trim()) {
                         var name = u.textContent.trim().slice(0, 28);
                         var isBot = !!cur.querySelector('span[class*="botTag"], [class*="botText"]');
+                        // Exclude OP tag from being misclassified as a bot tag
+                        if (isBot) {
+                          var bTxt = (cur.querySelector('span[class*="botText"], span[class*="tagText"]')?.textContent || '').trim().toUpperCase();
+                          if (bTxt === 'OP' || bTxt === '楼主') isBot = false;
+                        }
                         var uid = '';
                         var av = cur.querySelector('img[class*="avatar_"], img[src*="/avatars/"]');
                         if (av && av.src) {
                           var m = av.src.match(/\/avatars\/(\d+)\//);
                           if (m && m[1]) uid = m[1];
                         }
-                        return { name: name, uid: uid, isBot: isBot };
+                        return { name: name, uid: uid, isBot: isBot, verified: false };
                       }
                       cur = cur.previousElementSibling;
                     }
-                    return { name: '', uid: '', isBot: false };
+                    return { name: '', uid: '', isBot: false, verified: false };
                   }
                   function findThreadOp() {
                     var root = layer || document;
                     var msgs = root.querySelectorAll('li[id^="chat-messages-"], div[id^="chat-messages-"]');
+                    // 1. Explicit Discord OP / 楼主 badge (100% reliable)
                     for (var i = 0; i < msgs.length; i++) {
-                      var opBadge = msgs[i].querySelector('[class*="opTag"], [class*="ownerIcon"]');
+                      var opBadge = msgs[i].querySelector('[class*="opTag"], [class*="ownerIcon"], [aria-label="OP"], [aria-label="楼主"], [aria-label="Original Poster"]');
                       if (!opBadge) {
                         var tags = msgs[i].querySelectorAll('span[class*="botText"], span[class*="tagText"]');
                         for (var t = 0; t < tags.length; t++) {
@@ -1099,37 +1325,60 @@ class DiscordBrowserActivity : AppCompatActivity() {
                       }
                       if (opBadge) {
                         var opMeta = readMsgMeta(msgs[i]);
-                        if (opMeta.name && !opMeta.isBot) return opMeta;
+                        if (opMeta.name && !opMeta.isBot) {
+                          opMeta.verified = true;
+                          return opMeta;
+                        }
                       }
                     }
+                    // 2. Discord Forum protocol invariant: starter message has messageId === threadId
+                    var segs = location.pathname.split('/').filter(Boolean);
+                    var threadId = segs.length >= 3 ? segs[segs.length - 1] : '';
+                    if (threadId && /^\d{15,22}$/.test(threadId)) {
+                      var starter = root.querySelector('[id="chat-messages-' + threadId + '-' + threadId + '"]') ||
+                        root.querySelector('[class*="firstMessage_"], [class*="starterMessage_"]');
+                      if (starter) {
+                        var stMeta = readMsgMeta(starter);
+                        if (stMeta.name && !stMeta.isBot) {
+                          stMeta.verified = true;
+                          return stMeta;
+                        }
+                      }
+                    }
+                    // 3. Active forum card in background list: ONLY read author slot, never latest replier in footer/message!
                     var activeCard = document.querySelector('li[class*="card_"][class*="isOpen_"], div[class*="mainCard_"][class*="isOpen_"], [class*="card_"][aria-selected="true"]');
                     if (activeCard) {
-                      var cardAuthor = activeCard.querySelector('[class*="author_"] [class*="username"], [class*="userName"], span[class*="username_"]');
-                      if (cardAuthor && cardAuthor.textContent && cardAuthor.textContent.trim()) {
+                      var authorBox = activeCard.querySelector('[class*="author_"], [class*="postAuthor_"]');
+                      var cardAuthor = authorBox ? (authorBox.querySelector('[class*="username"], [class*="userName"]') || authorBox) : null;
+                      if (cardAuthor && !cardAuthor.closest('[class*="footer_"]') && cardAuthor.textContent && cardAuthor.textContent.trim()) {
                         var cUid = '';
-                        var cAv = activeCard.querySelector('img[src*="/avatars/"]');
+                        var cAv = (authorBox || activeCard).querySelector('img[src*="/avatars/"]');
                         if (cAv && cAv.src) {
                           var cm = cAv.src.match(/\/avatars\/(\d+)\//);
                           if (cm && cm[1]) cUid = cm[1];
                         }
-                        return { name: cardAuthor.textContent.trim().slice(0, 28), uid: cUid, isBot: false };
+                        return { name: cardAuthor.textContent.trim().slice(0, 28), uid: cUid, isBot: false, verified: true };
                       }
                     }
+                    // 4. Only check msgs[0] if the thread header/welcome container is actually mounted at the very top
+                    var hasTopHeader = !!root.querySelector('[class*="container_"] h3, [class*="threadStarter"], [class*="firstMessage_"]');
                     var scroller = root.querySelector('div[class*="scroller_"][class*="managedReactiveScroller_"], div[class*="scroller_"]');
-                    var nearTop = !scroller || scroller.scrollTop < 350;
-                    if (nearTop && msgs.length > 0) {
+                    if (hasTopHeader && scroller && scroller.scrollTop < 180 && msgs.length > 0) {
                       var firstMeta = readMsgMeta(msgs[0]);
                       if (firstMeta.name && !firstMeta.isBot) return firstMeta;
                     }
-                    return { name: '', uid: '', isBot: false };
+                    return { name: '', uid: '', isBot: false, verified: false };
                   }
                   var threadOp = findThreadOp();
-                  if (threadOp.name) pool.op = threadOp;
-                  else if (pool.op) threadOp = pool.op;
+                  if (threadOp.name && (threadOp.verified || !pool.op || !pool.op.verified)) {
+                    pool.op = threadOp;
+                  } else if (pool.op) {
+                    threadOp = pool.op;
+                  }
                   function findAuthorInfo(el) {
                     var msg = el.closest('li[id^="chat-messages-"], div[id^="chat-messages-"], [class*="messageListItem"]');
                     var meta = readMsgMeta(msg);
-                    if ((meta.isBot || !meta.name) && threadOp.name) {
+                    if (threadOp && threadOp.name && (meta.isBot || !meta.name || (layer && threadOp.verified))) {
                       return threadOp;
                     }
                     return meta;
@@ -1196,12 +1445,21 @@ class DiscordBrowserActivity : AppCompatActivity() {
                       pushUrl(src, imgs[j]);
                     }
                   }
-                  return pool.order.map(function(k) { return pool.map[k]; });
+                  var selText = '';
+                  try {
+                    var sel = window.getSelection();
+                    if (sel) selText = (sel.toString() || '').trim();
+                  } catch (e) {}
+                  return {
+                    op: pool.op ? { name: pool.op.name || '', uid: pool.op.uid || '' } : null,
+                    selectedText: selText,
+                    attachments: pool.order.map(function(k) { return pool.map[k]; })
+                  };
                 }
                 window.__stCollectIntoPool = runCollector;
                 return JSON.stringify(runCollector());
               } catch (e) {
-                return '[]';
+                return '{}';
               }
             })();
         """.trimIndent()

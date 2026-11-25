@@ -162,7 +162,14 @@ object SmartImporter {
         val catMgr = CategoryManager.getInstance(context)
         val allTags = mergeTags(autoTag, extraTags)
         try {
-            if (fileName.endsWith(".zip", ignoreCase = true) || isZipBytes(bytes)) {
+            if (isDocumentFileName(fileName)) {
+                val (rec, isDup) = libRepo.importDocumentBytes(bytes, fileName)
+                when {
+                    isDup -> summary.duplicates++
+                    rec != null -> summary.components++
+                    else -> summary.skipped++
+                }
+            } else if (fileName.endsWith(".zip", ignoreCase = true) || isZipBytes(bytes)) {
                 ByteArrayInputStream(bytes).use { bis ->
                     importZipStream(bis, vaultRepo, libRepo, catMgr, preferredModule, allTags, summary, onProgress)
                 }
@@ -173,6 +180,11 @@ object SmartImporter {
             summary.skipped++
         }
         return summary
+    }
+
+    private fun isDocumentFileName(fileName: String): Boolean {
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        return ext in setOf("docx", "doc", "pdf", "rtf", "md")
     }
 
     private fun mergeTags(autoTag: String, extraTags: List<String> = emptyList()): List<String> {
@@ -207,7 +219,7 @@ object SmartImporter {
                     continue
                 }
                 val ext = entryName.substringAfterLast('.', "").lowercase()
-                if (ext !in setOf("png", "json", "css", "js", "txt", "html", "htm")) {
+                if (ext !in setOf("png", "json", "css", "js", "txt", "html", "htm", "docx", "doc", "pdf", "md", "rtf")) {
                     zis.closeEntry()
                     continue
                 }
@@ -384,6 +396,13 @@ object SmartImporter {
                 summary.themes++
                 summary.newUrls += themeRes.first
                 resolvedThemeTags.forEach { catMgr.addCategory(CategoryManager.SCOPE_THEMES, it) }
+            }
+        } else if (fileName.endsWith(".txt", ignoreCase = true) && text.trim().isNotEmpty()) {
+            val (rec, isDup) = libRepo.importDocumentBytes(bytes, fileName)
+            when {
+                isDup -> summary.duplicates++
+                rec != null -> summary.components++
+                else -> summary.skipped++
             }
         } else {
             summary.skipped++

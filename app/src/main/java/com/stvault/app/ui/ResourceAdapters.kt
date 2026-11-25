@@ -231,6 +231,7 @@ class ComponentsAdapter(
         val typeLabel = when (c.type) {
             "helper" -> "酒馆助手"
             "qr" -> "QR"
+            "doc" -> "文档"
             else -> "正则"
         }
         b.tvResBadge.text = if (grouped.versionCount > 1) "$typeLabel · ${grouped.versionCount}版" else typeLabel
