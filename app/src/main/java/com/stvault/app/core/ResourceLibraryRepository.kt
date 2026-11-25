@@ -1742,6 +1742,7 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                 "regex" -> list.filter { it.type == "regex" }
                 "helper" -> list.filter { it.type == "helper" }
                 "qr" -> list.filter { it.type == "qr" }
+                "doc" -> list.filter { it.type == "doc" }
                 "global" -> list.filter { it.linkedTargetId.isEmpty() }
                 "linked" -> list.filter { it.linkedTargetId.isNotEmpty() }
                 else -> list

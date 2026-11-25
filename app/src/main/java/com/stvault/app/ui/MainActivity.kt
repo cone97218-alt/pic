@@ -679,7 +679,7 @@ class MainActivity : AppCompatActivity() {
         binding.wsComponents.rvComponents.adapter = componentsAdapter
         buildSimpleChips(
             binding.wsComponents.chipGroupCompFilter,
-            listOf("all" to "全部", "regex" to "正则", "helper" to "酒馆助手", "qr" to "快速回复", "global" to "全局", "linked" to "已关联"),
+            listOf("all" to "全部", "regex" to "正则", "helper" to "酒馆助手", "qr" to "快速回复", "doc" to "文档", "global" to "全局", "linked" to "已关联"),
             activeCompFilter
         ) { key ->
             activeCompFilter = key
@@ -3404,7 +3404,8 @@ class MainActivity : AppCompatActivity() {
                 onTertiary = {
                     pendingExportCompFile = libRepo.getComponentFile(comp)
                     exportCompFileLauncher.launch(comp.fileName)
-                }
+                },
+                copyText = content
             )
         }
     }

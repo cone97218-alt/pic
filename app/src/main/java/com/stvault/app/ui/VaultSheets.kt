@@ -156,7 +156,8 @@ object VaultSheets {
         secondaryText: String? = null,
         onSecondary: (() -> Unit)? = null,
         tertiaryText: String? = null,
-        onTertiary: (() -> Unit)? = null
+        onTertiary: (() -> Unit)? = null,
+        copyText: String? = null
     ) {
         val (sheet, root) = createSheet(ctx)
         val header = LinearLayout(ctx).apply {
@@ -164,6 +165,22 @@ object VaultSheets {
             gravity = Gravity.CENTER_VERTICAL
         }
         header.addView(makeTitle(ctx, title), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        if (!copyText.isNullOrEmpty()) {
+            val btnCopy = android.widget.ImageView(ctx).apply {
+                setImageResource(R.drawable.ic_action_copy)
+                contentDescription = "复制全文"
+                setPadding(dp(ctx, 6), dp(ctx, 6), dp(ctx, 6), dp(ctx, 6))
+                layoutParams = LinearLayout.LayoutParams(dp(ctx, 30), dp(ctx, 30)).apply {
+                    marginEnd = dp(ctx, 2)
+                }
+                setOnClickListener {
+                    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                    cm?.setPrimaryClip(android.content.ClipData.newPlainText(title, copyText))
+                    android.widget.Toast.makeText(ctx, "已复制全文", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+            header.addView(btnCopy)
+        }
         if (tertiaryText != null && onTertiary != null) {
             header.addView(TextView(ctx).apply {
                 text = tertiaryText
