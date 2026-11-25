@@ -62,8 +62,15 @@ class ComponentPreviewActivity : AppCompatActivity() {
     private var showingSource: Boolean = false
     private var sourcePopulated: Boolean = false
     private var previewDark: Boolean = false
+    private data class GreetingThemeBundle(
+        val rootVars: String,
+        val customCss: String,
+        val bodyClassAttr: String,
+        val asyncLinks: String
+    )
+
     private var activeGreetingThemeId: String = ""
-    private var cachedThemeCssPair: Pair<String, String>? = null
+    private var cachedThemeBundlePair: Pair<String, GreetingThemeBundle>? = null
     private var greetingShellLoaded: Boolean = false
     private var renderJob: Job? = null
 
@@ -173,7 +180,7 @@ class ComponentPreviewActivity : AppCompatActivity() {
         if (mode == MODE_GREETING_RENDER && greetingShellLoaded) {
             val quoted = JSONObject.quote(greetingText)
             binding.webCompPreview.evaluateJavascript(
-                "(function(){ if(typeof window.__stRenderGreeting==='function'){ window.__stRenderGreeting($quoted); window.scrollTo(0,0); return 'OK'; } return 'RELOAD'; })();"
+                "(function(){ if(typeof window.__stRenderGreeting==='function'){ window.__stRenderGreeting($quoted); window.scrollTo(0,0); var c=document.getElementById('chat'); if(c) c.scrollTop=0; return 'OK'; } return 'RELOAD'; })();"
             ) { res ->
                 if (res == null || !res.contains("OK")) {
                     renderCurrentMode()
@@ -541,23 +548,40 @@ class ComponentPreviewActivity : AppCompatActivity() {
                         stash.push(m);
                         return tok;
                     });
-                    // 2) Trim structural indentation newlines directly adjacent to block HTML tags
-                    const blockTag = '(?:div|section|article|header|footer|aside|nav|main|details|summary|table|thead|tbody|tfoot|tr|td|th|ul|ol|li|hr|blockquote|h[1-6]|p|iframe)';
-                    s = s.replace(new RegExp('(<\\/?' + blockTag + '\\b[^>]*>)\\s*\\n[ \\t]*', 'gi'), '$1');
-                    s = s.replace(new RegExp('[ \\t]*\\n\\s*(<\\/?' + blockTag + '\\b[^>]*>)', 'gi'), '$1');
-                    // 3) Convert line breaks & inline markdown ONLY in text nodes outside HTML tags
+                    // 2) Walk HTML tags vs text nodes; ONLY convert \n -> <br> outside HTML container blocks (depth === 0)
+                    //    so story paragraphs keep all line breaks while HTML status bars / flex cards stay pixel-perfect!
+                    const containerRe = /^<(\/?)(div|section|article|header|footer|aside|nav|main|details|summary|table|thead|tbody|tfoot|tr|td|th|ul|ol|li|figure|form|blockquote|iframe)\b/i;
                     const parts = s.split(/(<[^>]+>)/g);
-                    for (let i = 0; i < parts.length; i += 2) {
-                        let chunk = parts[i];
-                        if (!chunk) continue;
-                        chunk = chunk
-                            .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-                            .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
-                            .replace(/\n/g, '<br>');
-                        parts[i] = chunk;
+                    let depth = 0;
+                    for (let i = 0; i < parts.length; i++) {
+                        const tok = parts[i];
+                        if (!tok) continue;
+                        if (i % 2 === 1) {
+                            const cm = containerRe.exec(tok);
+                            if (cm) {
+                                const isClose = cm[1] === '/';
+                                const isSelf = /\/\s*>$/.test(tok);
+                                if (!isSelf) {
+                                    if (isClose) depth = Math.max(0, depth - 1);
+                                    else depth++;
+                                }
+                            }
+                        } else if (depth === 0) {
+                            let chunk = tok;
+                            // Trim single boundary newline right next to an adjacent container block
+                            if (i > 0 && /^\s*\n/.test(chunk)) chunk = chunk.replace(/^[ \t]*\n/, '');
+                            if (i < parts.length - 1 && /\n[ \t]*$/.test(chunk)) chunk = chunk.replace(/\n[ \t]*$/, '');
+                            if (chunk) {
+                                chunk = chunk
+                                    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                                    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
+                                    .replace(/\n/g, '<br>');
+                            }
+                            parts[i] = chunk;
+                        }
                     }
                     s = parts.join('');
-                    // 4) Restore protected blocks
+                    // 3) Restore protected blocks
                     for (let k = 0; k < stash.length; k++) {
                         s = s.replace('@@STASH_' + k + '@@', function() { return stash[k]; });
                     }
@@ -600,15 +624,15 @@ class ComponentPreviewActivity : AppCompatActivity() {
         """.trimIndent()
 
         if (renderMode == "theme" && themeId.isNotEmpty()) {
-            val themeCss = extractThemeCssForGreeting(themeId)
-            if (themeCss != null) {
+            val bundle = extractThemeBundleForGreeting(themeId)
+            if (bundle != null) {
                 val hasBoundBg = BackgroundRepository.getInstance(this).getBoundBackground(themeId) != null
                 return wrapInThemedStShell(
                     bodyHtml = """<div id="st-render-slot"></div>""",
                     extraScript = script,
                     charName = titleText,
                     hasAvatar = charId.isNotEmpty(),
-                    themeCss = themeCss,
+                    theme = bundle,
                     hasBoundBg = hasBoundBg
                 )
             }
@@ -621,38 +645,78 @@ class ComponentPreviewActivity : AppCompatActivity() {
         )
     }
 
-    private fun extractThemeCssForGreeting(themeId: String): String? {
-        cachedThemeCssPair?.let { (cachedId, cachedCss) ->
-            if (cachedId == themeId) return cachedCss
+    private fun extractThemeBundleForGreeting(themeId: String): GreetingThemeBundle? {
+        cachedThemeBundlePair?.let { (cachedId, cachedBundle) ->
+            if (cachedId == themeId) return cachedBundle
         }
         return try {
             val (_, raw) = vaultRepo.readSourceRawText(themeId)
             val trimmed = raw.trim()
-            val css = if (trimmed.startsWith("{")) {
-                val obj = JSONObject(trimmed)
-                val sb = StringBuilder(":root {\n")
-                fun putVar(jsonKey: String, cssVar: String) {
-                    val v = obj.optString(jsonKey, "").trim()
-                    if (v.isNotEmpty()) sb.append("  $cssVar: $v;\n")
+            val rootVars = StringBuilder()
+            val bodyClasses = mutableListOf("charlist_grid")
+            var customCss = ""
+            if (trimmed.startsWith("{")) {
+                val json = JSONObject(trimmed)
+                customCss = json.optString("custom_css", "")
+                when (json.optInt("chat_display", 0)) {
+                    1 -> bodyClasses.add("bubblechat")
+                    2 -> bodyClasses.add("documentstyle")
                 }
-                putVar("main_text_color", "--SmartThemeBodyColor")
-                putVar("italics_text_color", "--SmartThemeEmColor")
-                putVar("quote_text_color", "--SmartThemeQuoteColor")
-                putVar("blur_tint_color", "--SmartThemeBlurTintColor")
-                putVar("chat_tint_color", "--SmartThemeChatTintColor")
-                putVar("user_mes_blur_tint_color", "--SmartThemeUserMesBlurTintColor")
-                putVar("bot_mes_blur_tint_color", "--SmartThemeBotMesBlurTintColor")
-                putVar("border_color", "--SmartThemeBorderColor")
-                sb.append("}\n")
-                sb.append(obj.optString("custom_css", ""))
-                sb.toString()
+                when (json.optInt("avatar_style", 0)) {
+                    1 -> bodyClasses.add("big-avatars")
+                    2 -> bodyClasses.add("square-avatars")
+                    3 -> bodyClasses.add("rounded-avatars")
+                }
+                if (json.optBoolean("waifuMode", false)) bodyClasses.add("waifuMode")
+                if (json.optBoolean("noShadows", false)) bodyClasses.add("noShadows")
+                if (json.optBoolean("fast_ui_mode", false)) bodyClasses.add("no-blur")
+                if (json.optBoolean("reduced_motion", false)) bodyClasses.add("reduced-motion")
+                if (json.optBoolean("hideChatAvatars_enabled", false)) bodyClasses.add("hideChatAvatars")
+
+                fun putColor(jsonKey: String, cssVar: String) {
+                    val v = json.optString(jsonKey, "").trim()
+                    if (v.isNotEmpty()) rootVars.append("  $cssVar: $v;\n")
+                }
+                putColor("main_text_color", "--SmartThemeBodyColor")
+                putColor("italics_text_color", "--SmartThemeEmColor")
+                putColor("underline_text_color", "--SmartThemeUnderlineColor")
+                putColor("quote_text_color", "--SmartThemeQuoteColor")
+                putColor("shadow_color", "--SmartThemeShadowColor")
+                putColor("blur_tint_color", "--SmartThemeBlurTintColor")
+                putColor("chat_tint_color", "--SmartThemeChatTintColor")
+                putColor("user_mes_blur_tint_color", "--SmartThemeUserMesBlurTintColor")
+                putColor("bot_mes_blur_tint_color", "--SmartThemeBotMesBlurTintColor")
+                putColor("border_color", "--SmartThemeBorderColor")
+                putColor("fastui_bg_color", "--SmartThemeFastUIBGColor")
+
+                if (json.has("blur_strength")) rootVars.append("  --blurStrength: ${json.optDouble("blur_strength", 10.0)};\n")
+                if (json.has("shadow_width")) rootVars.append("  --shadowWidth: ${json.optDouble("shadow_width", 2.0)};\n")
+                if (json.has("font_scale")) rootVars.append("  --fontScale: ${json.optDouble("font_scale", 1.0)};\n")
+                if (json.has("chat_width")) {
+                    val cw = json.optDouble("chat_width", 50.0)
+                    if (cw > 0) rootVars.append("  --sheldWidth: ${cw}vw;\n")
+                }
             } else {
-                trimmed
+                customCss = trimmed
             }
-            // Strip blocking external @import rules so slow remote font CDNs never stall greeting preview
-            val nonBlocking = css.replace(Regex("@import\\s+url\\([^)]*\\)\\s*;?", RegexOption.IGNORE_CASE), "")
-            cachedThemeCssPair = themeId to nonBlocking
-            nonBlocking
+            val asyncLinks = StringBuilder()
+            val importRe = Regex("""@import\s+(?:url\(\s*)?['"]?(https?://[^)'"\s;]+)['"]?\s*\)?\s*;?""", RegexOption.IGNORE_CASE)
+            val nonBlocking = importRe.replace(customCss) { m ->
+                val importUrl = m.groupValues[1]
+                if (!vaultRepo.isKnownDeadUrl(importUrl)) {
+                    asyncLinks.append("""<link rel="stylesheet" href="${escapeHtml(importUrl)}" media="print" onload="this.media='all'">""" + "\n")
+                }
+                ""
+            }.replace("</style>", "<\\/style>", ignoreCase = true)
+
+            val bundle = GreetingThemeBundle(
+                rootVars = rootVars.toString(),
+                customCss = nonBlocking,
+                bodyClassAttr = bodyClasses.joinToString(" "),
+                asyncLinks = asyncLinks.toString()
+            )
+            cachedThemeBundlePair = themeId to bundle
+            bundle
         } catch (_: Exception) {
             null
         }
@@ -695,7 +759,7 @@ class ComponentPreviewActivity : AppCompatActivity() {
         extraScript: String,
         charName: String,
         hasAvatar: Boolean,
-        themeCss: String,
+        theme: GreetingThemeBundle,
         hasBoundBg: Boolean = false
     ): String {
         val avatarHtml = if (hasAvatar) {
@@ -703,31 +767,40 @@ class ComponentPreviewActivity : AppCompatActivity() {
         } else ""
         val stamp = System.currentTimeMillis()
         val boundBgCss = if (hasBoundBg) {
-            """#bg1 { position: fixed !important; inset: 0 !important; z-index: 0 !important; background-image: url("__preview__/bound_bg?t=$stamp") !important; background-size: cover !important; background-position: center !important; background-repeat: no-repeat !important; pointer-events: none; }"""
+            """#bg1 { background-image: url("__preview__/bound_bg?t=$stamp") !important; background-size: cover !important; background-position: center !important; background-repeat: no-repeat !important; }"""
         } else ""
         return """
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <link rel="stylesheet" href="${LOCAL_ORIGIN}css/fontawesome.min.css" />
 <link rel="stylesheet" href="${LOCAL_ORIGIN}css/solid.min.css" />
 <link rel="stylesheet" href="${LOCAL_ORIGIN}css/brands.min.css" />
 <link rel="stylesheet" href="${LOCAL_ORIGIN}style.css" />
-<style>
-  html, body { margin: 0; padding: 0; min-height: 100vh; }
-  #sheld { position: relative !important; z-index: 1 !important; height: auto !important; min-height: 100vh; width: 100%; }
-  #chat { position: relative !important; height: auto !important; min-height: 100vh; padding: 12px; overflow-y: visible !important; }
-  .mes_text img { max-width: 100%; height: auto; }
+<link rel="stylesheet" href="${LOCAL_ORIGIN}css/st-tailwind.css" />
+<link rel="stylesheet" href="${LOCAL_ORIGIN}css/backgrounds.css" />
+<link rel="stylesheet" href="${LOCAL_ORIGIN}css/toggle-dependent.css" />
+<link rel="stylesheet" href="${LOCAL_ORIGIN}css/mobile-styles.css" />
+${theme.asyncLinks}
+<style id="st-theme-vars">
+:root {
+${theme.rootVars}
+}
+html, body { margin: 0; padding: 0; overflow-x: hidden; }
+#sheld { top: 0 !important; height: 100vh !important; max-height: 100vh !important; }
+#chat { height: 100% !important; max-height: 100% !important; overflow-y: auto !important; padding-bottom: 48px !important; }
+.mes_text img { max-width: 100%; height: auto; }
 </style>
-<style>
-$themeCss
-$boundBgCss
+<style id="custom-css">
+${theme.customCss}
 </style>
 </head>
-<body class="charlist_grid">
+<body class="${theme.bodyClassAttr}">
+  <style>$boundBgCss</style>
   <div id="bg1"></div>
+  <div id="bg_custom"></div>
   <div id="sheld">
     <div id="chat">
       <div class="mes" is_user="false" is_system="false">
