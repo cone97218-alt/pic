@@ -3756,7 +3756,7 @@ class MainActivity : AppCompatActivity() {
             lifecycleScope.launch {
                 val bridge = com.stvault.app.core.TavernBridgeManager.getInstance(this@MainActivity)
                 if (!bridge.stateFlow.value.running) {
-                    bridge.start()
+                    bridge.startServer()
                 }
                 val pushed = withContext(Dispatchers.IO) {
                     var cnt = 0
