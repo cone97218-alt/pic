@@ -135,32 +135,6 @@
             android:textSize="11sp" />
 
         <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnCharScanFolder"
-            style="@style/Widget.Material3.Button.TextButton"
-            android:layout_width="wrap_content"
-            android:layout_height="30dp"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:minWidth="0dp"
-            android:paddingHorizontal="7dp"
-            android:text="目录"
-            android:textColor="@color/text_muted"
-            android:textSize="12sp" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnCharQuickUrl"
-            style="@style/Widget.Material3.Button.TextButton"
-            android:layout_width="wrap_content"
-            android:layout_height="30dp"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:minWidth="0dp"
-            android:paddingHorizontal="7dp"
-            android:text="链接"
-            android:textColor="@color/text_muted"
-            android:textSize="12sp" />
-
-        <com.google.android.material.button.MaterialButton
             android:id="@+id/btnCharQuickImport"
             style="@style/Widget.Material3.Button.TextButton"
             android:layout_width="wrap_content"

@@ -1143,7 +1143,7 @@ class MainActivity : AppCompatActivity() {
 
         if (vaultModeBgs) {
             binding.btnImportInVault.visibility = View.VISIBLE
-            binding.btnImportInVault.text = "+ 导入背景"
+            binding.btnImportInVault.text = "+ 添加"
             binding.btnThemeCatFilter.visibility = View.VISIBLE
             binding.btnThemeCatFilter.text = if (activeBgCategory.isEmpty()) "分类 ▾" else "${activeBgCategory.substringAfterLast('/')} ▾"
             binding.btnThemeBatch.visibility = View.VISIBLE
@@ -1242,18 +1242,20 @@ class MainActivity : AppCompatActivity() {
                 ctx = this,
                 title = "添加角色卡",
                 actions = listOf(
-                    SheetAction("导入角色卡文件", "从本地选择 PNG / JSON 角色卡") {
+                    SheetAction("导入文件", "从本地选择 PNG / JSON 角色卡") {
                         openFileBrowser("characters", FileBrowserActivity.MODE_FILES, "导入角色卡")
                     },
-                    SheetAction("新建空白角色卡", "创建标准 V2 角色卡并直接编辑") {
+                    SheetAction("扫描目录", "批量扫描文件夹中的角色卡") {
+                        openFileBrowser("characters", FileBrowserActivity.MODE_FOLDER, "扫描角色卡目录")
+                    },
+                    SheetAction("链接导入", "粘贴直链导入角色卡") {
+                        showImportCharacterUrlDialog()
+                    },
+                    SheetAction("新建角色卡", "创建标准 V2 空白角色卡并直接编辑") {
                         showCreateNewCharacterDialog()
                     }
                 )
             )
-        }
-        binding.wsCharacters.btnCharQuickUrl.setOnClickListener { showImportCharacterUrlDialog() }
-        binding.wsCharacters.btnCharScanFolder.setOnClickListener {
-            openFileBrowser("characters", FileBrowserActivity.MODE_FOLDER, "扫描角色卡目录")
         }
         // Per-item image caching lives inside each card's action menu and detail view (no permanent top bar clutter)
 
@@ -1267,17 +1269,17 @@ class MainActivity : AppCompatActivity() {
                 ctx = this,
                 title = "添加世界书",
                 actions = listOf(
-                    SheetAction("导入世界书文件", "从本地选择 JSON 世界书") {
+                    SheetAction("导入文件", "从本地选择 JSON 世界书") {
                         openFileBrowser("worldbooks", FileBrowserActivity.MODE_FILES, "导入世界书")
                     },
-                    SheetAction("新建空白世界书", "创建空白世界书并直接编辑") {
+                    SheetAction("扫描目录", "批量扫描文件夹中的世界书") {
+                        openFileBrowser("worldbooks", FileBrowserActivity.MODE_FOLDER, "扫描世界书目录")
+                    },
+                    SheetAction("新建世界书", "创建空白世界书并直接编辑") {
                         showCreateNewWorldBookDialog()
                     }
                 )
             )
-        }
-        binding.wsWorldBooks.btnWbScanFolder.setOnClickListener {
-            openFileBrowser("worldbooks", FileBrowserActivity.MODE_FOLDER, "扫描世界书目录")
         }
         // Per-item image caching lives inside each worldbook's action menu and detail view
 
@@ -1291,17 +1293,17 @@ class MainActivity : AppCompatActivity() {
                 ctx = this,
                 title = "添加预设",
                 actions = listOf(
-                    SheetAction("导入预设文件", "从本地选择 JSON 预设") {
+                    SheetAction("导入文件", "从本地选择 JSON 预设") {
                         openFileBrowser("presets", FileBrowserActivity.MODE_FILES, "导入预设")
                     },
-                    SheetAction("新建空白预设", "创建基础预设模板并直接编辑") {
+                    SheetAction("扫描目录", "批量扫描文件夹中的预设") {
+                        openFileBrowser("presets", FileBrowserActivity.MODE_FOLDER, "扫描预设目录")
+                    },
+                    SheetAction("新建预设", "创建基础预设模板并直接编辑") {
                         showCreateNewPresetDialog()
                     }
                 )
             )
-        }
-        binding.wsPresets.btnPresetScanFolder.setOnClickListener {
-            openFileBrowser("presets", FileBrowserActivity.MODE_FOLDER, "扫描预设目录")
         }
 
         // Workspace 5: Components Listeners
@@ -1314,8 +1316,11 @@ class MainActivity : AppCompatActivity() {
                 ctx = this,
                 title = "添加组件",
                 actions = listOf(
-                    SheetAction("导入组件文件", "正则 / 酒馆助手 / 快速回复 / 文档") {
+                    SheetAction("导入文件", "正则 / 酒馆助手 / 快速回复 / 文档") {
                         openFileBrowser("components", FileBrowserActivity.MODE_FILES, "导入组件")
+                    },
+                    SheetAction("扫描目录", "批量扫描文件夹中的组件") {
+                        openFileBrowser("components", FileBrowserActivity.MODE_FOLDER, "扫描组件目录")
                     },
                     SheetAction("新建文档 / 笔记", "创建纯文本笔记并直接编辑") {
                         showCreateNewComponentDialog("doc")
@@ -1331,9 +1336,6 @@ class MainActivity : AppCompatActivity() {
                     }
                 )
             )
-        }
-        binding.wsComponents.btnCompScanFolder.setOnClickListener {
-            openFileBrowser("components", FileBrowserActivity.MODE_FOLDER, "扫描组件目录")
         }
 
         // Tab 1: Folder Pick, Single File Import & Scan
@@ -1351,10 +1353,13 @@ class MainActivity : AppCompatActivity() {
                     ctx = this,
                     title = "添加美化",
                     actions = listOf(
-                        SheetAction("导入美化文件", "从本地选择 JSON / CSS 美化") {
+                        SheetAction("导入文件", "从本地选择 JSON / CSS 美化") {
                             openFileBrowser("themes", FileBrowserActivity.MODE_FILES, "导入美化文件")
                         },
-                        SheetAction("新建空白美化", "创建标准酒馆美化模板并直接编辑") {
+                        SheetAction("扫描目录", "批量扫描文件夹中的美化") {
+                            openFileBrowser("themes", FileBrowserActivity.MODE_FOLDER, "扫描美化目录")
+                        },
+                        SheetAction("新建美化", "创建标准酒馆美化模板并直接编辑") {
                             showCreateNewThemeDialog()
                         }
                     )
