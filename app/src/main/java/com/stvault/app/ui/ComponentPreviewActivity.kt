@@ -539,13 +539,43 @@ class ComponentPreviewActivity : AppCompatActivity() {
         val script = """
             (function() {
                 const rules = $regexArrStr;
+                let __iframeSeq = 0;
+
+                function scopeFragmentStyle(styleTag) {
+                    return styleTag.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style>)/i, function(_, open, css, close) {
+                        // Scope global body/html/* rules inside regex status-bar fragments so they cannot nuke the ST theme
+                        let scoped = css
+                            .replace(/(^|[},;\n]\s*)(?:html\s*,\s*body|body\s*,\s*html|html|body)(?=[\s{,:>+~])/gi, '$1#st-render-slot')
+                            .replace(/(^|[},;\n]\s*)\*(?=\s*[{,])/g, '$1#st-render-slot *');
+                        return open + scoped + close;
+                    });
+                }
+
+                function buildAutoIframePlaceholder(docHtml, stash) {
+                    const id = 'st-iso-frame-' + (++__iframeSeq);
+                    const idx = stash.length;
+                    stash.push({ type: 'iframe', id: id, html: docHtml });
+                    return '@@STASH_' + idx + '@@';
+                }
+
                 function formatHybridMarkdownHtml(src) {
                     let s = String(src || '').replace(/\r\n/g, '\n');
-                    // 1) Protect <style>, <script>, <pre>, <svg> blocks verbatim
                     const stash = [];
-                    s = s.replace(/<(style|script|pre|svg)\b[^>]*>[\s\S]*?<\/\1>/gi, function(m) {
+                    // 0) Isolate full HTML documents (<!DOCTYPE html>... or <html>...</html>) produced by status-bar regexes
+                    //    into auto-resizing sandboxed iframes (just like SillyTavern / JS-Slash-Runner),
+                    //    so their global CSS/JS can NEVER break the parent SillyTavern theme or background!
+                    s = s.replace(/(?:<!DOCTYPE\s+html[^>]*>\s*)?<html\b[\s\S]*?<\/html>/gi, function(m) {
+                        return buildAutoIframePlaceholder(m, stash);
+                    });
+                    // Also catch stray <body>...</body> documents without <html> wrapper
+                    s = s.replace(/<body\b[^>]*>[\s\S]*?<\/body>/gi, function(m) {
+                        return buildAutoIframePlaceholder('<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>' + m + '</html>', stash);
+                    });
+                    // 1) Protect <style>, <script>, <pre>, <svg> blocks verbatim (scoping global selectors in <style>)
+                    s = s.replace(/<(style|script|pre|svg)\b[^>]*>[\s\S]*?<\/\1>/gi, function(m, tag) {
                         const tok = '@@STASH_' + stash.length + '@@';
-                        stash.push(m);
+                        const val = tag.toLowerCase() === 'style' ? scopeFragmentStyle(m) : m;
+                        stash.push({ type: 'raw', html: val });
                         return tok;
                     });
                     // 2) Walk HTML tags vs text nodes; ONLY convert \n -> <br> outside HTML container blocks (depth === 0)
@@ -568,7 +598,6 @@ class ComponentPreviewActivity : AppCompatActivity() {
                             }
                         } else if (depth === 0) {
                             let chunk = tok;
-                            // Trim single boundary newline right next to an adjacent container block
                             if (i > 0 && /^\s*\n/.test(chunk)) chunk = chunk.replace(/^[ \t]*\n/, '');
                             if (i < parts.length - 1 && /\n[ \t]*$/.test(chunk)) chunk = chunk.replace(/\n[ \t]*$/, '');
                             if (chunk) {
@@ -581,11 +610,49 @@ class ComponentPreviewActivity : AppCompatActivity() {
                         }
                     }
                     s = parts.join('');
-                    // 3) Restore protected blocks
+                    // 3) Restore protected blocks (iframe placeholders become real mount points)
+                    const iframes = [];
                     for (let k = 0; k < stash.length; k++) {
-                        s = s.replace('@@STASH_' + k + '@@', function() { return stash[k]; });
+                        const entry = stash[k];
+                        if (entry.type === 'iframe') {
+                            iframes.push(entry);
+                            s = s.replace('@@STASH_' + k + '@@', '<div class="st-iso-wrap" style="width:100%;margin:8px 0;"><iframe id="' + entry.id + '" sandbox="allow-scripts allow-same-origin" style="width:100%;min-height:120px;border:0;background:transparent;display:block;overflow:hidden;" scrolling="no"></iframe></div>');
+                        } else {
+                            s = s.replace('@@STASH_' + k + '@@', function() { return entry.html; });
+                        }
                     }
-                    return s;
+                    return { html: s, iframes: iframes };
+                }
+
+                function mountIsolatedIframes(iframes) {
+                    if (!iframes || !iframes.length) return;
+                    for (const item of iframes) {
+                        const frame = document.getElementById(item.id);
+                        if (!frame) continue;
+                        frame.onload = function() {
+                            const resize = function() {
+                                try {
+                                    const d = frame.contentDocument || (frame.contentWindow && frame.contentWindow.document);
+                                    if (!d) return;
+                                    const h = Math.max(
+                                        d.body ? d.body.scrollHeight : 0,
+                                        d.documentElement ? d.documentElement.scrollHeight : 0
+                                    );
+                                    if (h > 40) frame.style.height = (h + 12) + 'px';
+                                } catch (e) {}
+                            };
+                            resize();
+                            setTimeout(resize, 180);
+                            setTimeout(resize, 600);
+                            try {
+                                const d = frame.contentDocument;
+                                if (d && d.body && typeof ResizeObserver !== 'undefined') {
+                                    new ResizeObserver(resize).observe(d.body);
+                                }
+                            } catch (e) {}
+                        };
+                        frame.srcdoc = item.html;
+                    }
                 }
 
                 window.__stRenderGreeting = function(rawInput) {
@@ -608,10 +675,11 @@ class ComponentPreviewActivity : AppCompatActivity() {
                     }
                     text = text.replace(/```[a-zA-Z0-9_-]*[ \t]*\r?\n?([\s\S]*?)```/g, '$1');
                     text = text.replace(/^\s*```[a-zA-Z0-9_-]*\s*$/gm, '');
-                    text = formatHybridMarkdownHtml(text);
+                    const rendered = formatHybridMarkdownHtml(text);
                     const target = document.getElementById('st-render-slot');
                     if (target) {
-                        target.innerHTML = text;
+                        target.innerHTML = rendered.html;
+                        mountIsolatedIframes(rendered.iframes);
                         target.querySelectorAll('script').forEach(old => {
                             const s = document.createElement('script');
                             s.textContent = old.textContent;
