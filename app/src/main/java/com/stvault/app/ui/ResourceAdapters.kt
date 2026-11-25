@@ -248,7 +248,8 @@ class ComponentsAdapter(
         } else {
             "全局独立"
         }
-        b.tvResMeta.text = "$linkText · ${c.summary}"
+        val catSuffix = if (c.categories.isNotEmpty()) " · #${c.categories.joinToString(" #")}" else ""
+        b.tvResMeta.text = "$linkText · ${c.summary}$catSuffix"
         b.root.setOnClickListener { if (selectionMode) onToggleSelect(c.id) else onClick(c) }
         b.root.setOnLongClickListener {
             if (selectionMode) onToggleSelect(c.id) else onLongClick(c)

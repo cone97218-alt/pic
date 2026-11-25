@@ -1588,6 +1588,7 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     seriesKey = o.optString("seriesKey", "").ifBlank { autoSeries },
                     seriesName = o.optString("seriesName", ""),
                     versionTag = o.optString("versionTag", "").ifBlank { autoVer },
+                    categories = readJsonStringList(o.optJSONArray("categories")),
                     addedAt = o.optLong("addedAt", 0L)
                 )
                 if (rec.id.isNotEmpty()) componentsMap[rec.id] = rec
@@ -1616,6 +1617,7 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     put("seriesKey", c.seriesKey)
                     if (c.seriesName.isNotEmpty()) put("seriesName", c.seriesName)
                     put("versionTag", c.versionTag)
+                    if (c.categories.isNotEmpty()) put("categories", JSONArray(c.categories))
                     put("addedAt", c.addedAt)
                 })
             }
@@ -1727,7 +1729,12 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         return rec to false
     }
 
-    fun searchComponents(query: String, filter: String = "all"): List<ComponentRecord> {
+    fun searchComponents(
+        query: String,
+        filter: String = "all",
+        categoryFilter: String = "",
+        catMgr: CategoryManager? = null
+    ): List<ComponentRecord> {
         val q = query.trim().lowercase()
         synchronized(lock) {
             var list = componentsMap.values.toList()
@@ -1735,8 +1742,12 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                 list = list.filter {
                     it.name.lowercase().contains(q) ||
                         it.fileName.lowercase().contains(q) ||
-                        it.linkedTargetName.lowercase().contains(q)
+                        it.linkedTargetName.lowercase().contains(q) ||
+                        it.categories.any { c -> c.lowercase().contains(q) }
                 }
+            }
+            if (categoryFilter.isNotBlank() && catMgr != null) {
+                list = list.filter { catMgr.matchesFilter(it.categories, categoryFilter) }
             }
             list = when (filter) {
                 "regex" -> list.filter { it.type == "regex" }
@@ -1749,6 +1760,71 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
             }
             return list.sortedByDescending { it.addedAt }
         }
+    }
+
+    fun setComponentCategories(id: String, categories: List<String>) {
+        val clean = categories.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        synchronized(lock) {
+            val cur = componentsMap[id] ?: return
+            componentsMap[id] = cur.copy(categories = clean)
+        }
+        saveComponentsIndex()
+    }
+
+    fun batchDeltaUpdateComponentCategories(ids: List<String>, added: Set<String>, removed: Set<String>) {
+        if (ids.isEmpty() || (added.isEmpty() && removed.isEmpty())) return
+        var changed = false
+        synchronized(lock) {
+            for (id in ids) {
+                val cur = componentsMap[id] ?: continue
+                val next = (cur.categories.toSet() + added - removed).toList()
+                if (next != cur.categories) {
+                    componentsMap[id] = cur.copy(categories = next)
+                    changed = true
+                }
+            }
+        }
+        if (changed) saveComponentsIndex()
+    }
+
+    fun renameComponentCategoryPrefix(oldPrefix: String, newPrefix: String): Int {
+        if (oldPrefix.isBlank() || newPrefix.isBlank() || oldPrefix == newPrefix) return 0
+        var migrated = 0
+        synchronized(lock) {
+            for ((id, rec) in componentsMap.entries.toList()) {
+                if (rec.categories.isEmpty()) continue
+                val updated = rec.categories.map { cat ->
+                    when {
+                        cat == oldPrefix -> newPrefix
+                        cat.startsWith("$oldPrefix/") -> newPrefix + cat.removePrefix(oldPrefix)
+                        else -> cat
+                    }
+                }.distinct()
+                if (updated != rec.categories) {
+                    componentsMap[id] = rec.copy(categories = updated)
+                    migrated++
+                }
+            }
+        }
+        if (migrated > 0) saveComponentsIndex()
+        return migrated
+    }
+
+    fun removeComponentCategoryPrefix(prefix: String): Int {
+        if (prefix.isBlank()) return 0
+        var cleaned = 0
+        synchronized(lock) {
+            for ((id, rec) in componentsMap.entries.toList()) {
+                if (rec.categories.isEmpty()) continue
+                val updated = rec.categories.filterNot { it == prefix || it.startsWith("$prefix/") }
+                if (updated.size != rec.categories.size) {
+                    componentsMap[id] = rec.copy(categories = updated)
+                    cleaned++
+                }
+            }
+        }
+        if (cleaned > 0) saveComponentsIndex()
+        return cleaned
     }
 
     fun getComponentsLinkedTo(targetType: String, targetId: String): List<ComponentRecord> {

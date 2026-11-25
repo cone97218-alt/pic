@@ -86,6 +86,7 @@ class MainActivity : AppCompatActivity() {
     private var activeBgCategory = ""
     private var activeCharCategory = ""
     private var activeWbCategory = ""
+    private var activeCompCategory = ""
     private var activeThemeTab = "cache"
     private var searchDebounceJob: Job? = null
 
@@ -1210,6 +1211,13 @@ class MainActivity : AppCompatActivity() {
                 activeWbCategory = picked
                 binding.wsWorldBooks.btnWbCatFilter.text = if (picked.isEmpty()) "分类 ▾" else "${picked.substringAfterLast('/')} ▾"
                 refreshWorldBooksList()
+            }
+        }
+        binding.wsComponents.btnCompCatFilter.setOnClickListener {
+            showCategoryFilterPicker(CategoryManager.SCOPE_COMPONENTS, activeCompCategory) { picked ->
+                activeCompCategory = picked
+                binding.wsComponents.btnCompCatFilter.text = if (picked.isEmpty()) "分类 ▾" else "${picked.substringAfterLast('/')} ▾"
+                refreshComponentsList()
             }
         }
         binding.btnThemeCatFilter.setOnClickListener {
@@ -2515,7 +2523,7 @@ class MainActivity : AppCompatActivity() {
         val groupVersions = prefs.getBoolean("group_versions", true)
         lifecycleScope.launch {
             val (grouped, totalRaw) = withContext(Dispatchers.IO) {
-                val list = libRepo.searchComponents(q, activeCompFilter)
+                val list = libRepo.searchComponents(q, activeCompFilter, activeCompCategory, catManager)
                 val g = VersionGrouper.groupBySeries(
                     list, groupVersions, { it.seriesKey }, { it.addedAt }, { it.id },
                     { key -> VersionGrouper.getPreferredVersion(this@MainActivity, "component", key) }
@@ -2601,6 +2609,7 @@ class MainActivity : AppCompatActivity() {
                                     CategoryManager.SCOPE_THEMES -> repo.renameSourceCategoryPrefix(picked.id, newPath)
                                     CategoryManager.SCOPE_WORLDBOOKS -> libRepo.renameWorldBookCategoryPrefix(picked.id, newPath)
                                     CategoryManager.SCOPE_BACKGROUNDS -> bgRepo.renameCategoryPrefix(picked.id, newPath)
+                                    CategoryManager.SCOPE_COMPONENTS -> libRepo.renameComponentCategoryPrefix(picked.id, newPath)
                                     else -> libRepo.renameCharacterCategoryPrefix(picked.id, newPath)
                                 }
                                 if (currentFilter == picked.id || currentFilter.startsWith("${picked.id}/")) {
@@ -2627,6 +2636,7 @@ class MainActivity : AppCompatActivity() {
                                 CategoryManager.SCOPE_THEMES -> repo.removeSourceCategoryPrefix(picked.id)
                                 CategoryManager.SCOPE_WORLDBOOKS -> libRepo.removeWorldBookCategoryPrefix(picked.id)
                                 CategoryManager.SCOPE_BACKGROUNDS -> bgRepo.removeCategoryPrefix(picked.id)
+                                CategoryManager.SCOPE_COMPONENTS -> libRepo.removeComponentCategoryPrefix(picked.id)
                                 else -> libRepo.removeCharacterCategoryPrefix(picked.id)
                             }
                             if (currentFilter == picked.id || currentFilter.startsWith("${picked.id}/")) {
@@ -3265,6 +3275,27 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private fun showComponentCategoryAssignDialog(comp: ComponentRecord) {
+        val allCats = catManager.getCategories(CategoryManager.SCOPE_COMPONENTS)
+        if (allCats.isEmpty()) {
+            showQuickAddCategoryDialog(CategoryManager.SCOPE_COMPONENTS) { showComponentCategoryAssignDialog(comp) }
+            return
+        }
+        val items = allCats.map { PickerItem(it, catManager.formatIndentedLabel(it)) }
+        VaultSheets.multiSelect(
+            ctx = this,
+            title = "组件分类标签",
+            items = items,
+            preselectedIds = comp.categories.toSet(),
+            headerAction = "+ 新建" to { showQuickAddCategoryDialog(CategoryManager.SCOPE_COMPONENTS) { showComponentCategoryAssignDialog(comp) } },
+            primaryConfirmText = "保存"
+        ) { picked ->
+            libRepo.setComponentCategories(comp.id, picked)
+            toast("已更新组件分类")
+            refreshComponentsList()
+        }
+    }
+
     private fun showComponentActionMenu(comp: ComponentRecord) {
         val canPush = comp.type == "regex" || comp.type == "qr"
         val actions = mutableListOf<SheetAction>()
@@ -3282,6 +3313,9 @@ class MainActivity : AppCompatActivity() {
         }
         actions.add(SheetAction("编辑代码", "可视化编辑正则与脚本，或切换源码") {
             CodeEditorActivity.open(this, CodeEditorActivity.MODULE_COMPONENT, comp.id, comp.name)
+        })
+        actions.add(SheetAction("设置分类标签", if (comp.categories.isNotEmpty()) comp.categories.joinToString(" · ") else "多选 1~3 级分类") {
+            showComponentCategoryAssignDialog(comp)
         })
         actions.add(SheetAction("重命名", "修改组件显示名称") {
             showRenameDialog("重命名组件", comp.name) { newName ->
@@ -3613,7 +3647,7 @@ class MainActivity : AppCompatActivity() {
         applyBottomBarVisibility()
         binding.batchActionBar.visibility = View.VISIBLE
         binding.btnBatchCategorize.visibility =
-            if (activeWorkspace == "themes" || activeWorkspace == "characters") View.VISIBLE else View.GONE
+            if (activeWorkspace == "themes" || activeWorkspace == "characters" || activeWorkspace == "components") View.VISIBLE else View.GONE
         binding.btnBatchMergeVersion.visibility = View.VISIBLE
         binding.btnBatchMergeVersion.text = when {
             activeWorkspace == "themes" && vaultModeBgs -> "推酒馆"
@@ -3708,6 +3742,7 @@ class MainActivity : AppCompatActivity() {
         val scope = when {
             isBgBatch -> CategoryManager.SCOPE_BACKGROUNDS
             activeWorkspace == "themes" -> CategoryManager.SCOPE_THEMES
+            activeWorkspace == "components" -> CategoryManager.SCOPE_COMPONENTS
             else -> CategoryManager.SCOPE_CHARACTERS
         }
         val allCats = catManager.getCategories(scope)
@@ -3724,6 +3759,10 @@ class MainActivity : AppCompatActivity() {
             }
             activeWorkspace == "themes" -> {
                 val map = repo.getAllSources().associateBy { it.id }
+                ids.mapNotNull { map[it]?.categories?.toSet() }
+            }
+            activeWorkspace == "components" -> {
+                val map = libRepo.getAllComponents().associateBy { it.id }
                 ids.mapNotNull { map[it]?.categories?.toSet() }
             }
             else -> {
@@ -3775,6 +3814,9 @@ class MainActivity : AppCompatActivity() {
                         cnt++
                     }
                     cnt
+                } else if (activeWorkspace == "components") {
+                    libRepo.batchDeltaUpdateComponentCategories(ids, added, removed)
+                    ids.size
                 } else if (activeWorkspace == "themes") {
                     val fold = prefs.getBoolean("fold_theme_variants", true)
                     val expanded = if (fold) {
