@@ -55,11 +55,19 @@ class DiscordBrowserActivity : AppCompatActivity() {
         val authorUid: String = ""
     )
 
+    private data class PageMessage(
+        val id: String,
+        val author: String,
+        val text: String,
+        val isOp: Boolean = false
+    )
+
     private data class ScanPayload(
         val opName: String = "",
         val opUid: String = "",
         val selectedText: String = "",
-        val attachments: List<PageAttachment> = emptyList()
+        val attachments: List<PageAttachment> = emptyList(),
+        val messages: List<PageMessage> = emptyList()
     )
 
     private data class HoardStatusLookup(
@@ -385,12 +393,17 @@ class DiscordBrowserActivity : AppCompatActivity() {
             val payload = parseScanResult(rawResult)
             val hasText = payload.selectedText.isNotBlank()
             val hasAtts = payload.attachments.isNotEmpty()
-            if (!hasText && !hasAtts) {
-                toast("当前屏幕未发现可囤的附件或选中文字")
+            val hasMsgs = payload.messages.isNotEmpty()
+            if (!hasText && !hasAtts && !hasMsgs) {
+                toast("当前屏幕未发现可囤的附件或文字")
                 return@evaluateJavascript
             }
             if (hasText && !hasAtts) {
                 showHoardTextDialog(payload.selectedText, payload.opName, payload.opUid)
+                return@evaluateJavascript
+            }
+            if (!hasAtts && hasMsgs) {
+                showHoardMessagePicker(payload)
                 return@evaluateJavascript
             }
             if (hasText && hasAtts) {
@@ -403,6 +416,9 @@ class DiscordBrowserActivity : AppCompatActivity() {
                         },
                         SheetAction("囤入页面附件 (${payload.attachments.size})", "选择要导入的文件与文档") {
                             openHoardPickerAsync(payload)
+                        },
+                        SheetAction("囤入楼层文字 (${payload.messages.size})", "按消息楼层勾选长文本，无需拖动选字") {
+                            showHoardMessagePicker(payload)
                         }
                     )
                 )
@@ -435,7 +451,23 @@ class DiscordBrowserActivity : AppCompatActivity() {
                         list.add(PageAttachment(id = "att_$i", url = url, fileName = fn, author = author, authorUid = authorUid))
                     }
                 }
-                ScanPayload(opName = opName, opUid = opUid, selectedText = selText, attachments = list)
+                val msgArr = root.optJSONArray("messages") ?: JSONArray()
+                val msgs = mutableListOf<PageMessage>()
+                for (i in 0 until msgArr.length()) {
+                    val m = msgArr.optJSONObject(i) ?: continue
+                    val mText = m.optString("text", "").trim()
+                    if (mText.length >= 20) {
+                        msgs.add(
+                            PageMessage(
+                                id = m.optString("id", "msg_$i").ifBlank { "msg_$i" },
+                                author = m.optString("author", "").trim(),
+                                text = mText,
+                                isOp = m.optBoolean("isOp", false)
+                            )
+                        )
+                    }
+                }
+                ScanPayload(opName = opName, opUid = opUid, selectedText = selText, attachments = list, messages = msgs)
             } else {
                 val arr = JSONArray(t)
                 val list = mutableListOf<PageAttachment>()
@@ -453,6 +485,54 @@ class DiscordBrowserActivity : AppCompatActivity() {
             }
         } catch (_: Exception) {
             ScanPayload()
+        }
+    }
+
+    private fun showHoardMessagePicker(payload: ScanPayload) {
+        val msgs = payload.messages
+        if (msgs.isEmpty()) {
+            if (payload.selectedText.isNotBlank()) {
+                showHoardTextDialog(payload.selectedText, payload.opName, payload.opUid)
+            } else {
+                toast("当前屏幕未检测到可囤的帖子文字")
+            }
+            return
+        }
+        val byId = msgs.associateBy { it.id }
+        val items = msgs.map { m ->
+            val preview = m.text.take(46).replace('\n', ' ')
+            val tag = if (m.isOp) "楼主 · " else if (m.author.isNotBlank()) "${m.author} · " else ""
+            PickerItem(
+                id = m.id,
+                title = preview,
+                subtitle = "$tag${m.text.length} 字"
+            )
+        }
+        val opIds = msgs.filter { it.isOp }.map { it.id }.toSet()
+        val longIds = msgs.filter { it.text.length >= 200 }.map { it.id }.toSet()
+        val chips = listOf<Pair<String, (PickerItem) -> Boolean>>(
+            "全部" to { true },
+            "仅楼主" to { it.id in opIds },
+            "长文" to { it.id in longIds }
+        )
+        VaultSheets.multiSelect(
+            ctx = this,
+            title = "选择要囤入的楼层文字 (${msgs.size})",
+            items = items,
+            preselectedIds = if (msgs.size == 1) setOf(msgs.first().id) else emptySet(),
+            primaryConfirmText = "囤入文字",
+            showSelectionTools = true,
+            searchHint = "搜索消息内容...",
+            filterChips = chips
+        ) { picked ->
+            val chosen = picked.mapNotNull { byId[it] }
+            if (chosen.isEmpty()) {
+                toast("请先勾选要囤入的楼层")
+                return@multiSelect
+            }
+            val mergedText = chosen.joinToString("\n\n---\n\n") { it.text }
+            val refAuthor = payload.opName.ifBlank { chosen.first().author }
+            showHoardTextDialog(mergedText, refAuthor, payload.opUid)
         }
     }
 
@@ -596,6 +676,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
             title = sheetTitle,
             items = pickerItems,
             preselectedIds = emptySet(),
+            headerAction = if (payload.messages.isNotEmpty()) "囤文字" to { showHoardMessagePicker(payload) } else null,
             primaryConfirmText = "带标签囤入",
             secondaryConfirm = "仅囤入" to { picked ->
                 val chosen = picked.mapNotNull { byId[it] }
@@ -764,7 +845,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
         val cmds = loadQuickCommands()
         val active = getActiveQuickCommand()
         val items = mutableListOf(
-            PickerItem(id = "__HOARD_SELECTION__", title = "囤选中文字", subtitle = "把网页中选中的文字存为笔记"),
+            PickerItem(id = "__HOARD_SELECTION__", title = "囤文字", subtitle = "按楼层一键勾选帖子正文，无需拖动选字"),
             PickerItem(id = "__PRESS_ENTER__", title = "发送输入框", subtitle = "发送当前输入框里的已选指令或内容"),
             PickerItem(id = "__SEND_CUSTOM_TEXT__", title = "发送口令", subtitle = "用原生输入框安全发送口令")
         )
@@ -813,10 +894,10 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 "__HOARD_SELECTION__" -> {
                     binding.webDiscord.evaluateJavascript(DOM_SCAN_JS) { rawResult ->
                         val payload = parseScanResult(rawResult)
-                        if (payload.selectedText.isBlank()) {
-                            toast("请先在网页中长按选中要囤入的文字")
-                        } else {
+                        if (payload.selectedText.isNotBlank()) {
                             showHoardTextDialog(payload.selectedText, payload.opName, payload.opUid)
+                        } else {
+                            showHoardMessagePicker(payload)
                         }
                     }
                 }
@@ -1450,10 +1531,33 @@ class DiscordBrowserActivity : AppCompatActivity() {
                     var sel = window.getSelection();
                     if (sel) selText = (sel.toString() || '').trim();
                   } catch (e) {}
+                  // Collect visible message text blocks for effortless 1-tap text hoarding (no long-press drag!)
+                  var msgNodes = scanRoot.querySelectorAll('li[id^="chat-messages-"], div[id^="chat-messages-"]');
+                  var collectedMsgs = [];
+                  var seenMsgIds = {};
+                  for (var mi = 0; mi < msgNodes.length && collectedMsgs.length < 40; mi++) {
+                    var mn = msgNodes[mi];
+                    var mid = mn.id || ('m_' + mi);
+                    if (seenMsgIds[mid]) continue;
+                    var contentEl = mn.querySelector('div[id^="message-content-"], div[class*="markup_"]');
+                    if (!contentEl) continue;
+                    var mtxt = (contentEl.innerText || contentEl.textContent || '').trim();
+                    if (mtxt.length < 20) continue;
+                    seenMsgIds[mid] = true;
+                    var mMeta = readMsgMeta(mn);
+                    var isOpMsg = !!(pool.op && pool.op.name && mMeta.name && mMeta.name === pool.op.name);
+                    collectedMsgs.push({
+                      id: mid,
+                      author: mMeta.name || '',
+                      text: mtxt.slice(0, 30000),
+                      isOp: isOpMsg
+                    });
+                  }
                   return {
                     op: pool.op ? { name: pool.op.name || '', uid: pool.op.uid || '' } : null,
                     selectedText: selText,
-                    attachments: pool.order.map(function(k) { return pool.map[k]; })
+                    attachments: pool.order.map(function(k) { return pool.map[k]; }),
+                    messages: collectedMsgs
                   };
                 }
                 window.__stCollectIntoPool = runCollector;

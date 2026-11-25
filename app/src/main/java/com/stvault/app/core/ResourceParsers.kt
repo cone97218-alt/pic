@@ -130,7 +130,8 @@ data class ParsedPresetPrompt(
     val role: String,
     val content: String,
     val enabled: Boolean,
-    val isMarker: Boolean
+    val isMarker: Boolean,
+    val linked: Boolean = true
 )
 
 data class ParsedPreset(
@@ -204,12 +205,17 @@ object PresetParser {
                 val id = item.optString("identifier", "")
                 val p = promptMap[id] ?: continue
                 if (seen.add(id)) {
-                    ordered.add(p.copy(enabled = item.optBoolean("enabled", p.enabled)))
+                    ordered.add(p.copy(enabled = item.optBoolean("enabled", p.enabled), linked = true))
                 }
             }
-        }
-        for ((id, p) in promptMap) {
-            if (seen.add(id)) ordered.add(p)
+            // Prompts present in prompts[] but absent from prompt_order are Unlinked (未连接) in SillyTavern
+            for ((id, p) in promptMap) {
+                if (seen.add(id)) ordered.add(p.copy(enabled = false, linked = false))
+            }
+        } else {
+            for ((id, p) in promptMap) {
+                if (seen.add(id)) ordered.add(p.copy(linked = true))
+            }
         }
 
         val temp = if (root.has("temperature")) root.optDouble("temperature") else null

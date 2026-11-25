@@ -124,7 +124,19 @@ class ResourceDetailActivity : AppCompatActivity() {
         resType = intent.getStringExtra(EXTRA_TYPE) ?: ""
         resId = intent.getStringExtra(EXTRA_ID) ?: ""
 
-        detailAdapter = DetailItemsAdapter(editorialStyle)
+        detailAdapter = DetailItemsAdapter(editorialStyle) { raw, onDone ->
+            lifecycleScope.launch {
+                val res = withContext(Dispatchers.IO) {
+                    com.stvault.app.core.TextTranslator.translateToZh(raw)
+                }
+                res.onSuccess { translated ->
+                    onDone(translated)
+                }.onFailure { err ->
+                    toast("翻译失败：${err.message ?: "请稍后重试"}")
+                    onDone(null)
+                }
+            }
+        }
         binding.rvDetail.layoutManager = LinearLayoutManager(this)
         binding.rvDetail.setHasFixedSize(false)
         binding.rvDetail.adapter = detailAdapter
@@ -595,21 +607,25 @@ class ResourceDetailActivity : AppCompatActivity() {
                 }
             )
 
-            val promptCount = parsed?.prompts?.size ?: 0
+            val linkedCount = parsed?.prompts?.count { it.linked } ?: 0
+            val unlinkedCount = parsed?.prompts?.count { !it.linked } ?: 0
             val sentCount = parsed?.let { computeSentPrompts(it).size } ?: 0
             val scriptCount = (parsed?.embeddedRegexScripts?.size ?: 0) +
                 (parsed?.embeddedHelperScripts?.size ?: 0) + linked.size
             val tabs = mutableListOf(
-                "prompts" to "提示词 ($promptCount)",
+                "prompts" to "提示词 ($linkedCount)",
                 "sent" to "发送预览 ($sentCount)"
             )
+            if (unlinkedCount > 0) {
+                tabs.add("unlinked" to "未连接 ($unlinkedCount)")
+            }
             if (scriptCount > 0) {
                 tabs.add("scripts" to "正则与脚本 ($scriptCount)")
             }
             activeTabKey = "prompts"
             setupHeaderTabs(tabs, activeTabKey) { key ->
                 activeTabKey = key
-                binding.detailSearchBox.visibility = if (key == "prompts" || key == "sent") View.VISIBLE else View.GONE
+                binding.detailSearchBox.visibility = if (key == "prompts" || key == "sent" || key == "unlinked") View.VISIBLE else View.GONE
                 rebuildCurrentList()
             }
             binding.detailSearchBox.visibility = View.VISIBLE
@@ -857,19 +873,20 @@ class ResourceDetailActivity : AppCompatActivity() {
         }
 
         if (activeTabKey == "prompts") {
+            val linkedPrompts = parsed.prompts.filter { it.linked }
             val groupById = parsed.promptGroups.associateBy { it.id }
             val hasGroups = groupById.isNotEmpty() && parsed.promptGroupMap.isNotEmpty()
             if (hasGroups) {
-                out.add(DetailItem.CompactSummary("已识别预设分组（${parsed.promptGroups.size} 组）"))
+                out.add(DetailItem.CompactSummary("已连接 ${linkedPrompts.size} 条 · 分组 ${parsed.promptGroups.size} 组"))
                 val membersByGroup = LinkedHashMap<String, MutableList<Pair<Int, com.stvault.app.core.ParsedPresetPrompt>>>()
-                parsed.prompts.forEachIndexed { idx, p ->
+                linkedPrompts.forEachIndexed { idx, p ->
                     val gid = parsed.promptGroupMap[p.identifier]
                     if (gid != null && gid in groupById) {
                         membersByGroup.getOrPut(gid) { mutableListOf() }.add(idx to p)
                     }
                 }
                 val emittedGroups = HashSet<String>()
-                parsed.prompts.forEachIndexed { idx, p ->
+                linkedPrompts.forEachIndexed { idx, p ->
                     val gid = parsed.promptGroupMap[p.identifier]
                     if (gid != null && gid in groupById) {
                         if (!emittedGroups.add(gid)) return@forEachIndexed
@@ -908,11 +925,45 @@ class ResourceDetailActivity : AppCompatActivity() {
                     }
                 }
             } else {
-                val list = if (q.isEmpty()) parsed.prompts else parsed.prompts.filter {
+                val list = if (q.isEmpty()) linkedPrompts else linkedPrompts.filter {
                     it.name.lowercase().contains(q) || it.content.lowercase().contains(q)
                 }
                 list.forEachIndexed { idx, p ->
                     out.add(buildPresetPromptItem(idx, p, groupEnabled = true))
+                }
+            }
+        } else if (activeTabKey == "unlinked") {
+            val unlinkedPrompts = parsed.prompts.filter { !it.linked }
+            out.add(DetailItem.CompactSummary("未连接条目（${unlinkedPrompts.size} 条）不在酒馆发送队列中，不会随对话发送"))
+            val list = if (q.isEmpty()) unlinkedPrompts else unlinkedPrompts.filter {
+                it.name.lowercase().contains(q) || it.content.lowercase().contains(q)
+            }
+            if (list.isEmpty()) {
+                out.add(DetailItem.CompactSummary("没有匹配的未连接条目"))
+            } else {
+                list.forEachIndexed { idx, p ->
+                    val editCb: (() -> Unit)? = if (!p.isMarker) {
+                        {
+                            openSingleItemEditor(
+                                CodeEditorActivity.MODULE_PRESET,
+                                p.name.ifBlank { "未连接条目 #${idx + 1}" },
+                                CodeEditorActivity.ITEM_PRESET_PROMPT,
+                                itemKey = p.identifier,
+                                itemIndex = idx
+                            )
+                        }
+                    } else null
+                    out.add(
+                        DetailItem.CollapsibleEntry(
+                            title = p.name.ifBlank { p.identifier },
+                            subtitle = "未连接 · ${p.role} · ${p.content.length} 字",
+                            body = p.content.ifBlank { "（空内容）" },
+                            dotColor = DOT_GRAY,
+                            dimmed = true,
+                            onEdit = editCb,
+                            entryKey = p.identifier
+                        )
+                    )
                 }
             }
         } else if (activeTabKey == "sent") {
@@ -1135,7 +1186,7 @@ class ResourceDetailActivity : AppCompatActivity() {
     private fun computeSentPrompts(parsed: ParsedPreset): List<com.stvault.app.core.ParsedPresetPrompt> {
         val groupEnabledMap = parsed.promptGroups.associate { it.id to it.enabled }
         return parsed.prompts.filter { p ->
-            if (!p.enabled) return@filter false
+            if (!p.linked || !p.enabled) return@filter false
             val gid = parsed.promptGroupMap[p.identifier]
             if (gid != null && groupEnabledMap[gid] == false) return@filter false
             p.isMarker || p.content.isNotBlank()
@@ -1280,19 +1331,84 @@ class ResourceDetailActivity : AppCompatActivity() {
     }
 
     private class DetailItemsAdapter(
-        private val editorial: Boolean
+        private val editorial: Boolean,
+        private val onTranslate: (String, (String?) -> Unit) -> Unit
     ) : RecyclerView.Adapter<DetailItemsAdapter.VH>() {
 
         private var items: List<DetailItem> = emptyList()
         private val expandedPositions = HashSet<Int>()
+        private val translatedBodies = HashMap<Int, String>()
+        private val showingTranslated = HashSet<Int>()
+        private val translatingPos = HashSet<Int>()
 
         fun submitList(list: List<DetailItem>, preExpandedPos: Int? = null) {
             items = list
             expandedPositions.clear()
+            translatedBodies.clear()
+            showingTranslated.clear()
+            translatingPos.clear()
             if (preExpandedPos != null && preExpandedPos in list.indices) {
                 expandedPositions.add(preExpandedPos)
             }
             notifyDataSetChanged()
+        }
+
+        private fun triggerTranslate(pos: Int, rawText: String) {
+            if (pos in translatingPos) return
+            if (pos in showingTranslated) {
+                showingTranslated.remove(pos)
+                notifyItemChanged(pos)
+                return
+            }
+            val cached = translatedBodies[pos] ?: com.stvault.app.core.TextTranslator.getCached(rawText)
+            if (cached != null) {
+                translatedBodies[pos] = cached
+                showingTranslated.add(pos)
+                notifyItemChanged(pos)
+                return
+            }
+            translatingPos.add(pos)
+            notifyItemChanged(pos)
+            onTranslate(rawText) { res ->
+                translatingPos.remove(pos)
+                if (!res.isNullOrBlank()) {
+                    translatedBodies[pos] = res
+                    showingTranslated.add(pos)
+                }
+                if (pos in items.indices) notifyItemChanged(pos)
+            }
+        }
+
+        private fun addActionBar(
+            ctx: Context,
+            parent: LinearLayout,
+            actions: List<Pair<String, () -> Unit>>,
+            startMarginPx: Int = 0
+        ) {
+            if (actions.isEmpty()) return
+            val d = ctx.resources.displayMetrics.density
+            fun dp(v: Int) = (v * d).toInt()
+            val row = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(8); marginStart = startMarginPx }
+            }
+            actions.forEachIndexed { idx, (label, cb) ->
+                row.addView(TextView(ctx).apply {
+                    text = label
+                    setTextColor(ContextCompat.getColor(ctx, R.color.text_muted))
+                    textSize = 11.5f
+                    setBackgroundResource(R.drawable.bg_pill_accent)
+                    setPadding(dp(10), dp(4), dp(10), dp(4))
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { if (idx > 0) marginStart = dp(8) }
+                    setOnClickListener { cb() }
+                })
+            }
+            parent.addView(row)
         }
 
         override fun getItemViewType(position: Int): Int = when (items[position]) {
@@ -1450,57 +1566,26 @@ class ResourceDetailActivity : AppCompatActivity() {
 
                 is DetailItem.TextBlock -> {
                     val isExpanded = position in expandedPositions
+                    val isTrans = position in showingTranslated && translatedBodies.containsKey(position)
+                    val activeRaw = if (isTrans) translatedBodies[position]!! else item.body
                     val box = LinearLayout(ctx).apply {
                         orientation = LinearLayout.VERTICAL
                         setPadding(dp(if (editorial) 4 else 14), dp(if (editorial) 10 else 12), dp(if (editorial) 4 else 14), dp(if (editorial) 14 else 12))
                     }
-                    val titleRow = LinearLayout(ctx).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                        gravity = Gravity.CENTER_VERTICAL
-                    }
-                    titleRow.addView(TextView(ctx).apply {
-                        text = item.title
+                    box.addView(TextView(ctx).apply {
+                        text = if (isTrans) "${item.title} · 译" else item.title
                         setTextColor(col(R.color.text_primary))
                         textSize = if (editorial && !item.compact) 14f else 13f
                         setTypeface(null, Typeface.BOLD)
-                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                     })
-                    if (item.onPreview != null) {
-                        titleRow.addView(TextView(ctx).apply {
-                            text = "预览"
-                            setTextColor(col(R.color.text_primary))
-                            textSize = 11f
-                            setTypeface(null, Typeface.BOLD)
-                            setBackgroundResource(R.drawable.bg_pill_accent)
-                            setPadding(dp(9), dp(3), dp(9), dp(3))
-                            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                                marginStart = dp(6)
-                            }
-                            setOnClickListener { item.onPreview.invoke() }
-                        })
-                    }
-                    if (item.onEdit != null) {
-                        titleRow.addView(TextView(ctx).apply {
-                            text = "编辑"
-                            setTextColor(col(R.color.text_muted))
-                            textSize = 11f
-                            setBackgroundResource(R.drawable.bg_pill_accent)
-                            setPadding(dp(9), dp(3), dp(9), dp(3))
-                            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                                marginStart = dp(6)
-                            }
-                            setOnClickListener { item.onEdit.invoke() }
-                        })
-                    }
-                    box.addView(titleRow)
 
                     val previewCap = item.defaultPreviewChars
-                    val canCollapse = previewCap != null && item.body.length > previewCap
+                    val canCollapse = previewCap != null && activeRaw.length > previewCap
                     val displayBody = when {
-                        canCollapse && !isExpanded -> item.body.take(previewCap!!) + "……"
-                        item.body.length > MAX_DETAIL_TEXT_CHARS ->
-                            item.body.take(MAX_DETAIL_TEXT_CHARS) + "\n\n……（内容较长，共 ${item.body.length} 字，仅预览前 20,000 字）"
-                        else -> item.body
+                        canCollapse && !isExpanded -> activeRaw.take(previewCap!!) + "……"
+                        activeRaw.length > MAX_DETAIL_TEXT_CHARS ->
+                            activeRaw.take(MAX_DETAIL_TEXT_CHARS) + "\n\n……（内容较长，共 ${activeRaw.length} 字，仅预览前 20,000 字）"
+                        else -> activeRaw
                     }
                     box.addView(TextView(ctx).apply {
                         text = displayBody
@@ -1515,7 +1600,7 @@ class ResourceDetailActivity : AppCompatActivity() {
                     })
                     if (canCollapse) {
                         box.addView(TextView(ctx).apply {
-                            text = if (isExpanded) "收起 ▴" else "展开全文（共 ${item.body.length} 字）▾"
+                            text = if (isExpanded) "收起 ▴" else "展开全文（共 ${activeRaw.length} 字）▾"
                             setTextColor(col(R.color.text_muted))
                             textSize = 11.5f
                             setPadding(0, dp(6), 0, dp(2))
@@ -1526,10 +1611,24 @@ class ResourceDetailActivity : AppCompatActivity() {
                             }
                         })
                     }
+                    val actions = mutableListOf<Pair<String, () -> Unit>>()
+                    if (!item.compact && item.body.length >= 6 && item.body != "（空）") {
+                        val tLabel = when {
+                            position in translatingPos -> "译中..."
+                            isTrans -> "原文"
+                            else -> "译为中文"
+                        }
+                        actions.add(tLabel to { triggerTranslate(position, item.body) })
+                    }
+                    if (item.onPreview != null) actions.add("预览" to { item.onPreview.invoke() })
+                    if (item.onEdit != null) actions.add("编辑" to { item.onEdit.invoke() })
+                    addActionBar(ctx, box, actions)
                     holder.container.addView(wrapStyle(ctx, box, editorial, dp(10)))
                 }
 
                 is DetailItem.SentSegment -> {
+                    val isTrans = position in showingTranslated && translatedBodies.containsKey(position)
+                    val activeRaw = if (isTrans) translatedBodies[position]!! else item.content
                     val box = LinearLayout(ctx).apply {
                         orientation = LinearLayout.VERTICAL
                         setPadding(dp(2), dp(8), dp(2), dp(10))
@@ -1550,7 +1649,7 @@ class ResourceDetailActivity : AppCompatActivity() {
                         ).apply { marginEnd = dp(6) }
                     })
                     headerRow.addView(TextView(ctx).apply {
-                        text = "${item.sourceName} ↗"
+                        text = if (isTrans) "${item.sourceName} · 译 ↗" else "${item.sourceName} ↗"
                         setTextColor(col(R.color.text_muted))
                         textSize = 11.5f
                         maxLines = 1
@@ -1558,22 +1657,12 @@ class ResourceDetailActivity : AppCompatActivity() {
                         layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                         setOnClickListener { item.onJumpToEntry() }
                     })
-                    if (item.onEdit != null) {
-                        headerRow.addView(TextView(ctx).apply {
-                            text = "编辑"
-                            setTextColor(col(R.color.text_muted))
-                            textSize = 11f
-                            setBackgroundResource(R.drawable.bg_pill_accent)
-                            setPadding(dp(8), dp(2), dp(8), dp(2))
-                            setOnClickListener { item.onEdit.invoke() }
-                        })
-                    }
                     box.addView(headerRow)
 
                     if (!item.isMarker) {
-                        val displayBody = if (item.content.length > MAX_DETAIL_TEXT_CHARS) {
-                            item.content.take(MAX_DETAIL_TEXT_CHARS) + "\n\n……（内容较长，仅预览前 20,000 字）"
-                        } else item.content
+                        val displayBody = if (activeRaw.length > MAX_DETAIL_TEXT_CHARS) {
+                            activeRaw.take(MAX_DETAIL_TEXT_CHARS) + "\n\n……（内容较长，仅预览前 20,000 字）"
+                        } else activeRaw
                         box.addView(TextView(ctx).apply {
                             text = displayBody
                             setTextColor(col(R.color.text_primary))
@@ -1585,6 +1674,16 @@ class ResourceDetailActivity : AppCompatActivity() {
                             ).apply { topMargin = dp(6) }
                             setOnClickListener { item.onJumpToEntry() }
                         })
+                        val actions = mutableListOf<Pair<String, () -> Unit>>()
+                        val tLabel = when {
+                            position in translatingPos -> "译中..."
+                            isTrans -> "原文"
+                            else -> "译为中文"
+                        }
+                        actions.add(tLabel to { triggerTranslate(position, item.content) })
+                        actions.add("定位条目" to { item.onJumpToEntry() })
+                        if (item.onEdit != null) actions.add("编辑" to { item.onEdit.invoke() })
+                        addActionBar(ctx, box, actions)
                     }
                     box.addView(View(ctx).apply {
                         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
@@ -1643,6 +1742,8 @@ class ResourceDetailActivity : AppCompatActivity() {
 
                 is DetailItem.CollapsibleEntry -> {
                     val isExpanded = position in expandedPositions
+                    val isTrans = position in showingTranslated && translatedBodies.containsKey(position)
+                    val activeRaw = if (isTrans) translatedBodies[position]!! else item.body
                     val box = LinearLayout(ctx).apply {
                         orientation = LinearLayout.VERTICAL
                         setPadding(dp(if (editorial) 4 else 14), dp(11), dp(if (editorial) 4 else 14), dp(11))
@@ -1661,7 +1762,7 @@ class ResourceDetailActivity : AppCompatActivity() {
                     }
                     titleRow.addView(dot)
                     titleRow.addView(TextView(ctx).apply {
-                        text = item.title
+                        text = if (isTrans) "${item.title} · 译" else item.title
                         setTextColor(col(R.color.text_primary))
                         textSize = 13.5f
                         setTypeface(null, Typeface.BOLD)
@@ -1669,7 +1770,7 @@ class ResourceDetailActivity : AppCompatActivity() {
                         ellipsize = android.text.TextUtils.TruncateAt.END
                         layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                     })
-                    if (item.onPreview != null) {
+                    if (item.onPreview != null && !isExpanded) {
                         titleRow.addView(TextView(ctx).apply {
                             text = "预览"
                             setTextColor(col(R.color.text_primary))
@@ -1681,19 +1782,6 @@ class ResourceDetailActivity : AppCompatActivity() {
                                 marginStart = dp(8)
                             }
                             setOnClickListener { item.onPreview.invoke() }
-                        })
-                    }
-                    if (item.onEdit != null) {
-                        titleRow.addView(TextView(ctx).apply {
-                            text = "编辑"
-                            setTextColor(col(R.color.text_muted))
-                            textSize = 11f
-                            setBackgroundResource(R.drawable.bg_pill_accent)
-                            setPadding(dp(9), dp(3), dp(9), dp(3))
-                            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                                marginStart = dp(6)
-                            }
-                            setOnClickListener { item.onEdit.invoke() }
                         })
                     }
                     box.addView(titleRow)
@@ -1713,11 +1801,11 @@ class ResourceDetailActivity : AppCompatActivity() {
                     }
 
                     val displayBody = if (!isExpanded) {
-                        item.body.take(240).replace('\n', ' ')
-                    } else if (item.body.length > MAX_DETAIL_TEXT_CHARS) {
-                        item.body.take(MAX_DETAIL_TEXT_CHARS) + "\n\n……（内容较长，共 ${item.body.length} 字，仅预览前 20,000 字）"
+                        activeRaw.take(240).replace('\n', ' ')
+                    } else if (activeRaw.length > MAX_DETAIL_TEXT_CHARS) {
+                        activeRaw.take(MAX_DETAIL_TEXT_CHARS) + "\n\n……（内容较长，共 ${activeRaw.length} 字，仅预览前 20,000 字）"
                     } else {
-                        item.body
+                        activeRaw
                     }
                     val tvBody = TextView(ctx).apply {
                         text = displayBody
@@ -1732,6 +1820,20 @@ class ResourceDetailActivity : AppCompatActivity() {
                         }
                     }
                     box.addView(tvBody)
+                    if (isExpanded) {
+                        val actions = mutableListOf<Pair<String, () -> Unit>>()
+                        if (item.body.length >= 6 && item.body != "（空条目）" && item.body != "（空内容）") {
+                            val tLabel = when {
+                                position in translatingPos -> "译中..."
+                                isTrans -> "原文"
+                                else -> "译为中文"
+                            }
+                            actions.add(tLabel to { triggerTranslate(position, item.body) })
+                        }
+                        if (item.onPreview != null) actions.add("预览" to { item.onPreview.invoke() })
+                        if (item.onEdit != null) actions.add("编辑" to { item.onEdit.invoke() })
+                        addActionBar(ctx, box, actions, startMarginPx = dp(15))
+                    }
                     box.setOnClickListener {
                         if (position in expandedPositions) expandedPositions.remove(position)
                         else expandedPositions.add(position)
