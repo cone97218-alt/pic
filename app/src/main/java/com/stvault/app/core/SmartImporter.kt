@@ -65,6 +65,7 @@ object SmartImporter {
     ): SmartImportSummary {
         val vaultRepo = VaultRepository.getInstance(context)
         val libRepo = ResourceLibraryRepository.getInstance(context)
+        val bgRepo = BackgroundRepository.getInstance(context)
         val catMgr = CategoryManager.getInstance(context)
         val allTags = mergeTags(autoTag)
         val summary = SmartImportSummary()
@@ -81,15 +82,15 @@ object SmartImporter {
             try {
                 context.contentResolver.openInputStream(uri)?.use { inp ->
                     if (fileName.endsWith(".zip", ignoreCase = true)) {
-                        importZipStream(inp, vaultRepo, libRepo, catMgr, preferredModule, allTags, summary, onProgress)
+                        importZipStream(inp, vaultRepo, libRepo, bgRepo, catMgr, preferredModule, allTags, summary, onProgress)
                     } else {
                         val bytes = inp.readBytes()
-                        if (isZipBytes(bytes)) {
+                        if (!isDocumentFileName(fileName) && isZipBytes(bytes)) {
                             ByteArrayInputStream(bytes).use { bis ->
-                                importZipStream(bis, vaultRepo, libRepo, catMgr, preferredModule, allTags, summary, onProgress)
+                                importZipStream(bis, vaultRepo, libRepo, bgRepo, catMgr, preferredModule, allTags, summary, onProgress)
                             }
                         } else {
-                            routeBytes(bytes, fileName, uri.toString(), vaultRepo, libRepo, catMgr, preferredModule, allTags, summary)
+                            routeBytes(bytes, fileName, uri.toString(), vaultRepo, libRepo, bgRepo, catMgr, preferredModule, allTags, summary)
                         }
                     }
                 }
@@ -109,6 +110,7 @@ object SmartImporter {
     ): SmartImportSummary {
         val vaultRepo = VaultRepository.getInstance(context)
         val libRepo = ResourceLibraryRepository.getInstance(context)
+        val bgRepo = BackgroundRepository.getInstance(context)
         val catMgr = CategoryManager.getInstance(context)
         val allTags = mergeTags(autoTag)
         val summary = SmartImportSummary()
@@ -121,7 +123,7 @@ object SmartImporter {
             try {
                 if (file.name.endsWith(".zip", ignoreCase = true)) {
                     file.inputStream().use { inp ->
-                        importZipStream(inp, vaultRepo, libRepo, catMgr, preferredModule, allTags, summary, onProgress)
+                        importZipStream(inp, vaultRepo, libRepo, bgRepo, catMgr, preferredModule, allTags, summary, onProgress)
                     }
                 } else {
                     if (file.length() > 45L * 1024L * 1024L) {
@@ -129,12 +131,12 @@ object SmartImporter {
                         continue
                     }
                     val bytes = file.readBytes()
-                    if (isZipBytes(bytes)) {
+                    if (!isDocumentFileName(file.name) && isZipBytes(bytes)) {
                         ByteArrayInputStream(bytes).use { bis ->
-                            importZipStream(bis, vaultRepo, libRepo, catMgr, preferredModule, allTags, summary, onProgress)
+                            importZipStream(bis, vaultRepo, libRepo, bgRepo, catMgr, preferredModule, allTags, summary, onProgress)
                         }
                     } else {
-                        routeBytes(bytes, file.name, "file://${file.absolutePath}", vaultRepo, libRepo, catMgr, preferredModule, allTags, summary)
+                        routeBytes(bytes, file.name, "file://${file.absolutePath}", vaultRepo, libRepo, bgRepo, catMgr, preferredModule, allTags, summary)
                     }
                 }
             } catch (_: Exception) {
