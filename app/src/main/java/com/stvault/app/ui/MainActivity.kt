@@ -82,6 +82,7 @@ class MainActivity : AppCompatActivity() {
     private var activeCompFilter = "all"
     private var activeThemeCategory = ""
     private var activeCharCategory = ""
+    private var activeWbCategory = ""
     private var activeThemeTab = "cache"
     private var searchDebounceJob: Job? = null
 
@@ -1146,6 +1147,13 @@ class MainActivity : AppCompatActivity() {
                 activeCharCategory = picked
                 binding.wsCharacters.btnCharCatFilter.text = if (picked.isEmpty()) "分类 ▾" else "${picked.substringAfterLast('/')} ▾"
                 refreshCharactersList()
+            }
+        }
+        binding.wsWorldBooks.btnWbCatFilter.setOnClickListener {
+            showCategoryFilterPicker(CategoryManager.SCOPE_WORLDBOOKS, activeWbCategory) { picked ->
+                activeWbCategory = picked
+                binding.wsWorldBooks.btnWbCatFilter.text = if (picked.isEmpty()) "分类 ▾" else "${picked.substringAfterLast('/')} ▾"
+                refreshWorldBooksList()
             }
         }
         binding.btnThemeCatFilter.setOnClickListener {
@@ -2250,23 +2258,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshWbFilterChips() {
-        val base = mutableListOf(
-            "all" to "全部",
-            "multi_version" to "多版本",
-            "standalone" to "独立世界书",
-            "from_card" to "来自角色卡",
-            "has_urls" to "含外链图"
-        )
-        val cats = catManager.getCategories(CategoryManager.SCOPE_WORLDBOOKS)
-        for (c in cats) {
-            base.add("cat:$c" to "#$c")
-        }
-        if (activeWbFilter.startsWith("cat:") && base.none { it.first == activeWbFilter }) {
-            activeWbFilter = "all"
-        }
         buildSimpleChips(
             binding.wsWorldBooks.chipGroupWbFilter,
-            base,
+            listOf(
+                "all" to "全部",
+                "multi_version" to "多版本",
+                "standalone" to "独立世界书",
+                "from_card" to "来自角色卡",
+                "has_urls" to "含外链图"
+            ),
             activeWbFilter
         ) { key ->
             activeWbFilter = key
@@ -2279,12 +2279,8 @@ class MainActivity : AppCompatActivity() {
         val groupVersions = prefs.getBoolean("group_versions", true)
         lifecycleScope.launch {
             val (grouped, totalRaw, pendingCount) = withContext(Dispatchers.IO) {
-                val catFilter = if (activeWbFilter.startsWith("cat:")) activeWbFilter.removePrefix("cat:") else ""
-                val baseFilter = when {
-                    activeWbFilter == "multi_version" || activeWbFilter.startsWith("cat:") -> "all"
-                    else -> activeWbFilter
-                }
-                val books = libRepo.searchWorldBooks(q, baseFilter, catFilter)
+                val baseFilter = if (activeWbFilter == "multi_version") "all" else activeWbFilter
+                val books = libRepo.searchWorldBooks(q, baseFilter, activeWbCategory)
                 val rawG = VersionGrouper.groupBySeries(
                     books, groupVersions, { it.seriesKey }, { it.addedAt }, { it.id },
                     { key -> VersionGrouper.getPreferredVersion(this@MainActivity, ResourceDetailActivity.TYPE_WORLDBOOK, key) }
@@ -2457,10 +2453,10 @@ class MainActivity : AppCompatActivity() {
                         ) { raw ->
                             val newPath = catManager.renameOrMoveCategory(scope, picked.id, raw)
                             if (newPath != null) {
-                                val migrated = if (scope == CategoryManager.SCOPE_THEMES) {
-                                    repo.renameSourceCategoryPrefix(picked.id, newPath)
-                                } else {
-                                    libRepo.renameCharacterCategoryPrefix(picked.id, newPath)
+                                val migrated = when (scope) {
+                                    CategoryManager.SCOPE_THEMES -> repo.renameSourceCategoryPrefix(picked.id, newPath)
+                                    CategoryManager.SCOPE_WORLDBOOKS -> libRepo.renameWorldBookCategoryPrefix(picked.id, newPath)
+                                    else -> libRepo.renameCharacterCategoryPrefix(picked.id, newPath)
                                 }
                                 if (currentFilter == picked.id || currentFilter.startsWith("${picked.id}/")) {
                                     onFilterChanged(newPath)
@@ -2482,10 +2478,10 @@ class MainActivity : AppCompatActivity() {
                             destructive = true
                         ) {
                             catManager.deleteCategory(scope, picked.id)
-                            val cleaned = if (scope == CategoryManager.SCOPE_THEMES) {
-                                repo.removeSourceCategoryPrefix(picked.id)
-                            } else {
-                                libRepo.removeCharacterCategoryPrefix(picked.id)
+                            val cleaned = when (scope) {
+                                CategoryManager.SCOPE_THEMES -> repo.removeSourceCategoryPrefix(picked.id)
+                                CategoryManager.SCOPE_WORLDBOOKS -> libRepo.removeWorldBookCategoryPrefix(picked.id)
+                                else -> libRepo.removeCharacterCategoryPrefix(picked.id)
                             }
                             if (currentFilter == picked.id || currentFilter.startsWith("${picked.id}/")) {
                                 onFilterChanged("")

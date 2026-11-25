@@ -1047,6 +1047,46 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         saveWorldBooksIndex()
     }
 
+    fun renameWorldBookCategoryPrefix(oldPrefix: String, newPrefix: String): Int {
+        var changed = 0
+        synchronized(lock) {
+            for ((id, cur) in worldBooksMap.entries.toList()) {
+                if (cur.categories.isEmpty()) continue
+                val updated = cur.categories.map { c ->
+                    when {
+                        c == oldPrefix -> newPrefix
+                        c.startsWith("$oldPrefix/") -> newPrefix + c.removePrefix(oldPrefix)
+                        else -> c
+                    }
+                }.distinct()
+                if (updated != cur.categories) {
+                    worldBooksMap[id] = cur.copy(categories = updated)
+                    changed++
+                }
+            }
+        }
+        if (changed > 0) saveWorldBooksIndex()
+        return changed
+    }
+
+    fun removeWorldBookCategoryPrefix(prefix: String): Int {
+        var changed = 0
+        synchronized(lock) {
+            for ((id, cur) in worldBooksMap.entries.toList()) {
+                if (cur.categories.isEmpty()) continue
+                val updated = cur.categories.filterNot { c ->
+                    c == prefix || c.startsWith("$prefix/")
+                }
+                if (updated != cur.categories) {
+                    worldBooksMap[id] = cur.copy(categories = updated)
+                    changed++
+                }
+            }
+        }
+        if (changed > 0) saveWorldBooksIndex()
+        return changed
+    }
+
     fun searchWorldBooks(query: String, filter: String = "all", categoryFilter: String = ""): List<WorldBookRecord> {
         val q = query.trim().lowercase()
         val catMgr = CategoryManager.getInstance(appContext)

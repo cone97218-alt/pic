@@ -1298,22 +1298,24 @@ class DiscordBrowserActivity : AppCompatActivity() {
               };
               if (!window.__stSidebarAutoBound) {
                 window.__stSidebarAutoBound = true;
-                // Suppress Android soft keyboard on Discord chat Slate textboxes (never affects /login <input> fields)
-                function lockChatKeyboard() {
+                // Suppress Android soft keyboard on Discord chat Slate textboxes via zero-CPU focusin listener
+                function lockChatKeyboard(target) {
                   if (location.pathname.indexOf('/channels/') !== 0) return;
-                  var boxes = document.querySelectorAll('div[role="textbox"][contenteditable="true"]');
-                  for (var i = 0; i < boxes.length; i++) {
-                    if (boxes[i].getAttribute('inputmode') !== 'none') {
-                      boxes[i].setAttribute('inputmode', 'none');
-                    }
+                  var el = target && target.closest ? target.closest('div[role="textbox"][contenteditable="true"]') : null;
+                  if (el && el.getAttribute('inputmode') !== 'none') {
+                    el.setAttribute('inputmode', 'none');
                   }
                 }
-                lockChatKeyboard();
-                setInterval(lockChatKeyboard, 1200);
-                // Scroll-accumulation pool: remembers all attachments scrolled past in the current channel/thread
-                setInterval(function() {
-                  if (window.__stCollectIntoPool) window.__stCollectIntoPool();
-                }, 900);
+                document.addEventListener('focusin', function(e) { lockChatKeyboard(e.target); }, true);
+                // Passive scroll-triggered collector (throttled to >=2.5s, 0% CPU when idle!)
+                var __stScrollTimer = null;
+                document.addEventListener('scroll', function() {
+                  if (__stScrollTimer) return;
+                  __stScrollTimer = setTimeout(function() {
+                    __stScrollTimer = null;
+                    if (window.__stCollectIntoPool) window.__stCollectIntoPool(false);
+                  }, 2500);
+                }, true);
                 document.addEventListener('click', function(e) {
                   var a = e.target && e.target.closest ? e.target.closest('a[href*="/channels/"]') : null;
                   if (!a) return;
@@ -1337,7 +1339,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
         private val DOM_SCAN_JS = """
             (function() {
               try {
-                function runCollector() {
+                function runCollector(includeMessages) {
                   var exts = /\.(png|json|zip|css|js|html|htm|txt|md|doc|docx|pdf|rtf)(\?|$)/i;
                   var layer = document.querySelector('div[class*="chatLayerWrapper_"]');
                   var layerTitle = '';
@@ -1527,31 +1529,33 @@ class DiscordBrowserActivity : AppCompatActivity() {
                     }
                   }
                   var selText = '';
-                  try {
-                    var sel = window.getSelection();
-                    if (sel) selText = (sel.toString() || '').trim();
-                  } catch (e) {}
-                  // Collect visible message text blocks for effortless 1-tap text hoarding (no long-press drag!)
-                  var msgNodes = scanRoot.querySelectorAll('li[id^="chat-messages-"], div[id^="chat-messages-"]');
                   var collectedMsgs = [];
-                  var seenMsgIds = {};
-                  for (var mi = 0; mi < msgNodes.length && collectedMsgs.length < 40; mi++) {
-                    var mn = msgNodes[mi];
-                    var mid = mn.id || ('m_' + mi);
-                    if (seenMsgIds[mid]) continue;
-                    var contentEl = mn.querySelector('div[id^="message-content-"], div[class*="markup_"]');
-                    if (!contentEl) continue;
-                    var mtxt = (contentEl.innerText || contentEl.textContent || '').trim();
-                    if (mtxt.length < 20) continue;
-                    seenMsgIds[mid] = true;
-                    var mMeta = readMsgMeta(mn);
-                    var isOpMsg = !!(pool.op && pool.op.name && mMeta.name && mMeta.name === pool.op.name);
-                    collectedMsgs.push({
-                      id: mid,
-                      author: mMeta.name || '',
-                      text: mtxt.slice(0, 30000),
-                      isOp: isOpMsg
-                    });
+                  if (includeMessages) {
+                    try {
+                      var sel = window.getSelection();
+                      if (sel) selText = (sel.toString() || '').trim();
+                    } catch (e) {}
+                    // Collect visible message text blocks only on-demand when user taps 囤囤 (saves battery!)
+                    var msgNodes = scanRoot.querySelectorAll('li[id^="chat-messages-"], div[id^="chat-messages-"]');
+                    var seenMsgIds = {};
+                    for (var mi = 0; mi < msgNodes.length && collectedMsgs.length < 40; mi++) {
+                      var mn = msgNodes[mi];
+                      var mid = mn.id || ('m_' + mi);
+                      if (seenMsgIds[mid]) continue;
+                      var contentEl = mn.querySelector('div[id^="message-content-"], div[class*="markup_"]');
+                      if (!contentEl) continue;
+                      var mtxt = (contentEl.innerText || contentEl.textContent || '').trim();
+                      if (mtxt.length < 20) continue;
+                      seenMsgIds[mid] = true;
+                      var mMeta = readMsgMeta(mn);
+                      var isOpMsg = !!(pool.op && pool.op.name && mMeta.name && mMeta.name === pool.op.name);
+                      collectedMsgs.push({
+                        id: mid,
+                        author: mMeta.name || '',
+                        text: mtxt.slice(0, 30000),
+                        isOp: isOpMsg
+                      });
+                    }
                   }
                   return {
                     op: pool.op ? { name: pool.op.name || '', uid: pool.op.uid || '' } : null,
@@ -1561,7 +1565,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
                   };
                 }
                 window.__stCollectIntoPool = runCollector;
-                return JSON.stringify(runCollector());
+                return JSON.stringify(runCollector(true));
               } catch (e) {
                 return '{}';
               }

@@ -614,13 +614,13 @@ class ResourceDetailActivity : AppCompatActivity() {
                 (parsed?.embeddedHelperScripts?.size ?: 0) + linked.size
             val tabs = mutableListOf(
                 "prompts" to "提示词 ($linkedCount)",
-                "sent" to "发送预览 ($sentCount)"
+                "sent" to "发送 ($sentCount)"
             )
             if (unlinkedCount > 0) {
                 tabs.add("unlinked" to "未连接 ($unlinkedCount)")
             }
             if (scriptCount > 0) {
-                tabs.add("scripts" to "正则与脚本 ($scriptCount)")
+                tabs.add("scripts" to "脚本 ($scriptCount)")
             }
             activeTabKey = "prompts"
             setupHeaderTabs(tabs, activeTabKey) { key ->
@@ -1379,36 +1379,27 @@ class ResourceDetailActivity : AppCompatActivity() {
             }
         }
 
-        private fun addActionBar(
+        private fun addHeaderIcon(
             ctx: Context,
-            parent: LinearLayout,
-            actions: List<Pair<String, () -> Unit>>,
-            startMarginPx: Int = 0
+            row: LinearLayout,
+            iconRes: Int,
+            tintColor: Int,
+            desc: String,
+            onClick: () -> Unit
         ) {
-            if (actions.isEmpty()) return
             val d = ctx.resources.displayMetrics.density
             fun dp(v: Int) = (v * d).toInt()
-            val row = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = dp(8); marginStart = startMarginPx }
-            }
-            actions.forEachIndexed { idx, (label, cb) ->
-                row.addView(TextView(ctx).apply {
-                    text = label
-                    setTextColor(ContextCompat.getColor(ctx, R.color.text_muted))
-                    textSize = 11.5f
-                    setBackgroundResource(R.drawable.bg_pill_accent)
-                    setPadding(dp(10), dp(4), dp(10), dp(4))
-                    layoutParams = LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                    ).apply { if (idx > 0) marginStart = dp(8) }
-                    setOnClickListener { cb() }
-                })
-            }
-            parent.addView(row)
+            row.addView(ImageView(ctx).apply {
+                setImageResource(iconRes)
+                imageTintList = ColorStateList.valueOf(tintColor)
+                contentDescription = desc
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+                setPadding(dp(7), dp(7), dp(7), dp(7))
+                layoutParams = LinearLayout.LayoutParams(dp(32), dp(32)).apply {
+                    marginStart = dp(2)
+                }
+                setOnClickListener { onClick() }
+            })
         }
 
         override fun getItemViewType(position: Int): Int = when (items[position]) {
@@ -1572,12 +1563,40 @@ class ResourceDetailActivity : AppCompatActivity() {
                         orientation = LinearLayout.VERTICAL
                         setPadding(dp(if (editorial) 4 else 14), dp(if (editorial) 10 else 12), dp(if (editorial) 4 else 14), dp(if (editorial) 14 else 12))
                     }
-                    box.addView(TextView(ctx).apply {
+                    val titleRow = LinearLayout(ctx).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                    }
+                    titleRow.addView(TextView(ctx).apply {
                         text = if (isTrans) "${item.title} · 译" else item.title
                         setTextColor(col(R.color.text_primary))
                         textSize = if (editorial && !item.compact) 14f else 13f
                         setTypeface(null, Typeface.BOLD)
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                     })
+                    if (!item.compact && item.body.length >= 6 && item.body != "（空）") {
+                        val tint = when {
+                            position in translatingPos -> DOT_BLUE
+                            isTrans -> DOT_GREEN
+                            else -> col(R.color.text_muted)
+                        }
+                        addHeaderIcon(ctx, titleRow, R.drawable.ic_action_translate, tint, "翻译") {
+                            triggerTranslate(position, item.body)
+                        }
+                    }
+                    if (item.onPreview != null) {
+                        addHeaderIcon(ctx, titleRow, R.drawable.ic_action_preview, col(R.color.text_muted), "预览") {
+                            item.onPreview.invoke()
+                        }
+                    }
+                    if (item.onEdit != null) {
+                        addHeaderIcon(ctx, titleRow, R.drawable.ic_action_edit, col(R.color.text_muted), "编辑") {
+                            item.onEdit.invoke()
+                        }
+                    }
+                    box.addView(titleRow)
 
                     val previewCap = item.defaultPreviewChars
                     val canCollapse = previewCap != null && activeRaw.length > previewCap
@@ -1611,18 +1630,6 @@ class ResourceDetailActivity : AppCompatActivity() {
                             }
                         })
                     }
-                    val actions = mutableListOf<Pair<String, () -> Unit>>()
-                    if (!item.compact && item.body.length >= 6 && item.body != "（空）") {
-                        val tLabel = when {
-                            position in translatingPos -> "译中..."
-                            isTrans -> "原文"
-                            else -> "译为中文"
-                        }
-                        actions.add(tLabel to { triggerTranslate(position, item.body) })
-                    }
-                    if (item.onPreview != null) actions.add("预览" to { item.onPreview.invoke() })
-                    if (item.onEdit != null) actions.add("编辑" to { item.onEdit.invoke() })
-                    addActionBar(ctx, box, actions)
                     holder.container.addView(wrapStyle(ctx, box, editorial, dp(10)))
                 }
 
@@ -1649,7 +1656,7 @@ class ResourceDetailActivity : AppCompatActivity() {
                         ).apply { marginEnd = dp(6) }
                     })
                     headerRow.addView(TextView(ctx).apply {
-                        text = if (isTrans) "${item.sourceName} · 译 ↗" else "${item.sourceName} ↗"
+                        text = if (isTrans) "${item.sourceName} · 译" else item.sourceName
                         setTextColor(col(R.color.text_muted))
                         textSize = 11.5f
                         maxLines = 1
@@ -1657,6 +1664,24 @@ class ResourceDetailActivity : AppCompatActivity() {
                         layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                         setOnClickListener { item.onJumpToEntry() }
                     })
+                    if (!item.isMarker) {
+                        val tint = when {
+                            position in translatingPos -> DOT_BLUE
+                            isTrans -> DOT_GREEN
+                            else -> col(R.color.text_muted)
+                        }
+                        addHeaderIcon(ctx, headerRow, R.drawable.ic_action_translate, tint, "翻译") {
+                            triggerTranslate(position, item.content)
+                        }
+                    }
+                    addHeaderIcon(ctx, headerRow, R.drawable.ic_action_jump, col(R.color.text_muted), "定位条目") {
+                        item.onJumpToEntry()
+                    }
+                    if (item.onEdit != null) {
+                        addHeaderIcon(ctx, headerRow, R.drawable.ic_action_edit, col(R.color.text_muted), "编辑") {
+                            item.onEdit.invoke()
+                        }
+                    }
                     box.addView(headerRow)
 
                     if (!item.isMarker) {
@@ -1674,16 +1699,6 @@ class ResourceDetailActivity : AppCompatActivity() {
                             ).apply { topMargin = dp(6) }
                             setOnClickListener { item.onJumpToEntry() }
                         })
-                        val actions = mutableListOf<Pair<String, () -> Unit>>()
-                        val tLabel = when {
-                            position in translatingPos -> "译中..."
-                            isTrans -> "原文"
-                            else -> "译为中文"
-                        }
-                        actions.add(tLabel to { triggerTranslate(position, item.content) })
-                        actions.add("定位条目" to { item.onJumpToEntry() })
-                        if (item.onEdit != null) actions.add("编辑" to { item.onEdit.invoke() })
-                        addActionBar(ctx, box, actions)
                     }
                     box.addView(View(ctx).apply {
                         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
@@ -1770,19 +1785,26 @@ class ResourceDetailActivity : AppCompatActivity() {
                         ellipsize = android.text.TextUtils.TruncateAt.END
                         layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                     })
-                    if (item.onPreview != null && !isExpanded) {
-                        titleRow.addView(TextView(ctx).apply {
-                            text = "预览"
-                            setTextColor(col(R.color.text_primary))
-                            textSize = 11f
-                            setTypeface(null, Typeface.BOLD)
-                            setBackgroundResource(R.drawable.bg_pill_accent)
-                            setPadding(dp(9), dp(3), dp(9), dp(3))
-                            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                                marginStart = dp(8)
-                            }
-                            setOnClickListener { item.onPreview.invoke() }
-                        })
+                    if (item.body.length >= 6 && item.body != "（空条目）" && item.body != "（空内容）") {
+                        val tint = when {
+                            position in translatingPos -> DOT_BLUE
+                            isTrans -> DOT_GREEN
+                            else -> col(R.color.text_muted)
+                        }
+                        addHeaderIcon(ctx, titleRow, R.drawable.ic_action_translate, tint, "翻译") {
+                            if (position !in expandedPositions) expandedPositions.add(position)
+                            triggerTranslate(position, item.body)
+                        }
+                    }
+                    if (item.onPreview != null) {
+                        addHeaderIcon(ctx, titleRow, R.drawable.ic_action_preview, col(R.color.text_muted), "预览") {
+                            item.onPreview.invoke()
+                        }
+                    }
+                    if (item.onEdit != null) {
+                        addHeaderIcon(ctx, titleRow, R.drawable.ic_action_edit, col(R.color.text_muted), "编辑") {
+                            item.onEdit.invoke()
+                        }
                     }
                     box.addView(titleRow)
 
@@ -1820,20 +1842,6 @@ class ResourceDetailActivity : AppCompatActivity() {
                         }
                     }
                     box.addView(tvBody)
-                    if (isExpanded) {
-                        val actions = mutableListOf<Pair<String, () -> Unit>>()
-                        if (item.body.length >= 6 && item.body != "（空条目）" && item.body != "（空内容）") {
-                            val tLabel = when {
-                                position in translatingPos -> "译中..."
-                                isTrans -> "原文"
-                                else -> "译为中文"
-                            }
-                            actions.add(tLabel to { triggerTranslate(position, item.body) })
-                        }
-                        if (item.onPreview != null) actions.add("预览" to { item.onPreview.invoke() })
-                        if (item.onEdit != null) actions.add("编辑" to { item.onEdit.invoke() })
-                        addActionBar(ctx, box, actions, startMarginPx = dp(15))
-                    }
                     box.setOnClickListener {
                         if (position in expandedPositions) expandedPositions.remove(position)
                         else expandedPositions.add(position)
