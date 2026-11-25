@@ -653,6 +653,26 @@
             log('读取到预设 ' + prepared.length + ' 个，极速批量推送中...');
             totalSent += await pushItemsBatched('preset', prepared, '预设');
         }
+        if (kind === 'background') {
+            const bgs = await fetchStBackgrounds();
+            log('读取到背景图 ' + bgs.length + ' 张，并发推送中...');
+            let doneBgs = 0;
+            await runPool(bgs, 3, async (bgName) => {
+                try {
+                    const r = await mainFetch('/backgrounds/' + encodeURIComponent(bgName));
+                    if (!r.ok) { failCount++; return; }
+                    const buf = new Uint8Array(await r.arrayBuffer());
+                    await pushBytesToVault('background', bgName, buf);
+                    totalSent++;
+                } catch (_) {
+                    failCount++;
+                } finally {
+                    doneBgs++;
+                    setStatus('推送背景图 ' + doneBgs + '/' + bgs.length, 'stv-ok');
+                }
+            });
+            await syncThemeTagsBidirectional(true);
+        }
 
         const summary = '同步完成：推送 ' + totalSent + ' 项' + (failCount > 0 ? '（失败 ' + failCount + '）' : '');
         try { await callTool('stvault_pull_done', { summary }); } catch (_) {}
@@ -802,6 +822,20 @@
         }
     }
 
+    async function fetchStBackgrounds() {
+        try {
+            const headers = await getHeaders();
+            headers['Content-Type'] = 'application/json';
+            const r = await mainFetch('/api/backgrounds/all', { method: 'POST', headers, body: '{}' });
+            if (!r.ok) return [];
+            const data = await r.json();
+            const raw = Array.isArray(data) ? data : asArray(data && data.images);
+            return raw.map(x => (typeof x === 'string' ? x : (x && x.filename) || '')).filter(Boolean);
+        } catch (_) {
+            return [];
+        }
+    }
+
     async function pushSingleItem(kind, targetName) {
         if (!state.connected) {
             try { await connect(); } catch (e) { log(e.message); return; }
@@ -881,12 +915,30 @@
             await pushBytesToVault('preset', foundName + '.json', enc.encode(JSON.stringify(foundObj, null, 2)));
             setStatus('已推送预设：' + foundName, 'stv-ok');
             log('单项推送预设成功：' + foundName);
+            return;
+        }
+        if (kind === 'background') {
+            const bgs = await fetchStBackgrounds();
+            const bgName = targetName || bgs[0];
+            if (!bgName) { log('未找到目标背景图'); return; }
+            const r = await mainFetch('/backgrounds/' + encodeURIComponent(bgName));
+            if (!r.ok) throw new Error('读取背景图失败');
+            await pushBytesToVault('background', bgName, new Uint8Array(await r.arrayBuffer()));
+            await syncThemeTagsBidirectional(true);
+            setStatus('已推送背景：' + bgName, 'stv-ok');
+            log('单项推送背景图成功：' + bgName);
         }
     }
 
+    function isIntervalPollingEnabled() {
+        return localStorage.getItem('stv_bridge_poll_mode') === 'interval';
+    }
+
     function startPolling() {
-        if (state.pollTimer) clearInterval(state.pollTimer);
-        state.pollTimer = setInterval(pollOnce, 6000);
+        if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+        if (isIntervalPollingEnabled()) {
+            state.pollTimer = setInterval(pollOnce, 6000);
+        }
     }
 
     function injectStyles() {
@@ -917,10 +969,11 @@
 
     function buildHtml() {
         const autoOn = localStorage.getItem('stv_bridge_auto_connect') === '1';
+        const intervalOn = isIntervalPollingEnabled();
         return `
 <div class="inline-drawer">
   <div class="inline-drawer-toggle inline-drawer-header">
-    <b>酒馆匣互联 <span style="font-weight:normal;opacity:.55;font-size:11px;">v1.15.1</span></b>
+    <b>酒馆匣互联 <span style="font-weight:normal;opacity:.55;font-size:11px;">v1.15.2</span></b>
     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
   </div>
   <div class="inline-drawer-content">
@@ -934,6 +987,10 @@
         <label class="stv-toggle-row">
           <span>打开酒馆自动连接</span>
           <input type="checkbox" id="stv_chk_autoconnect" ${autoOn ? 'checked' : ''} />
+        </label>
+        <label class="stv-toggle-row">
+          <span>定时轮询（关则仅切回时检查）</span>
+          <input type="checkbox" id="stv_chk_pollmode" ${intervalOn ? 'checked' : ''} />
         </label>
       </div>
 
@@ -952,6 +1009,7 @@
             <option value="character">角色卡</option>
             <option value="worldbook">世界书</option>
             <option value="preset">预设</option>
+            <option value="background">背景</option>
           </select>
           <select class="stv-select" id="stv_sel_item"><option value="">点击加载...</option></select>
           <div class="stv-btn stv-btn-primary" id="stv_btn_push_one" style="flex:0 0 auto;padding:6px 11px;">推送</div>
@@ -970,6 +1028,7 @@
             <div class="stv-btn" id="stv_btn_push_chars">全部角色卡</div>
             <div class="stv-btn" id="stv_btn_push_wbs">全部世界书</div>
             <div class="stv-btn" id="stv_btn_push_presets">全部预设</div>
+            <div class="stv-btn" id="stv_btn_push_bgs">全部背景</div>
           </div>
         </details>
       </div>
@@ -1004,6 +1063,8 @@
             if (kind === 'character') {
                 const chars = await fetchStCharacters();
                 names = chars.filter(c => c && c.avatar).map(c => c.name || c.avatar);
+            } else if (kind === 'background') {
+                names = await fetchStBackgrounds();
             } else {
                 const src = await fetchStSettings();
                 if (kind === 'theme') {
@@ -1037,6 +1098,12 @@
             if (chkAuto.checked && !state.connected) {
                 runExclusive(async () => { try { await connect(); } catch (_) {} });
             }
+        });
+        const chkPoll = byId('stv_chk_pollmode');
+        if (chkPoll) chkPoll.addEventListener('change', () => {
+            localStorage.setItem('stv_bridge_poll_mode', chkPoll.checked ? 'interval' : 'focus');
+            startPolling();
+            log(chkPoll.checked ? '已切换为：定时轮询（6秒）' : '已切换为：仅切回酒馆时自动检查');
         });
         const selKind = byId('stv_sel_kind');
         const selItem = byId('stv_sel_item');
@@ -1083,6 +1150,11 @@
         if (btnPresets) btnPresets.addEventListener('click', () => runExclusive(async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await handlePull('preset');
+        }));
+        const btnBgs = byId('stv_btn_push_bgs');
+        if (btnBgs) btnBgs.addEventListener('click', () => runExclusive(async () => {
+            if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
+            await handlePull('background');
         }));
         const btnRecv = byId('stv_btn_receive');
         if (btnRecv) btnRecv.addEventListener('click', () => runExclusive(async () => {

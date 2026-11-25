@@ -275,6 +275,7 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
             "characters", "character" -> "角色卡"
             "worldbooks", "worldbook" -> "世界书"
             "presets", "preset" -> "预设"
+            "backgrounds", "background" -> "背景"
             else -> "组件"
         }
         val entry = BridgeSyncLogEntry(
@@ -913,6 +914,23 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
         if (bytes.isEmpty()) return "empty"
         val vaultRepo = VaultRepository.getInstance(appContext)
         val libRepo = ResourceLibraryRepository.getInstance(appContext)
+
+        if (kind == "background") {
+            val bgRepo = BackgroundRepository.getInstance(appContext)
+            val (rec, isDup) = bgRepo.importBytes(bytes, fileName)
+            val name = rec?.name ?: fileName.substringBeforeLast('.')
+            if (!isDup && rec != null) {
+                recordSyncLog(
+                    direction = "pull_from_tavern",
+                    action = "imported",
+                    module = "backgrounds",
+                    name = name,
+                    summary = "从 TT 酒馆拉取背景图入库"
+                )
+                return "imported"
+            }
+            return "unchanged"
+        }
 
         val module = when (kind) {
             "theme" -> "themes"
