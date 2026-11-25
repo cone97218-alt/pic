@@ -21,15 +21,24 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.stvault.app.R
 import com.stvault.app.core.CategoryManager
+import com.stvault.app.core.DiscordWatchRepository
+import com.stvault.app.core.FeedPost
 import com.stvault.app.core.InboxManager
+import com.stvault.app.core.ObservedPost
 import com.stvault.app.core.SmartImportSummary
+import com.stvault.app.core.WatchedChannel
 import com.stvault.app.databinding.ActivityDiscordBrowserBinding
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
+import kotlin.coroutines.resume
 import kotlin.math.abs
 
 /**
@@ -46,6 +55,9 @@ class DiscordBrowserActivity : AppCompatActivity() {
     private var sidebarHidden = false
     private val zoomSteps = intArrayOf(85, 100, 115, 130)
     private var zoomIndex = 1 // default 100%
+    private val watchRepo by lazy { DiscordWatchRepository.getInstance(this) }
+    private var watchSweepJob: Job? = null
+    private var cachedHoardedNormalizedNames: Set<String> = emptySet()
 
     private data class PageAttachment(
         val id: String,
@@ -115,8 +127,11 @@ class DiscordBrowserActivity : AppCompatActivity() {
             true
         }
         binding.btnWebBack.setOnClickListener { handleSmartBack() }
+        binding.btnWebWatch.setOnClickListener { openWatchSheet() }
+        binding.btnStopProgress.setOnClickListener { cancelWatchSweep() }
         binding.btnWebReload.setOnClickListener { binding.webDiscord.reload() }
         binding.btnWebCommands.setOnClickListener { showQuickCommandsSheet() }
+        refreshWatchBadge()
         binding.btnWebSidebar.setOnClickListener {
             binding.webDiscord.evaluateJavascript(
                 "(function(){ if(!window.__stSetSidebarHidden) return false; var next = document.documentElement.getAttribute('data-st-hide-sidebar') !== '1'; window.__stSetSidebarHidden(next); return next; })();"
@@ -1199,9 +1214,299 @@ class DiscordBrowserActivity : AppCompatActivity() {
         }
     }
 
+    private fun refreshWatchBadge() {
+        lifecycleScope.launch {
+            val unread = withContext(Dispatchers.IO) { watchRepo.getUnreadCount() }
+            binding.btnWebWatch.text = if (unread > 0) "追新·$unread" else "追新"
+            binding.btnWebWatch.setTextColor(
+                ContextCompat.getColor(
+                    this@DiscordBrowserActivity,
+                    if (unread > 0) R.color.accent else R.color.text_primary
+                )
+            )
+        }
+    }
+
+    private fun openWatchSheet(initialTab: Int = -1, initialCategory: String = "全部") {
+        if (watchSweepJob?.isActive == true) {
+            toast("正在巡检中，点上方「停止」可取消")
+            return
+        }
+        lifecycleScope.launch {
+            cachedHoardedNormalizedNames = withContext(Dispatchers.IO) {
+                val lookup = buildHoardLookup()
+                lookup.hoardedNames.mapNotNull { n ->
+                    val norm = DiscordWatchRepository.normalizePostTitle(n.substringBeforeLast('.'))
+                    if (norm.length >= 3) norm else null
+                }.toHashSet()
+            }
+            DiscordWatchSheet.show(
+                ctx = this@DiscordBrowserActivity,
+                repo = watchRepo,
+                initialTab = initialTab,
+                initialCategory = initialCategory,
+                callbacks = object : DiscordWatchSheet.Callbacks {
+                    override fun onStartSweep(categoryFilter: String) {
+                        startWatchSweep(categoryFilter)
+                    }
+
+                    override fun onAddCurrentChannel() {
+                        addCurrentChannelToWatch()
+                    }
+
+                    override fun onOpenPost(post: FeedPost, overrideUrl: String?) {
+                        val target = overrideUrl?.takeIf { it.isNotBlank() } ?: post.url
+                        navigateDiscordSpa(target)
+                    }
+
+                    override fun onOpenChannel(channel: WatchedChannel) {
+                        navigateDiscordSpa(channel.url)
+                    }
+
+                    override fun onDataChanged() {
+                        refreshWatchBadge()
+                    }
+
+                    override fun isPostTitleHoarded(title: String): Boolean {
+                        val norm = DiscordWatchRepository.normalizePostTitle(title)
+                        if (norm.length < 3) return false
+                        if (norm in cachedHoardedNormalizedNames) return true
+                        return false
+                    }
+                }
+            )
+        }
+    }
+
+    private fun addCurrentChannelToWatch() {
+        lifecycleScope.launch {
+            val raw = evaluateJsSuspend(CURRENT_CHANNEL_INFO_JS)
+            val json = unwrapJsJsonObject(raw)
+            val guildId = json?.optString("guildId", "").orEmpty().trim()
+            val channelId = json?.optString("channelId", "").orEmpty().trim()
+            val rawName = json?.optString("name", "").orEmpty().trim()
+            if (guildId.isEmpty() || channelId.isEmpty()) {
+                toast("请先在囤囤里进入一个社区发布频道")
+                return@launch
+            }
+            val already = withContext(Dispatchers.IO) { watchRepo.isChannelWatched(channelId) }
+            if (already) {
+                toast("这个频道已经在「追新」列表里了")
+                openWatchSheet(initialTab = 1)
+                return@launch
+            }
+            val displayName = rawName.ifBlank { "频道 $channelId" }
+            val guessedCat = guessWatchCategory(displayName)
+            VaultSheets.actionList(
+                ctx = this@DiscordBrowserActivity,
+                title = "加入追新 · $displayName",
+                actions = DiscordWatchRepository.CATEGORIES.map { cat ->
+                    SheetAction(
+                        label = cat,
+                        subtitle = if (cat == guessedCat) "推荐分组" else "",
+                        checked = cat == guessedCat
+                    ) {
+                        lifecycleScope.launch {
+                            withContext(Dispatchers.IO) {
+                                watchRepo.upsertChannel(
+                                    channelId = channelId,
+                                    guildId = guildId,
+                                    name = displayName,
+                                    category = cat
+                                )
+                            }
+                            refreshWatchBadge()
+                            toast("已加入追新（$cat）：$displayName")
+                            openWatchSheet(initialTab = 1, initialCategory = cat)
+                        }
+                    }
+                }
+            )
+        }
+    }
+
+    private fun guessWatchCategory(channelName: String): String {
+        val low = channelName.lowercase()
+        return when {
+            low.contains("美化") || low.contains("主题") || low.contains("皮肤") || low.contains("css") || low.contains("ui") || low.contains("theme") -> "美化"
+            low.contains("角色") || low.contains("卡") || low.contains("char") || low.contains("女卡") || low.contains("男卡") -> "角色卡"
+            low.contains("世界书") || low.contains("lore") || low.contains("设定") -> "世界书"
+            low.contains("预设") || low.contains("preset") || low.contains("破限") || low.contains("正则") -> "预设"
+            else -> "其他"
+        }
+    }
+
+    private fun navigateDiscordSpa(targetUrl: String) {
+        val path = targetUrl.substringAfter("discord.com", "").ifBlank { targetUrl }
+        if (!path.startsWith("/channels/")) {
+            binding.webDiscord.loadUrl(targetUrl)
+            return
+        }
+        val escapedPath = JSONObject.quote(path)
+        val js = """
+            (function(p) {
+              try {
+                if (location.hostname.indexOf('discord.com') !== -1) {
+                  if (location.pathname === p) return 'SAME';
+                  window.history.pushState({}, '', p);
+                  window.dispatchEvent(new PopStateEvent('popstate'));
+                  return 'SPA';
+                }
+              } catch (e) {}
+              return 'FALLBACK';
+            })($escapedPath);
+        """.trimIndent()
+        binding.webDiscord.evaluateJavascript(js) { res ->
+            if (res == null || res.contains("FALLBACK")) {
+                binding.webDiscord.loadUrl(targetUrl)
+            }
+        }
+    }
+
+    private suspend fun evaluateJsSuspend(script: String): String? =
+        suspendCancellableCoroutine { cont ->
+            runOnUiThread {
+                if (isFinishing || isDestroyed) {
+                    if (cont.isActive) cont.resume(null)
+                    return@runOnUiThread
+                }
+                binding.webDiscord.evaluateJavascript(script) { value ->
+                    if (cont.isActive) cont.resume(value)
+                }
+            }
+        }
+
+    private fun unwrapJsJsonObject(raw: String?): JSONObject? {
+        if (raw.isNullOrBlank() || raw == "null") return null
+        return try {
+            val unwrapped = JSONTokener(raw).nextValue() as? String ?: return null
+            val t = unwrapped.trim()
+            if (t.startsWith("{")) JSONObject(t) else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun cancelWatchSweep() {
+        watchSweepJob?.cancel()
+        watchSweepJob = null
+        binding.btnStopProgress.visibility = View.GONE
+        setBusy(false)
+        toast("已停止巡检")
+    }
+
+    private fun startWatchSweep(categoryFilter: String) {
+        if (busy) {
+            toast("当前正在执行其他任务，请稍候")
+            return
+        }
+        watchSweepJob?.cancel()
+        watchSweepJob = lifecycleScope.launch {
+            val all = withContext(Dispatchers.IO) { watchRepo.getChannels() }
+            val targets = all.filter { categoryFilter == "全部" || it.category == categoryFilter }
+            if (targets.isEmpty()) {
+                toast("该分组下暂无追新频道")
+                return@launch
+            }
+            setBusy(true, "追新 0/${targets.size}...")
+            binding.btnStopProgress.visibility = View.VISIBLE
+            val observedByChannel = LinkedHashMap<String, List<ObservedPost>>(targets.size)
+            try {
+                for ((idx, ch) in targets.withIndex()) {
+                    binding.tvHoardProgress.text = "追新 ${idx + 1}/${targets.size} · ${ch.name}"
+                    navigateDiscordSpa(ch.url)
+
+                    var collected = emptyList<ObservedPost>()
+                    for (attempt in 0 until 12) {
+                        delay(450L)
+                        val raw = evaluateJsSuspend(CHANNEL_POSTS_SCAN_JS)
+                        val obj = unwrapJsJsonObject(raw) ?: continue
+                        val curCid = obj.optString("channelId", "").trim()
+                        val mode = obj.optString("mode", "loading")
+                        val arr = obj.optJSONArray("posts") ?: JSONArray()
+                        val parsed = parseObservedPosts(arr, ch)
+                        val channelMatches = curCid == ch.id || curCid.isEmpty()
+                        if (mode != "loading" && parsed.isNotEmpty() && (channelMatches || attempt >= 4)) {
+                            collected = parsed
+                            // If only 1-2 posts rendered on the very first check, wait one brief tick for full viewport
+                            if (parsed.size <= 2 && attempt < 4) {
+                                delay(380L)
+                                val retryObj = unwrapJsJsonObject(evaluateJsSuspend(CHANNEL_POSTS_SCAN_JS))
+                                val retryParsed = retryObj?.optJSONArray("posts")?.let { parseObservedPosts(it, ch) }.orEmpty()
+                                if (retryParsed.size > collected.size) collected = retryParsed
+                            }
+                            break
+                        }
+                    }
+                    if (collected.isNotEmpty()) {
+                        observedByChannel[ch.id] = collected
+                    }
+                    if (idx < targets.lastIndex) {
+                        delay(240L)
+                    }
+                }
+
+                binding.tvHoardProgress.text = "正在跨社区去重..."
+                val summary = withContext(Dispatchers.Default) {
+                    watchRepo.ingestSweepResults(observedByChannel)
+                }
+                refreshWatchBadge()
+                val msg = buildString {
+                    if (summary.newCount > 0) {
+                        append("发现 ${summary.newCount} 条新帖")
+                        if (summary.foldedDuplicateCount > 0) {
+                            append("，已折 ${summary.foldedDuplicateCount} 条跨社区重复")
+                        }
+                    } else if (summary.foldedDuplicateCount > 0) {
+                        append("暂无独立新帖（折叠 ${summary.foldedDuplicateCount} 条重复）")
+                    } else {
+                        append("巡检完成，暂无新帖")
+                    }
+                }
+                toast(msg)
+                openWatchSheet(initialTab = 0, initialCategory = categoryFilter)
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                toast("巡检中断：${e.message?.take(40) ?: "请重试"}")
+            } finally {
+                binding.btnStopProgress.visibility = View.GONE
+                setBusy(false)
+                watchSweepJob = null
+            }
+        }
+    }
+
+    private fun parseObservedPosts(arr: JSONArray, ch: WatchedChannel): List<ObservedPost> {
+        val out = ArrayList<ObservedPost>(arr.length())
+        val now = System.currentTimeMillis()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val pid = o.optString("id", "").trim()
+            val title = o.optString("title", "").replace(Regex("\\s+"), " ").trim()
+            val author = o.optString("author", "").trim()
+            val url = o.optString("url", "").trim()
+            if (pid.isEmpty() || title.isEmpty() || url.isEmpty()) continue
+            out.add(
+                ObservedPost(
+                    postId = pid,
+                    channelId = ch.id,
+                    channelName = ch.name,
+                    category = ch.category,
+                    title = title.take(140),
+                    author = author.take(40),
+                    url = url,
+                    discoveredAt = now - i // preserve visual top-to-bottom order
+                )
+            )
+        }
+        return out
+    }
+
     private fun setBusy(isBusy: Boolean, text: String = "") {
         busy = isBusy
         binding.hoardProgressStrip.visibility = if (isBusy) View.VISIBLE else View.GONE
+        if (!isBusy) binding.btnStopProgress.visibility = View.GONE
         if (text.isNotBlank()) binding.tvHoardProgress.text = text
         binding.fabHoard.isEnabled = !isBusy
     }
@@ -1210,6 +1515,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
         super.onResume()
         binding.webDiscord.onResume()
         binding.webDiscord.resumeTimers()
+        refreshWatchBadge()
     }
 
     override fun onPause() {
@@ -1220,6 +1526,8 @@ class DiscordBrowserActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        watchSweepJob?.cancel()
+        watchSweepJob = null
         try {
             val web = binding.webDiscord
             web.stopLoading()
@@ -1568,6 +1876,190 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 return JSON.stringify(runCollector(true));
               } catch (e) {
                 return '{}';
+              }
+            })();
+        """.trimIndent()
+
+        /**
+         * Extracts the current Discord channel's guildId, channelId, and clean display name.
+         * If the user is currently viewing a forum thread overlay, resolves the parent forum channel.
+         */
+        private val CURRENT_CHANNEL_INFO_JS = """
+            (function() {
+              try {
+                var path = location.pathname || '';
+                var m = /\/channels\/(\d{15,22})\/(\d{15,22})/.exec(path);
+                if (!m) return '{}';
+                var guildId = m[1];
+                var channelId = m[2];
+
+                // If a forum thread side-layer is open, resolve the parent forum channel from sidebar
+                var layer = document.querySelector('div[class*="chatLayerWrapper_"]');
+                if (layer && layer.getBoundingClientRect().width > 40) {
+                  var activeLink = document.querySelector('nav a[aria-current="page"][href*="/channels/' + guildId + '/"], [class*="selected_"] a[href*="/channels/' + guildId + '/"]');
+                  if (activeLink) {
+                    var pm = /\/channels\/(\d{15,22})\/(\d{15,22})/.exec(activeLink.getAttribute('href') || '');
+                    if (pm) channelId = pm[2];
+                  }
+                }
+
+                // Server name
+                var serverName = '';
+                var srvEl = document.querySelector('header[class*="header_"] h2, h1[class*="name_"], [class*="guildName_"]');
+                if (srvEl && srvEl.textContent) serverName = srvEl.textContent.trim();
+
+                // Channel name (strictly outside thread overlay)
+                var chName = '';
+                var titles = document.querySelectorAll('section[class*="title_"] h1, [class*="titleWrapper_"] h1, [class*="titleWrapper_"] h2');
+                for (var i = 0; i < titles.length; i++) {
+                  if (layer && layer.contains(titles[i])) continue;
+                  var t = (titles[i].textContent || '').trim();
+                  if (t) { chName = t; break; }
+                }
+
+                // Fallback to document.title ("#channel | Server" or "channel - Discord")
+                if (!chName || !serverName) {
+                  var dt = (document.title || '').replace(/\s*-\s*Discord\s*$/i, '').replace(/^\(\d+\)\s*/, '').trim();
+                  var parts = dt.split(/\s*\|\s*/);
+                  if (!chName && parts[0]) chName = parts[0].replace(/^#/, '').trim();
+                  if (!serverName && parts[1]) serverName = parts[1].trim();
+                }
+
+                chName = chName.replace(/^#/, '').trim();
+                var full = '';
+                if (serverName && chName && serverName !== chName) {
+                  full = serverName.slice(0, 12) + ' · ' + chName.slice(0, 18);
+                } else {
+                  full = (chName || serverName || ('频道 ' + channelId)).slice(0, 28);
+                }
+
+                return JSON.stringify({
+                  guildId: guildId,
+                  channelId: channelId,
+                  name: full
+                });
+              } catch (e) {
+                return '{}';
+              }
+            })();
+        """.trimIndent()
+
+        /**
+         * Lightweight one-shot DOM reader for「追新」sweep.
+         * Supports both Discord Forum channels and standard Text channels.
+         */
+        private val CHANNEL_POSTS_SCAN_JS = """
+            (function() {
+              try {
+                var path = location.pathname || '';
+                var m = /\/channels\/(\d{15,22})\/(\d{15,22})/.exec(path);
+                if (!m) return JSON.stringify({ mode: 'loading', channelId: '', posts: [] });
+                var guildId = m[1];
+                var channelId = m[2];
+                var layer = document.querySelector('div[class*="chatLayerWrapper_"]');
+                var posts = [];
+                var seen = {};
+
+                function extractSnowflake(str) {
+                  if (!str) return '';
+                  var ms = String(str).match(/\d{17,20}/g);
+                  return ms && ms.length ? ms[ms.length - 1] : '';
+                }
+
+                // 1) Try Forum channel cards first
+                var forumCards = document.querySelectorAll('li[class*="card_"], div[class*="mainCard_"], [data-list-item-id*="forum-channel-list"]');
+                for (var i = 0; i < forumCards.length && posts.length < 35; i++) {
+                  var card = forumCards[i];
+                  if (layer && layer.contains(card)) continue;
+                  var pid = '';
+                  var dlid = card.getAttribute('data-list-item-id') || '';
+                  if (dlid) pid = extractSnowflake(dlid);
+                  if (!pid) {
+                    var link = card.querySelector('a[href*="/channels/"]');
+                    if (link) {
+                      var lm = /\/channels\/\d+\/(\d{17,20})/.exec(link.getAttribute('href') || '');
+                      if (lm) pid = lm[1];
+                    }
+                  }
+                  if (!pid && card.id) pid = extractSnowflake(card.id);
+                  if (!pid || pid === channelId || seen[pid]) continue;
+
+                  var titleEl = card.querySelector('[class*="postTitleText_"], h3[class*="title_"], [class*="headerText_"], h3');
+                  var title = titleEl ? (titleEl.textContent || '').replace(/\s+/g, ' ').trim() : '';
+                  if (!title) {
+                    var aria = (card.getAttribute('aria-label') || '').trim();
+                    if (aria) title = aria.split(',')[0].trim();
+                  }
+                  if (!title) continue;
+
+                  var author = '';
+                  var aEl = card.querySelector('[class*="author_"] [class*="username_"], [class*="author_"], [class*="header_"] [class*="username_"]');
+                  if (aEl && aEl.textContent) {
+                    author = aEl.textContent.replace(/\s+/g, ' ').trim();
+                  }
+                  seen[pid] = true;
+                  posts.push({
+                    id: pid,
+                    title: title.slice(0, 140),
+                    author: author.slice(0, 40),
+                    url: 'https://discord.com/channels/' + guildId + '/' + pid
+                  });
+                }
+
+                if (posts.length > 0) {
+                  return JSON.stringify({ mode: 'forum', guildId: guildId, channelId: channelId, posts: posts });
+                }
+
+                // 2) Fallback: Standard text channel messages (newest first)
+                var msgNodes = document.querySelectorAll('li[id^="chat-messages-"]');
+                for (var j = msgNodes.length - 1; j >= 0 && posts.length < 28; j--) {
+                  var mn = msgNodes[j];
+                  if (layer && layer.contains(mn)) continue;
+                  var midMatch = /chat-messages-(\d+)-(\d{17,20})/.exec(mn.id || '');
+                  if (!midMatch) continue;
+                  var mid = midMatch[2];
+                  if (seen[mid]) continue;
+
+                  var hasAtt = !!mn.querySelector('a[href*="/attachments/"], [class*="attachment_"], [class*="fileNameLink_"]');
+                  var contentEl = mn.querySelector('div[id^="message-content-"], div[class*="markup_"]');
+                  var text = contentEl ? (contentEl.innerText || contentEl.textContent || '').trim() : '';
+                  var firstLine = '';
+                  if (text) {
+                    var lines = text.split(/\r?\n/);
+                    for (var li = 0; li < lines.length; li++) {
+                      var lt = lines[li].replace(/\s+/g, ' ').trim();
+                      if (lt) { firstLine = lt; break; }
+                    }
+                  }
+                  if (!firstLine && hasAtt) {
+                    var fnEl = mn.querySelector('a[class*="fileNameLink_"], [class*="filename_"], a[href*="/attachments/"]');
+                    if (fnEl && fnEl.textContent) firstLine = fnEl.textContent.trim();
+                  }
+                  if (!firstLine || (!hasAtt && firstLine.length < 18)) continue;
+
+                  var authorName = '';
+                  var cur = mn;
+                  for (var step = 0; step < 5 && cur; step++) {
+                    var uEl = cur.querySelector('span[class*="username_"], h3 span[class*="username_"]');
+                    if (uEl && uEl.textContent && uEl.textContent.trim()) {
+                      authorName = uEl.textContent.trim();
+                      break;
+                    }
+                    cur = cur.previousElementSibling;
+                  }
+                  seen[mid] = true;
+                  posts.push({
+                    id: mid,
+                    title: firstLine.slice(0, 140),
+                    author: authorName.slice(0, 40),
+                    url: 'https://discord.com/channels/' + guildId + '/' + channelId + '/' + mid
+                  });
+                }
+
+                var mode = posts.length > 0 ? 'text' : 'loading';
+                return JSON.stringify({ mode: mode, guildId: guildId, channelId: channelId, posts: posts });
+              } catch (e) {
+                return JSON.stringify({ mode: 'loading', channelId: '', posts: [] });
               }
             })();
         """.trimIndent()
