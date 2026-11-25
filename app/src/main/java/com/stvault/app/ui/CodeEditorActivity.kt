@@ -68,6 +68,7 @@ class CodeEditorActivity : AppCompatActivity() {
     private var currentMatchPos: Int = 0
 
     private val visualCommitCallbacks = mutableListOf<() -> Unit>()
+    private var lastFocusedMultiEdit: EditText? = null
 
     private class LazyField(
         val hint: String,
@@ -110,11 +111,28 @@ class CodeEditorActivity : AppCompatActivity() {
         binding.btnEditorSave.setOnClickListener { saveCode() }
 
         binding.btnEditorScrollTop.setOnClickListener {
-            (if (showingRawMode) binding.scrollRawEditor else binding.scrollVisualEditor).smoothScrollTo(0, 0)
+            if (showingRawMode) {
+                binding.scrollRawEditor.smoothScrollTo(0, 0)
+                scrollEditTextToTop(binding.etCodeContent)
+            } else {
+                val targetEt = findActiveMultiEditText()
+                if (targetEt != null && (itemType.isNotEmpty() || targetEt.canScrollVertically(-1))) {
+                    scrollEditTextToTop(targetEt)
+                }
+                binding.scrollVisualEditor.smoothScrollTo(0, 0)
+            }
         }
         binding.btnEditorScrollBottom.setOnClickListener {
-            val sv = if (showingRawMode) binding.scrollRawEditor else binding.scrollVisualEditor
-            sv.post { sv.fullScroll(ScrollView.FOCUS_DOWN) }
+            if (showingRawMode) {
+                binding.scrollRawEditor.post { binding.scrollRawEditor.fullScroll(ScrollView.FOCUS_DOWN) }
+                scrollEditTextToBottom(binding.etCodeContent)
+            } else {
+                val targetEt = findActiveMultiEditText()
+                if (targetEt != null && (itemType.isNotEmpty() || targetEt.canScrollVertically(1))) {
+                    scrollEditTextToBottom(targetEt)
+                }
+                binding.scrollVisualEditor.post { binding.scrollVisualEditor.fullScroll(ScrollView.FOCUS_DOWN) }
+            }
         }
 
         binding.etEditorFind.addTextChangedListener(object : TextWatcher {
@@ -817,10 +835,34 @@ class CodeEditorActivity : AppCompatActivity() {
             ellipsize = android.text.TextUtils.TruncateAt.END
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
+        val btnInTop = TextView(this).apply {
+            text = "顶"
+            setTextColor(col(R.color.text_muted))
+            textSize = 11f
+            setBackgroundResource(R.drawable.bg_pill_accent)
+            setPadding(dp(7), dp(2), dp(7), dp(2))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { marginEnd = dp(5) }
+            visibility = View.GONE
+        }
+        val btnInBottom = TextView(this).apply {
+            text = "底"
+            setTextColor(col(R.color.text_muted))
+            textSize = 11f
+            setBackgroundResource(R.drawable.bg_pill_accent)
+            setPadding(dp(7), dp(2), dp(7), dp(2))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { marginEnd = dp(6) }
+            visibility = View.GONE
+        }
         val tvToggle = TextView(this).apply {
             setTextColor(col(R.color.text_muted))
             textSize = 11f
         }
+        header.addView(btnInTop)
+        header.addView(btnInBottom)
         header.addView(tvToggle)
         inner.addView(header)
 
@@ -890,7 +932,11 @@ class CodeEditorActivity : AppCompatActivity() {
                         maxLines = if (itemType.isNotEmpty()) 40 else 24
                         gravity = Gravity.TOP or Gravity.START
                         isVerticalScrollBarEnabled = true
+                        setOnFocusChangeListener { _, hasFocus ->
+                            if (hasFocus) lastFocusedMultiEdit = this
+                        }
                         setOnTouchListener { v, event ->
+                            lastFocusedMultiEdit = this
                             if (v.canScrollVertically(1) || v.canScrollVertically(-1)) {
                                 v.parent?.requestDisallowInterceptTouchEvent(true)
                                 if ((event.action and android.view.MotionEvent.ACTION_MASK) == android.view.MotionEvent.ACTION_UP) {
@@ -920,11 +966,26 @@ class CodeEditorActivity : AppCompatActivity() {
             }
         }
 
+        fun primaryMultiEdit(): EditText? = built.lastOrNull { !it.first.single }?.second
+
+        btnInTop.setOnClickListener {
+            primaryMultiEdit()?.let { scrollEditTextToTop(it) }
+        }
+        btnInBottom.setOnClickListener {
+            primaryMultiEdit()?.let { scrollEditTextToBottom(it) }
+        }
+
         fun setExpanded(show: Boolean) {
             if (show) inflateBody()
             body.visibility = if (show) View.VISIBLE else View.GONE
             tvPreview?.visibility = if (show) View.GONE else View.VISIBLE
             tvToggle.text = if (show) "收起 ▴" else "编辑 ▾"
+            val hasMulti = show && primaryMultiEdit() != null
+            btnInTop.visibility = if (hasMulti) View.VISIBLE else View.GONE
+            btnInBottom.visibility = if (hasMulti) View.VISIBLE else View.GONE
+            if (hasMulti && itemType.isNotEmpty()) {
+                lastFocusedMultiEdit = primaryMultiEdit()
+            }
         }
         header.setOnClickListener { setExpanded(body.visibility != View.VISIBLE) }
         tvPreview?.setOnClickListener { setExpanded(true) }
@@ -1058,6 +1119,44 @@ class CodeEditorActivity : AppCompatActivity() {
                 setResult(RESULT_OK)
             } else {
                 toast(msg)
+            }
+        }
+    }
+
+    private fun findActiveMultiEditText(): EditText? {
+        val focused = currentFocus as? EditText
+        if (focused != null && focused !== binding.etEditorFind && focused.isAttachedToWindow) {
+            return focused
+        }
+        val last = lastFocusedMultiEdit
+        if (last != null && last.isAttachedToWindow && last.isShown) {
+            return last
+        }
+        return null
+    }
+
+    private fun scrollEditTextToTop(et: EditText) {
+        et.post {
+            try {
+                et.setSelection(0)
+            } catch (_: Exception) {
+            }
+            et.scrollTo(0, 0)
+        }
+    }
+
+    private fun scrollEditTextToBottom(et: EditText) {
+        et.post {
+            val len = et.text?.length ?: 0
+            try {
+                et.setSelection(len)
+            } catch (_: Exception) {
+            }
+            val layout = et.layout
+            if (layout != null) {
+                val contentHeight = layout.height + et.totalPaddingTop + et.totalPaddingBottom
+                val maxScroll = (contentHeight - et.height).coerceAtLeast(0)
+                et.scrollTo(0, maxScroll)
             }
         }
     }
