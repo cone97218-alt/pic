@@ -20,16 +20,20 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.stvault.app.R
+import com.stvault.app.core.BackgroundRepository
+import com.stvault.app.core.ImageDownloader
 import com.stvault.app.core.ResourceLibraryRepository
 import com.stvault.app.core.VaultRepository
 import com.stvault.app.databinding.ActivityComponentPreviewBinding
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.FileInputStream
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 
 /**
@@ -58,6 +62,10 @@ class ComponentPreviewActivity : AppCompatActivity() {
     private var showingSource: Boolean = false
     private var sourcePopulated: Boolean = false
     private var previewDark: Boolean = false
+    private var activeGreetingThemeId: String = ""
+    private var cachedThemeCssPair: Pair<String, String>? = null
+    private var greetingShellLoaded: Boolean = false
+    private var renderJob: Job? = null
 
     @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -158,7 +166,22 @@ class ComponentPreviewActivity : AppCompatActivity() {
         sourcePopulated = false
         if (showingSource) populateSourceTextLazy()
         updateGreetingNavBar()
-        renderCurrentMode()
+        updateGreetingContentFast()
+    }
+
+    private fun updateGreetingContentFast() {
+        if (mode == MODE_GREETING_RENDER && greetingShellLoaded) {
+            val quoted = JSONObject.quote(greetingText)
+            binding.webCompPreview.evaluateJavascript(
+                "(function(){ if(typeof window.__stRenderGreeting==='function'){ window.__stRenderGreeting($quoted); window.scrollTo(0,0); return 'OK'; } return 'RELOAD'; })();"
+            ) { res ->
+                if (res == null || !res.contains("OK")) {
+                    renderCurrentMode()
+                }
+            }
+        } else {
+            renderCurrentMode()
+        }
     }
 
     private fun showGreetingPickerSheet() {
@@ -178,7 +201,7 @@ class ComponentPreviewActivity : AppCompatActivity() {
                         sourcePopulated = false
                         if (showingSource) populateSourceTextLazy()
                         updateGreetingNavBar()
-                        renderCurrentMode()
+                        updateGreetingContentFast()
                     }
                 }
             }
@@ -267,6 +290,9 @@ class ComponentPreviewActivity : AppCompatActivity() {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 binding.pbCompPreviewLoading.visibility = View.GONE
+                if (mode == MODE_GREETING_RENDER) {
+                    greetingShellLoaded = true
+                }
             }
 
             override fun shouldInterceptRequest(
@@ -274,6 +300,23 @@ class ComponentPreviewActivity : AppCompatActivity() {
                 request: WebResourceRequest?
             ): WebResourceResponse? {
                 val url = request?.url?.toString() ?: return null
+
+                // 0. Bound theme background image for themed greeting preview
+                if (url.startsWith("${LOCAL_ORIGIN}__preview__/bound_bg") && activeGreetingThemeId.isNotEmpty()) {
+                    val bgRepo = BackgroundRepository.getInstance(this@ComponentPreviewActivity)
+                    val bgRec = bgRepo.getBoundBackground(activeGreetingThemeId)
+                    val bgFile = bgRec?.let { bgRepo.getFile(it) }
+                    if (bgFile != null && bgFile.exists()) {
+                        return try {
+                            val bytes = bgFile.readBytes()
+                            val mime = ImageDownloader.detectImageMime(bytes) ?: "image/png"
+                            WebResourceResponse(mime, null, 200, "OK", mapOf("Access-Control-Allow-Origin" to "*"), ByteArrayInputStream(bytes))
+                        } catch (_: Exception) {
+                            WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+                        }
+                    }
+                    return WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+                }
 
                 // 1. Character cover avatar if rendering greeting
                 if (url.startsWith("${LOCAL_ORIGIN}__char_avatar__") && charId.isNotEmpty()) {
@@ -283,20 +326,32 @@ class ComponentPreviewActivity : AppCompatActivity() {
                         return try {
                             WebResourceResponse("image/png", null, 200, "OK", mapOf("Access-Control-Allow-Origin" to "*"), FileInputStream(f))
                         } catch (_: Exception) {
-                            null
+                            WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
                         }
                     }
+                    return WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
                 }
 
-                // 2. Bundled SillyTavern CSS/fonts
+                // 2. Bundled SillyTavern CSS/fonts (RAM-cached + instant 404 on miss so WebView NEVER stalls on DNS!)
                 if (url.startsWith(LOCAL_ORIGIN)) {
                     val assetPath = url.removePrefix(LOCAL_ORIGIN).substringBefore('?').trimStart('/')
-                    return try {
-                        val stream = assets.open("st/$assetPath")
-                        WebResourceResponse(guessMime(assetPath), "UTF-8", 200, "OK", mapOf("Access-Control-Allow-Origin" to "*"), stream)
-                    } catch (_: Exception) {
-                        null
+                    if (assetPath.isNotEmpty() && !assetPath.startsWith("__")) {
+                        return try {
+                            val bytes = stAssetRamCache.getOrPut(assetPath) {
+                                assets.open("st/$assetPath").use { it.readBytes() }
+                            }
+                            val mime = guessMime(assetPath)
+                            val encoding = if (mime.startsWith("text/") || mime == "application/javascript") "UTF-8" else null
+                            val headers = mapOf(
+                                "Access-Control-Allow-Origin" to "*",
+                                "Cache-Control" to "public, max-age=31536000"
+                            )
+                            WebResourceResponse(mime, encoding, 200, "OK", headers, ByteArrayInputStream(bytes))
+                        } catch (_: Exception) {
+                            WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+                        }
                     }
+                    return WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
                 }
 
                 // 3. Offline cached images & fonts from VaultRepository
@@ -323,12 +378,14 @@ class ComponentPreviewActivity : AppCompatActivity() {
     }
 
     private fun renderCurrentMode() {
+        renderJob?.cancel()
+        greetingShellLoaded = false
         binding.webCompPreview.setBackgroundColor(
             android.graphics.Color.parseColor(if (previewDark) "#111114" else "#F7F7F5")
         )
         binding.pbCompPreviewLoading.visibility = View.VISIBLE
         val testInputSnap = if (mode == MODE_REGEX) binding.etTestInput.text?.toString().orEmpty() else ""
-        lifecycleScope.launch {
+        renderJob = lifecycleScope.launch {
             val html = withContext(Dispatchers.Default) {
                 when (mode) {
                     MODE_REGEX -> buildRegexPreviewHtml(testInputSnap)
@@ -467,59 +524,92 @@ class ComponentPreviewActivity : AppCompatActivity() {
         val prefs = getSharedPreferences("st_vault_prefs", Context.MODE_PRIVATE)
         val renderMode = prefs.getString("greeting_render_mode", "plain") ?: "plain"
         val themeId = prefs.getString("greeting_theme_id", "").orEmpty()
+        activeGreetingThemeId = if (renderMode == "theme") themeId else ""
 
         val greetingJson = JSONObject.quote(greetingText)
         val regexArrStr = regexListJson.ifBlank { "[]" }
 
         val script = """
             (function() {
-                let text = $greetingJson;
                 const rules = $regexArrStr;
-                for (const r of rules) {
-                    if (r.disabled || !r.findRegex) continue;
-                    try {
-                        let pat = r.findRegex.trim();
-                        let flags = 'gm';
-                        if (pat.startsWith('/') && pat.length > 2) {
-                            const last = pat.lastIndexOf('/');
-                            if (last > 0) {
-                                flags = pat.slice(last + 1).replace(/[^gimsuy]/g, '') || 'gm';
-                                pat = pat.slice(1, last);
-                            }
-                        }
-                        const re = new RegExp(pat, flags);
-                        text = text.replace(re, r.replaceString || '');
-                    } catch (e) {}
-                }
-                text = text.replace(/```[a-zA-Z0-9_-]*[ \t]*\r?\n?([\s\S]*?)```/g, '$1');
-                text = text.replace(/^\s*```[a-zA-Z0-9_-]*\s*$/gm, '');
-                if (!/<(div|style|table|section|details|iframe)/i.test(text)) {
-                    text = text
-                        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-                        .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-                        .replace(/\n/g, '<br>');
-                }
-                const target = document.getElementById('st-render-slot');
-                if (target) {
-                    target.innerHTML = text;
-                    target.querySelectorAll('script').forEach(old => {
-                        const s = document.createElement('script');
-                        s.textContent = old.textContent;
-                        old.replaceWith(s);
+                function formatHybridMarkdownHtml(src) {
+                    let s = String(src || '').replace(/\r\n/g, '\n');
+                    // 1) Protect <style>, <script>, <pre>, <svg> blocks verbatim
+                    const stash = [];
+                    s = s.replace(/<(style|script|pre|svg)\b[^>]*>[\s\S]*?<\/\1>/gi, function(m) {
+                        const tok = '@@STASH_' + stash.length + '@@';
+                        stash.push(m);
+                        return tok;
                     });
+                    // 2) Trim structural indentation newlines directly adjacent to block HTML tags
+                    const blockTag = '(?:div|section|article|header|footer|aside|nav|main|details|summary|table|thead|tbody|tfoot|tr|td|th|ul|ol|li|hr|blockquote|h[1-6]|p|iframe)';
+                    s = s.replace(new RegExp('(<\\/?' + blockTag + '\\b[^>]*>)\\s*\\n[ \\t]*', 'gi'), '$1');
+                    s = s.replace(new RegExp('[ \\t]*\\n\\s*(<\\/?' + blockTag + '\\b[^>]*>)', 'gi'), '$1');
+                    // 3) Convert line breaks & inline markdown ONLY in text nodes outside HTML tags
+                    const parts = s.split(/(<[^>]+>)/g);
+                    for (let i = 0; i < parts.length; i += 2) {
+                        let chunk = parts[i];
+                        if (!chunk) continue;
+                        chunk = chunk
+                            .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                            .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
+                            .replace(/\n/g, '<br>');
+                        parts[i] = chunk;
+                    }
+                    s = parts.join('');
+                    // 4) Restore protected blocks
+                    for (let k = 0; k < stash.length; k++) {
+                        s = s.replace('@@STASH_' + k + '@@', function() { return stash[k]; });
+                    }
+                    return s;
                 }
+
+                window.__stRenderGreeting = function(rawInput) {
+                    let text = String(rawInput || '');
+                    for (const r of rules) {
+                        if (r.disabled || !r.findRegex) continue;
+                        try {
+                            let pat = r.findRegex.trim();
+                            let flags = 'gm';
+                            if (pat.startsWith('/') && pat.length > 2) {
+                                const last = pat.lastIndexOf('/');
+                                if (last > 0) {
+                                    flags = pat.slice(last + 1).replace(/[^gimsuy]/g, '') || 'gm';
+                                    pat = pat.slice(1, last);
+                                }
+                            }
+                            const re = new RegExp(pat, flags);
+                            text = text.replace(re, r.replaceString || '');
+                        } catch (e) {}
+                    }
+                    text = text.replace(/```[a-zA-Z0-9_-]*[ \t]*\r?\n?([\s\S]*?)```/g, '$1');
+                    text = text.replace(/^\s*```[a-zA-Z0-9_-]*\s*$/gm, '');
+                    text = formatHybridMarkdownHtml(text);
+                    const target = document.getElementById('st-render-slot');
+                    if (target) {
+                        target.innerHTML = text;
+                        target.querySelectorAll('script').forEach(old => {
+                            const s = document.createElement('script');
+                            s.textContent = old.textContent;
+                            old.replaceWith(s);
+                        });
+                    }
+                };
+                window.__stRenderGreeting($greetingJson);
             })();
         """.trimIndent()
 
         if (renderMode == "theme" && themeId.isNotEmpty()) {
             val themeCss = extractThemeCssForGreeting(themeId)
             if (themeCss != null) {
+                val hasBoundBg = BackgroundRepository.getInstance(this).getBoundBackground(themeId) != null
                 return wrapInThemedStShell(
                     bodyHtml = """<div id="st-render-slot"></div>""",
                     extraScript = script,
                     charName = titleText,
                     hasAvatar = charId.isNotEmpty(),
-                    themeCss = themeCss
+                    themeCss = themeCss,
+                    hasBoundBg = hasBoundBg
                 )
             }
         }
@@ -532,10 +622,13 @@ class ComponentPreviewActivity : AppCompatActivity() {
     }
 
     private fun extractThemeCssForGreeting(themeId: String): String? {
+        cachedThemeCssPair?.let { (cachedId, cachedCss) ->
+            if (cachedId == themeId) return cachedCss
+        }
         return try {
             val (_, raw) = vaultRepo.readSourceRawText(themeId)
             val trimmed = raw.trim()
-            if (trimmed.startsWith("{")) {
+            val css = if (trimmed.startsWith("{")) {
                 val obj = JSONObject(trimmed)
                 val sb = StringBuilder(":root {\n")
                 fun putVar(jsonKey: String, cssVar: String) {
@@ -556,6 +649,10 @@ class ComponentPreviewActivity : AppCompatActivity() {
             } else {
                 trimmed
             }
+            // Strip blocking external @import rules so slow remote font CDNs never stall greeting preview
+            val nonBlocking = css.replace(Regex("@import\\s+url\\([^)]*\\)\\s*;?", RegexOption.IGNORE_CASE), "")
+            cachedThemeCssPair = themeId to nonBlocking
+            nonBlocking
         } catch (_: Exception) {
             null
         }
@@ -598,10 +695,15 @@ class ComponentPreviewActivity : AppCompatActivity() {
         extraScript: String,
         charName: String,
         hasAvatar: Boolean,
-        themeCss: String
+        themeCss: String,
+        hasBoundBg: Boolean = false
     ): String {
         val avatarHtml = if (hasAvatar) {
             """<div class="mesAvatarWrapper"><div class="avatar"><img src="${LOCAL_ORIGIN}__char_avatar__" /></div></div>"""
+        } else ""
+        val stamp = System.currentTimeMillis()
+        val boundBgCss = if (hasBoundBg) {
+            """#bg1 { position: fixed !important; inset: 0 !important; z-index: 0 !important; background-image: url("__preview__/bound_bg?t=$stamp") !important; background-size: cover !important; background-position: center !important; background-repeat: no-repeat !important; pointer-events: none; }"""
         } else ""
         return """
 <!DOCTYPE html>
@@ -615,15 +717,18 @@ class ComponentPreviewActivity : AppCompatActivity() {
 <link rel="stylesheet" href="${LOCAL_ORIGIN}style.css" />
 <style>
   html, body { margin: 0; padding: 0; min-height: 100vh; }
+  #sheld { position: relative !important; z-index: 1 !important; height: auto !important; min-height: 100vh; width: 100%; }
   #chat { position: relative !important; height: auto !important; min-height: 100vh; padding: 12px; overflow-y: visible !important; }
   .mes_text img { max-width: 100%; height: auto; }
 </style>
 <style>
 $themeCss
+$boundBgCss
 </style>
 </head>
 <body class="charlist_grid">
-  <div id="sheld" style="position:relative;height:auto;min-height:100vh;width:100%;">
+  <div id="bg1"></div>
+  <div id="sheld">
     <div id="chat">
       <div class="mes" is_user="false" is_system="false">
         $avatarHtml
@@ -823,6 +928,7 @@ $themeCss
 
     companion object {
         private const val LOCAL_ORIGIN = "https://st.local/"
+        private val stAssetRamCache = ConcurrentHashMap<String, ByteArray>()
         const val MODE_REGEX = "regex"
         const val MODE_HELPER = "helper"
         const val MODE_GREETING_RENDER = "greeting"
