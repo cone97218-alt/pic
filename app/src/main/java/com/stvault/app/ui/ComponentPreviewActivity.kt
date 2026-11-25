@@ -601,10 +601,35 @@ class ComponentPreviewActivity : AppCompatActivity() {
                             if (i > 0 && /^\s*\n/.test(chunk)) chunk = chunk.replace(/^[ \t]*\n/, '');
                             if (i < parts.length - 1 && /\n[ \t]*$/.test(chunk)) chunk = chunk.replace(/\n[ \t]*$/, '');
                             if (chunk) {
-                                chunk = chunk
-                                    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-                                    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
-                                    .replace(/\n/g, '<br>');
+                                // Convert consecutive Markdown blockquote lines ("> ...") into standard <blockquote><p>...</p></blockquote>
+                                const lines = chunk.split('\n');
+                                const outLines = [];
+                                let bqBuf = [];
+                                const flushBq = function() {
+                                    if (!bqBuf.length) return;
+                                    outLines.push('<blockquote><p>' + bqBuf.join('<br>') + '</p></blockquote>');
+                                    bqBuf = [];
+                                };
+                                const fmtInline = function(line) {
+                                    return line
+                                        .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+                                        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                                        .replace(/__([^_\n]+)__/g, '<u>$1</u>')
+                                        .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
+                                        // Wrap dialogue quotes in <q> (keeping original quotation marks, matching SillyTavern style.css)
+                                        .replace(/(“[^“”\n]+”|「[^「」\n]+」|『[^『』\n]+』|"[^"\n]+")/g, '<q>$1</q>');
+                                };
+                                for (let li = 0; li < lines.length; li++) {
+                                    const bm = /^[ \t]*>[ \t]?(.*)$/.exec(lines[li]);
+                                    if (bm) {
+                                        bqBuf.push(fmtInline(bm[1]));
+                                    } else {
+                                        flushBq();
+                                        outLines.push(fmtInline(lines[li]));
+                                    }
+                                }
+                                flushBq();
+                                chunk = outLines.join('<br>').replace(/<\/blockquote><br>/g, '</blockquote>').replace(/<br><blockquote>/g, '<blockquote>');
                             }
                             parts[i] = chunk;
                         }

@@ -691,6 +691,44 @@ class ThemePreviewActivity : AppCompatActivity() {
         else -> "application/octet-stream"
     }
 
+    private fun formatPreviewRichText(raw: String): String {
+        val escaped = escHtml(raw).replace("\r\n", "\n")
+        val hasExplicitQuote = Regex("""(“[^“”\n]+”|「[^「」\n]+」|『[^『』\n]+』|&quot;[^&\n]+&quot;)""").containsMatchIn(escaped)
+        val lines = escaped.split("\n")
+        val out = mutableListOf<String>()
+        val bqBuf = mutableListOf<String>()
+        fun flushBq() {
+            if (bqBuf.isEmpty()) return
+            out.add("<blockquote><p>${bqBuf.joinToString("<br>")}</p></blockquote>")
+            bqBuf.clear()
+        }
+        fun fmtLine(l: String): String {
+            var s = l
+                .replace(Regex("`([^`]+)`"), "<code>$1</code>")
+                .replace(Regex("\\*\\*([^*]+)\\*\\*"), "<strong>$1</strong>")
+                .replace(Regex("__([^_]+)__"), "<u>$1</u>")
+                .replace(Regex("(^|[^*])\\*([^*]+)\\*(?!\\*)"), "$1<em>$2</em>")
+            s = if (hasExplicitQuote) {
+                s.replace(Regex("""(“[^“”]+”|「[^「」]+」|『[^『』]+』|&quot;.+?&quot;)"""), "<q>$1</q>")
+            } else {
+                "<q>“$s”</q>"
+            }
+            return s
+        }
+        for (line in lines) {
+            if (line.trimStart().startsWith("&gt;")) {
+                bqBuf.add(fmtLine(line.trimStart().removePrefix("&gt;").trimStart()))
+            } else {
+                flushBq()
+                out.add(fmtLine(line))
+            }
+        }
+        flushBq()
+        return out.joinToString("<br>")
+            .replace("</blockquote><br>", "</blockquote>")
+            .replace("<br><blockquote>", "<blockquote>")
+    }
+
     private fun escHtml(s: String): String = s
         .replace("&", "&amp;")
         .replace("<", "&lt;")
@@ -824,8 +862,8 @@ class ThemePreviewActivity : AppCompatActivity() {
 
         val aiName = escHtml(prefs.getString("ai_name", DEFAULT_AI_NAME) ?: DEFAULT_AI_NAME)
         val userName = escHtml(prefs.getString("user_name", DEFAULT_USER_NAME) ?: DEFAULT_USER_NAME)
-        val aiText = escHtml(prefs.getString("ai_text", DEFAULT_AI_TEXT) ?: DEFAULT_AI_TEXT).replace("\n", "<br>")
-        val userText = escHtml(prefs.getString("user_text", DEFAULT_USER_TEXT) ?: DEFAULT_USER_TEXT).replace("\n", "<br>")
+        val aiText = formatPreviewRichText(prefs.getString("ai_text", DEFAULT_AI_TEXT) ?: DEFAULT_AI_TEXT)
+        val userText = formatPreviewRichText(prefs.getString("user_text", DEFAULT_USER_TEXT) ?: DEFAULT_USER_TEXT)
 
         return """
 <!DOCTYPE html>
@@ -962,8 +1000,8 @@ $safeCustomCss
           </div>
           <div class="mes_text">
             <p><em>窗外的雨声渐渐小了下来，壁炉里的木柴发出轻微的噼啪声。</em></p>
-            <p><q>$aiText</q></p>
-            <blockquote>引用块样式预览 · <code>code</code> 标签样式</blockquote>
+            <p>$aiText</p>
+            <blockquote><p>引用块样式预览 · <code>code</code> 标签样式</p></blockquote>
           </div>
           <div class="mes_bias"></div>
         </div>
@@ -995,7 +1033,7 @@ $safeCustomCss
             </div>
           </div>
           <div class="mes_text">
-            <p><q>$userText</q></p>
+            <p>$userText</p>
             <p><em>合上手中的笔记本，抬头打量着四周的装潢。</em></p>
           </div>
           <div class="mes_bias"></div>
@@ -1029,7 +1067,7 @@ $safeCustomCss
             </div>
           </div>
           <div class="mes_text">
-            <p><strong>加粗文本</strong>、<u>下划线</u> 与 <em>斜体动作</em>。<q>右上角「设置」可自定义头像与对话文本。</q></p>
+            <p><strong>加粗文本</strong>、<u>下划线</u> 与 <em>斜体动作</em>。<q>“右上角「设置」可自定义头像与对话文本。”</q></p>
           </div>
           <div class="mes_bias"></div>
         </div>
