@@ -29,11 +29,20 @@ import com.stvault.app.core.VaultRepository
 import com.stvault.app.core.WorldBookParser
 import com.stvault.app.databinding.ActivityCodeEditorBinding
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
+/**
+ * Lazy, crash-resistant editor:
+ * - JSON is parsed once off the main thread and cached; visual cards only hold lightweight previews.
+ * - EditText widgets are created lazily when a card is expanded (never for hundreds of fields at once).
+ * - Very large single fields (scripts, giant CSS) are shown as read-only previews, never loaded into an EditText.
+ * - Long lists are paged; raw source mode is refused for huge payloads.
+ */
 class CodeEditorActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityCodeEditorBinding
@@ -42,17 +51,29 @@ class CodeEditorActivity : AppCompatActivity() {
 
     private var module: String = ""
     private var recordId: String = ""
-    private var initialCode: String = ""
-    private var currentCode: String = ""
+
+    private var parsedRoot: JSONObject? = null
+    private var plainText: String = ""
+    private var totalChars: Int = 0
+
     private var dirty: Boolean = false
     private var showingRawMode: Boolean = false
     private var suppressRawWatcher: Boolean = false
+    private var filterJob: Job? = null
 
     private var matchIndices: List<Int> = emptyList()
     private var currentMatchPos: Int = 0
 
-    // Tracks commit callbacks from currently mounted visual fields so switching to Raw or pressing Save flushes them
     private val visualCommitCallbacks = mutableListOf<() -> Unit>()
+
+    private class LazyField(
+        val hint: String,
+        val get: () -> String,
+        val set: (String) -> Unit,
+        val single: Boolean = false,
+        val mono: Boolean = false,
+        val minLines: Int = 5
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -64,8 +85,7 @@ class CodeEditorActivity : AppCompatActivity() {
 
         module = intent.getStringExtra(EXTRA_MODULE).orEmpty()
         recordId = intent.getStringExtra(EXTRA_ID).orEmpty()
-        val title = intent.getStringExtra(EXTRA_TITLE).orEmpty()
-        binding.tvEditorTitle.text = title.ifBlank { "编辑" }
+        binding.tvEditorTitle.text = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "编辑" }
 
         binding.btnEditorClose.setOnClickListener { confirmExit() }
         binding.btnEditorModeToggle.setOnClickListener { toggleVisualRawMode() }
@@ -78,43 +98,43 @@ class CodeEditorActivity : AppCompatActivity() {
         binding.btnEditorSave.setOnClickListener { saveCode() }
 
         binding.btnEditorScrollTop.setOnClickListener {
-            if (showingRawMode) {
-                binding.scrollRawEditor.smoothScrollTo(0, 0)
-            } else {
-                binding.scrollVisualEditor.smoothScrollTo(0, 0)
-            }
+            (if (showingRawMode) binding.scrollRawEditor else binding.scrollVisualEditor).smoothScrollTo(0, 0)
         }
         binding.btnEditorScrollBottom.setOnClickListener {
-            if (showingRawMode) {
-                binding.scrollRawEditor.post {
-                    binding.scrollRawEditor.fullScroll(ScrollView.FOCUS_DOWN)
-                }
-            } else {
-                binding.scrollVisualEditor.post {
-                    binding.scrollVisualEditor.fullScroll(ScrollView.FOCUS_DOWN)
-                }
-            }
+            val sv = if (showingRawMode) binding.scrollRawEditor else binding.scrollVisualEditor
+            sv.post { sv.fullScroll(ScrollView.FOCUS_DOWN) }
         }
 
         binding.etEditorFind.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
-                if (!showingRawMode) {
-                    val q = s?.toString()?.trim().orEmpty()
-                    buildVisualSections(q)
-                } else {
+                if (showingRawMode) {
                     recomputeMatches()
+                } else {
+                    val q = s?.toString()?.trim().orEmpty()
+                    filterJob?.cancel()
+                    filterJob = lifecycleScope.launch {
+                        delay(350)
+                        flushVisualEdits()
+                        buildVisualSections(q)
+                    }
                 }
             }
         })
-        binding.btnFindPrev.setOnClickListener {
-            if (showingRawMode) jumpMatch(-1)
-        }
-        binding.btnFindNext.setOnClickListener {
-            if (showingRawMode) jumpMatch(1)
-        }
+        binding.btnFindPrev.setOnClickListener { if (showingRawMode) jumpMatch(-1) }
+        binding.btnFindNext.setOnClickListener { if (showingRawMode) jumpMatch(1) }
 
+        binding.etCodeContent.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                if (suppressRawWatcher) return
+                dirty = true
+            }
+        })
+
+        binding.tvEditorMeta.text = "正在读取..."
         loadCode()
     }
 
@@ -124,7 +144,6 @@ class CodeEditorActivity : AppCompatActivity() {
     }
 
     private fun confirmExit() {
-        flushVisualEditsToCode()
         if (!dirty) {
             finish()
             return
@@ -136,120 +155,130 @@ class CodeEditorActivity : AppCompatActivity() {
             confirmText = "放弃修改",
             cancelText = "继续编辑",
             destructive = true
-        ) {
-            finish()
+        ) { finish() }
+    }
+
+    // ==================== LOAD (off main thread, parse once) ====================
+
+    private fun readRawText(): String? {
+        return when (module) {
+            MODULE_THEME -> vaultRepo.readSourceRawText(recordId).second
+            MODULE_CHARACTER -> {
+                val rec = libRepo.getCharacterById(recordId) ?: return null
+                val f = libRepo.getCharacterFile(rec)
+                if (!f.exists()) return null
+                if (rec.isPng) CharacterCardParser.extractJsonFromPng(f.readBytes()) else f.readText(Charsets.UTF_8)
+            }
+            MODULE_WORLDBOOK -> {
+                val rec = libRepo.getWorldBookById(recordId) ?: return null
+                val f = libRepo.getWorldBookFile(rec)
+                if (f.exists()) f.readText(Charsets.UTF_8) else null
+            }
+            MODULE_PRESET -> {
+                val rec = libRepo.getPresetById(recordId) ?: return null
+                val f = libRepo.getPresetFile(rec)
+                if (f.exists()) f.readText(Charsets.UTF_8) else null
+            }
+            MODULE_COMPONENT -> {
+                val rec = libRepo.getComponentById(recordId) ?: return null
+                libRepo.readComponentText(rec)
+            }
+            else -> null
         }
     }
 
     private fun loadCode() {
         lifecycleScope.launch {
-            val loaded = withContext(Dispatchers.IO) {
+            val result = withContext(Dispatchers.IO) {
                 try {
-                    when (module) {
-                        MODULE_THEME -> prettyJsonIfPossible(vaultRepo.readSourceRawText(recordId).second)
-                        MODULE_CHARACTER -> {
-                            val rec = libRepo.getCharacterById(recordId) ?: return@withContext null
-                            val f = libRepo.getCharacterFile(rec)
-                            if (!f.exists()) return@withContext null
-                            val raw = if (rec.isPng) {
-                                CharacterCardParser.extractJsonFromPng(f.readBytes())
-                            } else {
-                                f.readText(Charsets.UTF_8)
-                            } ?: return@withContext null
-                            prettyJsonIfPossible(raw)
-                        }
-                        MODULE_WORLDBOOK -> {
-                            val rec = libRepo.getWorldBookById(recordId) ?: return@withContext null
-                            val f = libRepo.getWorldBookFile(rec)
-                            if (f.exists()) prettyJsonIfPossible(f.readText(Charsets.UTF_8)) else null
-                        }
-                        MODULE_PRESET -> {
-                            val rec = libRepo.getPresetById(recordId) ?: return@withContext null
-                            val f = libRepo.getPresetFile(rec)
-                            if (f.exists()) prettyJsonIfPossible(f.readText(Charsets.UTF_8)) else null
-                        }
-                        MODULE_COMPONENT -> {
-                            val rec = libRepo.getComponentById(recordId) ?: return@withContext null
-                            prettyJsonIfPossible(libRepo.readComponentText(rec))
-                        }
-                        else -> null
-                    }
-                } catch (_: Exception) {
+                    val raw = readRawText() ?: return@withContext null
+                    val t = raw.trim()
+                    val root = if (t.startsWith("{")) {
+                        try { JSONObject(t) } catch (_: Exception) { null }
+                    } else null
+                    Triple(raw, root, raw.length)
+                } catch (_: Throwable) {
                     null
                 }
             }
-            if (loaded == null) {
+            if (result == null) {
                 toast("读取失败")
                 finish()
                 return@launch
             }
-            initialCode = loaded
-            currentCode = loaded
-            suppressRawWatcher = true
-            binding.etCodeContent.setText(loaded)
-            suppressRawWatcher = false
+            plainText = result.first
+            parsedRoot = result.second
+            totalChars = result.third
+            if (parsedRoot != null) plainText = ""
             dirty = false
-
-            binding.etCodeContent.addTextChangedListener(object : TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-                override fun afterTextChanged(s: Editable?) {
-                    if (suppressRawWatcher) return
-                    currentCode = s?.toString().orEmpty()
-                    dirty = (currentCode != initialCode)
-                    updateMetaBar()
-                }
-            })
-
             buildVisualSections("")
             updateMetaBar()
         }
     }
 
+    private fun serializeCurrent(): String {
+        val root = parsedRoot
+        return if (root != null) root.toString(2) else plainText
+    }
+
+    // ==================== MODE TOGGLE ====================
+
     private fun toggleVisualRawMode() {
         if (!showingRawMode) {
-            // Switching Visual -> Raw
-            flushVisualEditsToCode()
-            showingRawMode = true
-            suppressRawWatcher = true
-            binding.etCodeContent.setText(currentCode)
-            suppressRawWatcher = false
-            binding.scrollVisualEditor.visibility = View.GONE
-            binding.scrollRawEditor.visibility = View.VISIBLE
-            binding.btnEditorModeToggle.text = "分段"
-            binding.btnEditorFormat.visibility = View.VISIBLE
-            updateMetaBar()
+            flushVisualEdits()
+            if (totalChars > RAW_LIMIT) {
+                toast("内容过大，源码模式已停用，请使用分段编辑")
+                return
+            }
+            binding.tvEditorMeta.text = "正在生成源码..."
+            lifecycleScope.launch {
+                val text = withContext(Dispatchers.IO) { serializeCurrent() }
+                showingRawMode = true
+                suppressRawWatcher = true
+                binding.etCodeContent.setText(text)
+                suppressRawWatcher = false
+                binding.scrollVisualEditor.visibility = View.GONE
+                binding.scrollRawEditor.visibility = View.VISIBLE
+                binding.btnEditorModeToggle.text = "分段"
+                binding.btnEditorFormat.visibility = View.VISIBLE
+                updateMetaBar()
+            }
         } else {
-            // Switching Raw -> Visual
-            currentCode = binding.etCodeContent.text?.toString().orEmpty()
-            showingRawMode = false
-            binding.scrollRawEditor.visibility = View.GONE
-            binding.scrollVisualEditor.visibility = View.VISIBLE
-            binding.btnEditorModeToggle.text = "源码"
-            binding.btnEditorFormat.visibility = View.GONE
-            buildVisualSections(binding.etEditorFind.text?.toString()?.trim().orEmpty())
-            updateMetaBar()
+            val text = binding.etCodeContent.text?.toString().orEmpty()
+            lifecycleScope.launch {
+                val parsed = withContext(Dispatchers.IO) {
+                    val t = text.trim()
+                    if (t.startsWith("{")) {
+                        try { JSONObject(t) } catch (_: Exception) { null }
+                    } else null
+                }
+                val t = text.trim()
+                if (t.startsWith("{") && parsed == null) {
+                    toast("JSON 语法有误，请修正后再切回分段")
+                    return@launch
+                }
+                parsedRoot = parsed
+                plainText = if (parsed == null) text else ""
+                totalChars = text.length
+                showingRawMode = false
+                binding.scrollRawEditor.visibility = View.GONE
+                binding.scrollVisualEditor.visibility = View.VISIBLE
+                binding.btnEditorModeToggle.text = "源码"
+                binding.btnEditorFormat.visibility = View.GONE
+                buildVisualSections(binding.etEditorFind.text?.toString()?.trim().orEmpty())
+                updateMetaBar()
+            }
         }
     }
 
-    private fun flushVisualEditsToCode() {
-        if (showingRawMode) {
-            currentCode = binding.etCodeContent.text?.toString().orEmpty()
-            dirty = (currentCode != initialCode)
-            return
-        }
+    private fun flushVisualEdits() {
+        if (showingRawMode) return
         for (cb in visualCommitCallbacks) {
-            try {
-                cb()
-            } catch (_: Exception) {
-            }
+            try { cb() } catch (_: Exception) {}
         }
-        dirty = (currentCode != initialCode)
     }
 
     private fun updateMetaBar() {
-        val text = currentCode
-        val lines = text.count { it == '\n' } + 1
         val modLabel = when (module) {
             MODULE_THEME -> "美化"
             MODULE_CHARACTER -> "角色卡"
@@ -258,387 +287,362 @@ class CodeEditorActivity : AppCompatActivity() {
             MODULE_COMPONENT -> "组件"
             else -> "编辑"
         }
-        val modeLabel = if (showingRawMode) "源码模式" else "分段模式"
-        val stateLabel = if (dirty) "未保存" else "已同步"
-        binding.tvEditorMeta.text = "$modLabel · $modeLabel · $lines 行 · ${text.length} 字符 · $stateLabel"
+        val size = if (totalChars >= 10_000) "${totalChars / 1000}K 字符" else "$totalChars 字符"
+        val mode = if (showingRawMode) "源码" else "分段"
+        binding.tvEditorMeta.text = "$modLabel · $mode · $size · ${if (dirty) "未保存" else "已同步"}"
     }
 
-    // ==================== VISUAL SECTION BUILDER ====================
+    // ==================== VISUAL BUILDERS ====================
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
     private fun col(res: Int): Int = ContextCompat.getColor(this, res)
 
-    private fun buildVisualSections(filterQuery: String) {
+    private fun buildVisualSections(q0: String) {
         visualCommitCallbacks.clear()
         val box = binding.containerVisualSections
         box.removeAllViews()
-        val q = filterQuery.lowercase()
-        val trimmed = currentCode.trim()
-
+        val q = q0.lowercase()
+        val root = parsedRoot
         try {
             when (module) {
-                MODULE_THEME -> {
-                    if (trimmed.startsWith("{")) {
-                        buildThemeVisual(box, JSONObject(trimmed), q)
-                    } else {
-                        buildPlainCssVisual(box, currentCode)
-                    }
-                }
-                MODULE_CHARACTER -> {
-                    if (trimmed.startsWith("{")) {
-                        buildCharacterVisual(box, JSONObject(trimmed), q)
-                    } else {
-                        buildFallbackRawNotice(box)
-                    }
-                }
-                MODULE_PRESET -> {
-                    if (trimmed.startsWith("{")) {
-                        buildPresetVisual(box, JSONObject(trimmed), q)
-                    } else {
-                        buildFallbackRawNotice(box)
-                    }
-                }
-                MODULE_WORLDBOOK -> {
-                    if (trimmed.startsWith("{")) {
-                        buildWorldBookVisual(box, JSONObject(trimmed), q)
-                    } else {
-                        buildFallbackRawNotice(box)
-                    }
-                }
-                MODULE_COMPONENT -> {
-                    buildComponentVisual(box, trimmed)
-                }
-                else -> buildFallbackRawNotice(box)
+                MODULE_THEME -> if (root != null) buildThemeVisual(box, root, q) else buildPlainVisual(box, "CSS 样式代码")
+                MODULE_CHARACTER -> if (root != null) buildCharacterVisual(box, root, q) else buildPlainVisual(box, "角色卡内容")
+                MODULE_PRESET -> if (root != null) buildPresetVisual(box, root, q) else buildPlainVisual(box, "预设内容")
+                MODULE_WORLDBOOK -> if (root != null) buildWorldEntries(box, root, q, null) else buildPlainVisual(box, "世界书内容")
+                MODULE_COMPONENT -> buildComponentVisual(box, root)
+                else -> buildPlainVisual(box, "内容")
             }
-        } catch (_: Exception) {
-            buildFallbackRawNotice(box)
+        } catch (_: Throwable) {
+            box.removeAllViews()
+            buildPlainVisual(box, "内容")
         }
     }
 
-    /**
-     * 1. Theme Visual Editor:
-     *    - Prominently places `custom_css` right at the top (clean multi-line CSS editor, no JSON escaping!)
-     *    - Theme name + collapsible Color & Parameter fields below
-     */
+    private fun buildPlainVisual(box: LinearLayout, title: String) {
+        addEntryCard(
+            box, title, "${plainText.length} 字", null,
+            listOf(LazyField("", { plainText }, { plainText = it }, mono = true, minLines = 16)),
+            expanded = true
+        )
+    }
+
+    /** Theme: CSS first (unescaped), colours collapsed below. */
     private fun buildThemeVisual(box: LinearLayout, root: JSONObject, q: String) {
-        val etName = addCleanFieldCard(
-            parent = box,
-            title = "美化名称",
-            subtitle = "name",
-            initialValue = root.optString("name", ""),
-            singleLine = true,
-            monospace = false
+        addEntryCard(
+            box, "美化名称", null, null,
+            listOf(LazyField("名称", { root.optString("name", "") }, { root.put("name", it.trim()) }, single = true)),
+            expanded = true
         )
-        val etCss = addCleanFieldCard(
-            parent = box,
-            title = "自定义 CSS 样式代码",
-            subtitle = "custom_css（直接编辑纯净 CSS，保存时自动打包回 JSON）",
-            initialValue = root.optString("custom_css", ""),
-            singleLine = false,
-            monospace = true,
-            minLines = 14
+        val css = root.optString("custom_css", "")
+        addEntryCard(
+            box, "自定义 CSS", "${css.length} 字", null,
+            listOf(LazyField("CSS", { root.optString("custom_css", "") }, { root.put("custom_css", it) }, mono = true, minLines = 14)),
+            expanded = css.length in 1..MAX_EAGER_CHARS,
+            preview = css
         )
 
-        val colorKeys = listOf(
-            "main_text_color" to "主文字颜色 (main_text_color)",
-            "italics_text_color" to "斜体颜色 (italics_text_color)",
-            "quote_text_color" to "引号颜色 (quote_text_color)",
-            "underline_text_color" to "下划线颜色 (underline_text_color)",
-            "blur_tint_color" to "毛玻璃底色 (blur_tint_color)",
-            "chat_tint_color" to "聊天区底色 (chat_tint_color)",
-            "user_mes_blur_tint_color" to "用户气泡色 (user_mes_blur_tint_color)",
-            "bot_mes_blur_tint_color" to "角色气泡色 (bot_mes_blur_tint_color)",
-            "border_color" to "边框颜色 (border_color)",
-            "shadow_color" to "阴影颜色 (shadow_color)",
-            "blur_strength" to "模糊强度 (blur_strength)",
-            "font_scale" to "字体缩放 (font_scale)",
-            "chat_width" to "聊天宽度 (chat_width)"
+        val keys = listOf(
+            "main_text_color" to "主文字颜色", "italics_text_color" to "斜体颜色",
+            "quote_text_color" to "引号颜色", "underline_text_color" to "下划线颜色",
+            "blur_tint_color" to "毛玻璃底色", "chat_tint_color" to "聊天区底色",
+            "user_mes_blur_tint_color" to "用户气泡色", "bot_mes_blur_tint_color" to "角色气泡色",
+            "border_color" to "边框颜色", "shadow_color" to "阴影颜色",
+            "blur_strength" to "模糊强度", "font_scale" to "字体缩放", "chat_width" to "聊天宽度"
         )
-
-        val colorEdits = LinkedHashMap<String, EditText>()
-        for ((key, label) in colorKeys) {
+        val items = mutableListOf<() -> Unit>()
+        for ((key, label) in keys) {
             if (!root.has(key)) continue
             val v = root.opt(key)?.toString().orEmpty()
-            if (q.isNotEmpty() && !label.lowercase().contains(q) && !v.lowercase().contains(q)) continue
-            colorEdits[key] = addCollapsibleFieldCard(
-                parent = box,
-                title = label.substringBefore(" ("),
-                subtitle = "$key · $v",
-                initialValue = v,
-                singleLine = true,
-                monospace = true
-            )
-        }
-
-        visualCommitCallbacks.add {
-            root.put("name", etName.text?.toString()?.trim().orEmpty())
-            root.put("custom_css", etCss.text?.toString().orEmpty())
-            for ((k, et) in colorEdits) {
-                val rawVal = et.text?.toString()?.trim().orEmpty()
-                val orig = root.opt(k)
-                when (orig) {
-                    is Number -> {
-                        val num = rawVal.toDoubleOrNull()
-                        if (num != null) {
-                            if (rawVal.contains('.')) root.put(k, num) else root.put(k, num.toInt())
-                        }
-                    }
-                    else -> root.put(k, rawVal)
-                }
+            if (q.isNotEmpty() && !label.contains(q) && !v.lowercase().contains(q)) continue
+            items.add {
+                addEntryCard(
+                    box, label, v.take(24), null,
+                    listOf(LazyField(key, { root.opt(key)?.toString().orEmpty() }, { s ->
+                        val orig = root.opt(key)
+                        if (orig is Number) {
+                            val n = s.trim().toDoubleOrNull()
+                            if (n != null) { if (s.contains('.')) root.put(key, n) else root.put(key, n.toInt()) }
+                        } else root.put(key, s.trim())
+                    }, single = true, mono = true))
+                )
             }
-            currentCode = root.toString(2)
         }
+        addPaged(box, items)
     }
 
-    private fun buildPlainCssVisual(box: LinearLayout, rawCss: String) {
-        val et = addCleanFieldCard(
-            parent = box,
-            title = "CSS 样式代码",
-            subtitle = "直接编辑样式源码",
-            initialValue = rawCss,
-            singleLine = false,
-            monospace = true,
-            minLines = 18
-        )
-        visualCommitCallbacks.add {
-            currentCode = et.text?.toString().orEmpty()
-        }
-    }
-
-    /**
-     * 2. Character Card Visual Editor:
-     *    - Role Name, Description, First Greeting, Personality, Scenario, System Prompt, Creator Notes, Alternate Greetings
-     */
     private fun buildCharacterVisual(box: LinearLayout, root: JSONObject, q: String) {
         val target = root.optJSONObject("data") ?: root
-        val fields = listOf(
-            Triple("name", "角色名称", true),
-            Triple("description", "角色设定 (Description)", false),
-            Triple("first_mes", "默认开场白 (First Message)", false),
-            Triple("personality", "性格摘要 (Personality)", false),
-            Triple("scenario", "情景设定 (Scenario)", false),
-            Triple("system_prompt", "系统提示词 (System Prompt)", false),
-            Triple("mes_example", "对话示例 (Mes Example)", false),
-            Triple("creator_notes", "作者备注 (Creator Notes)", false)
+        fun f(key: String, hint: String, single: Boolean = false) = LazyField(
+            hint,
+            { target.optString(key, root.optString(key, "")) },
+            { v -> target.put(key, v); if (root !== target && root.has(key)) root.put(key, v) },
+            single = single, minLines = if (single) 1 else 6
         )
-        val fieldEdits = LinkedHashMap<String, EditText>()
-        for ((key, label, single) in fields) {
-            val v = target.optString(key, root.optString(key, ""))
-            if (q.isNotEmpty() && !label.lowercase().contains(q) && !v.lowercase().contains(q)) continue
-            val expandByDefault = (key == "name" || key == "description" || key == "first_mes")
-            fieldEdits[key] = if (expandByDefault) {
-                addCleanFieldCard(box, label, "${v.length} 字", v, singleLine = single, monospace = false, minLines = if (single) 1 else 6)
-            } else {
-                addCollapsibleFieldCard(box, label, "${v.length} 字", v, singleLine = single, monospace = false)
-            }
+        fun matches(label: String, v: String) =
+            q.isEmpty() || label.lowercase().contains(q) || v.lowercase().contains(q)
+
+        val name = target.optString("name", root.optString("name", ""))
+        addEntryCard(box, "角色名称", null, null, listOf(f("name", "名称", true)), expanded = true)
+
+        val firstMes = target.optString("first_mes", "")
+        if (matches("默认开场白", firstMes)) {
+            addEntryCard(box, "默认开场白", "${firstMes.length} 字", null, listOf(f("first_mes", "开场白")),
+                expanded = firstMes.length in 1..MAX_EAGER_CHARS, preview = firstMes)
         }
 
-        val altArr = target.optJSONArray("alternate_greetings")
-        val altEdits = LinkedHashMap<Int, EditText>()
-        if (altArr != null && altArr.length() > 0) {
-            for (i in 0 until altArr.length()) {
-                val g = altArr.optString(i, "")
-                val title = "备用开场白 #${i + 1}"
-                if (q.isNotEmpty() && !title.lowercase().contains(q) && !g.lowercase().contains(q)) continue
-                altEdits[i] = addCollapsibleFieldCard(box, title, "${g.length} 字", g, singleLine = false, monospace = false)
-            }
-        }
-
-        visualCommitCallbacks.add {
-            for ((k, et) in fieldEdits) {
-                val newVal = et.text?.toString().orEmpty()
-                target.put(k, newVal)
-                if (root.has(k)) root.put(k, newVal)
-            }
-            if (altArr != null) {
-                for ((idx, et) in altEdits) {
-                    altArr.put(idx, et.text?.toString().orEmpty())
+        val alt = target.optJSONArray("alternate_greetings")
+        if (alt != null && alt.length() > 0) {
+            addSectionTitle(box, "备用开场白 (${alt.length()})")
+            val items = mutableListOf<() -> Unit>()
+            for (i in 0 until alt.length()) {
+                val g = alt.optString(i, "")
+                if (!matches("备用开场白", g)) continue
+                items.add {
+                    addEntryCard(box, "备用开场白 #${i + 1}", "${g.length} 字", null,
+                        listOf(LazyField("开场白", { alt.optString(i, "") }, { alt.put(i, it) })), preview = g)
                 }
             }
-            currentCode = root.toString(2)
+            addPaged(box, items)
         }
+
+        val book = target.optJSONObject("character_book")
+        if (book != null) {
+            val n = (book.optJSONArray("entries")?.length() ?: book.optJSONObject("entries")?.length() ?: 0)
+            if (n > 0) {
+                addSectionTitle(box, "内置世界书 ($n)")
+                buildWorldEntries(box, book, q, null)
+            }
+        }
+
+        addSectionTitle(box, "其他设定")
+        listOf(
+            Triple("description", "角色设定", 0), Triple("personality", "性格摘要", 0),
+            Triple("scenario", "情景设定", 0), Triple("system_prompt", "系统提示词", 0),
+            Triple("mes_example", "对话示例", 0), Triple("creator_notes", "作者备注", 0)
+        ).forEach { (k, label, _) ->
+            val v = target.optString(k, root.optString(k, ""))
+            if (v.isEmpty() && q.isNotEmpty()) return@forEach
+            if (!matches(label, v)) return@forEach
+            addEntryCard(box, label, "${v.length} 字", null, listOf(f(k, label)), preview = v)
+        }
+        if (name.isEmpty()) updateMetaBar()
     }
 
-    /**
-     * 3. Preset Visual Editor:
-     *    - Collapsible cards for each Prompt block (`name` + `content`), click to expand & edit
-     */
     private fun buildPresetVisual(box: LinearLayout, root: JSONObject, q: String) {
-        val promptsArr = root.optJSONArray("prompts")
-        if (promptsArr == null || promptsArr.length() == 0) {
-            buildFallbackRawNotice(box)
+        val arr = root.optJSONArray("prompts")
+        if (arr == null || arr.length() == 0) {
+            buildPlainRawNotice(box)
             return
         }
-        val promptEdits = LinkedHashMap<Int, Pair<EditText, EditText>>()
-        for (i in 0 until promptsArr.length()) {
-            val pObj = promptsArr.optJSONObject(i) ?: continue
-            val pName = pObj.optString("name", pObj.optString("identifier", "提示词 #${i + 1}"))
-            val pRole = pObj.optString("role", "system")
-            val pContent = pObj.optString("content", "")
-            val enabled = pObj.optBoolean("enabled", true)
-            if (q.isNotEmpty() && !pName.lowercase().contains(q) && !pContent.lowercase().contains(q)) continue
-
-            val sub = "#${i + 1} · $pRole · ${pContent.length} 字"
-            val pair = addCollapsibleDualFieldCard(
-                parent = box,
-                title = pName,
-                subtitle = sub,
-                dotColor = if (enabled) Color.parseColor("#16A34A") else Color.parseColor("#8E8E98"),
-                field1Hint = "提示词标题",
-                field1Value = pName,
-                field2Hint = "提示词正文内容...",
-                field2Value = pContent
-            )
-            promptEdits[i] = pair
-        }
-
-        visualCommitCallbacks.add {
-            for ((idx, pair) in promptEdits) {
-                val pObj = promptsArr.optJSONObject(idx) ?: continue
-                pObj.put("name", pair.first.text?.toString()?.trim().orEmpty())
-                pObj.put("content", pair.second.text?.toString().orEmpty())
+        val items = mutableListOf<() -> Unit>()
+        for (i in 0 until arr.length()) {
+            val p = arr.optJSONObject(i) ?: continue
+            val pName = p.optString("name", p.optString("identifier", "提示词 #${i + 1}"))
+            val content = p.optString("content", "")
+            if (q.isNotEmpty() && !pName.lowercase().contains(q) && !content.lowercase().contains(q)) continue
+            val enabled = p.optBoolean("enabled", true)
+            items.add {
+                addEntryCard(
+                    box, pName.ifBlank { "提示词 #${i + 1}" },
+                    "#${i + 1} · ${p.optString("role", "system")} · ${content.length} 字",
+                    if (enabled) Color.parseColor("#16A34A") else Color.parseColor("#8E8E98"),
+                    listOf(
+                        LazyField("标题", { p.optString("name", "") }, { p.put("name", it.trim()) }, single = true),
+                        LazyField("正文", { p.optString("content", "") }, { p.put("content", it) }, minLines = 6)
+                    ),
+                    preview = content
+                )
             }
-            currentCode = root.toString(2)
         }
+        addPaged(box, items)
     }
 
-    /**
-     * 4. WorldBook Visual Editor:
-     *    - Collapsible cards for each World Info entry (`comment` + `key` + `content`)
-     */
-    private fun buildWorldBookVisual(box: LinearLayout, root: JSONObject, q: String) {
-        val entriesObj = root.optJSONObject("entries")
-        val entriesArr = root.optJSONArray("entries")
-        val entryObjects = mutableListOf<JSONObject>()
-        if (entriesObj != null) {
-            val keys = entriesObj.keys().asSequence().toList()
-            for (k in keys) {
-                entriesObj.optJSONObject(k)?.let { entryObjects.add(it) }
-            }
-        } else if (entriesArr != null) {
-            for (i in 0 until entriesArr.length()) {
-                entriesArr.optJSONObject(i)?.let { entryObjects.add(it) }
-            }
+    /** Works for both a worldbook root and a character's character_book (entries as object or array). */
+    private fun buildWorldEntries(box: LinearLayout, container: JSONObject, q: String, @Suppress("UNUSED_PARAMETER") unused: String?) {
+        val list = mutableListOf<JSONObject>()
+        container.optJSONObject("entries")?.let { o ->
+            val it = o.keys()
+            while (it.hasNext()) o.optJSONObject(it.next())?.let { e -> list.add(e) }
+        } ?: container.optJSONArray("entries")?.let { a ->
+            for (i in 0 until a.length()) a.optJSONObject(i)?.let { e -> list.add(e) }
         }
-        if (entryObjects.isEmpty()) {
-            buildFallbackRawNotice(box)
+        if (list.isEmpty()) {
+            buildPlainRawNotice(box)
             return
         }
-
-        val entryEdits = LinkedHashMap<JSONObject, Triple<EditText, EditText, EditText>>()
-        entryObjects.forEachIndexed { idx, eObj ->
-            val comment = eObj.optString("comment", eObj.optString("name", "条目 #${idx + 1}"))
-            val keyArr = eObj.optJSONArray("key") ?: eObj.optJSONArray("keys")
-            val keysList = mutableListOf<String>()
-            if (keyArr != null) {
-                for (kIdx in 0 until keyArr.length()) {
-                    val kv = keyArr.optString(kIdx, "").trim()
-                    if (kv.isNotEmpty()) keysList.add(kv)
+        val items = mutableListOf<() -> Unit>()
+        list.forEachIndexed { idx, e ->
+            val comment = e.optString("comment", e.optString("name", ""))
+            val keyArr = e.optJSONArray("key") ?: e.optJSONArray("keys")
+            val keysJoined = buildString {
+                if (keyArr != null) for (k in 0 until minOf(keyArr.length(), 8)) {
+                    if (isNotEmpty()) append(", ")
+                    append(keyArr.optString(k, ""))
                 }
             }
-            val keysJoined = keysList.joinToString(", ")
-            val content = eObj.optString("content", "")
-            val constant = eObj.optBoolean("constant", false)
-            val enabled = if (eObj.has("disable")) !eObj.optBoolean("disable", false) else eObj.optBoolean("enabled", true)
-
-            if (q.isNotEmpty() && !comment.lowercase().contains(q) && !keysJoined.lowercase().contains(q) && !content.lowercase().contains(q)) {
-                return@forEachIndexed
-            }
-
+            val content = e.optString("content", "")
+            if (q.isNotEmpty() && !comment.lowercase().contains(q) && !keysJoined.lowercase().contains(q) &&
+                !content.lowercase().contains(q)) return@forEachIndexed
+            val enabled = if (e.has("disable")) !e.optBoolean("disable", false) else e.optBoolean("enabled", true)
             val dot = when {
                 !enabled -> Color.parseColor("#8E8E98")
-                constant -> Color.parseColor("#3B82F6")
+                e.optBoolean("constant", false) -> Color.parseColor("#3B82F6")
                 else -> Color.parseColor("#16A34A")
             }
-            val sub = if (keysJoined.isNotEmpty()) "$keysJoined · ${content.length} 字" else "${content.length} 字"
-            val triple = addCollapsibleTripleFieldCard(
-                parent = box,
-                title = comment.ifBlank { "条目 #${idx + 1}" },
-                subtitle = sub,
-                dotColor = dot,
-                f1Hint = "条目名称",
-                f1Val = comment,
-                f2Hint = "触发关键词（用英文逗号 , 分隔）",
-                f2Val = keysJoined,
-                f3Hint = "世界书条目正文...",
-                f3Val = content
-            )
-            entryEdits[eObj] = triple
-        }
-
-        visualCommitCallbacks.add {
-            for ((eObj, triple) in entryEdits) {
-                eObj.put("comment", triple.first.text?.toString()?.trim().orEmpty())
-                val rawKeys = triple.second.text?.toString().orEmpty()
-                    .split(",", "，")
-                    .map { it.trim() }
-                    .filter { it.isNotEmpty() }
-                eObj.put("key", JSONArray(rawKeys))
-                eObj.put("content", triple.third.text?.toString().orEmpty())
+            items.add {
+                addEntryCard(
+                    box, comment.ifBlank { keysJoined.ifBlank { "条目 #${idx + 1}" } },
+                    "${if (keysJoined.isNotEmpty()) "$keysJoined · " else ""}${content.length} 字", dot,
+                    listOf(
+                        LazyField("条目名称", { e.optString("comment", "") }, { e.put("comment", it.trim()) }, single = true),
+                        LazyField("触发关键词（逗号分隔）", {
+                            val a = e.optJSONArray("key") ?: e.optJSONArray("keys")
+                            buildString {
+                                if (a != null) for (k in 0 until a.length()) {
+                                    if (isNotEmpty()) append(", ")
+                                    append(a.optString(k, ""))
+                                }
+                            }
+                        }, { s ->
+                            val parts = s.split(",", "，").map { it.trim() }.filter { it.isNotEmpty() }
+                            e.put(if (e.has("keys") && !e.has("key")) "keys" else "key", JSONArray(parts))
+                        }, single = true),
+                        LazyField("正文", { e.optString("content", "") }, { e.put("content", it) }, minLines = 6)
+                    ),
+                    preview = content
+                )
             }
-            currentCode = root.toString(2)
         }
+        addPaged(box, items)
     }
 
-    /**
-     * 5. Component Visual Editor (Regex / Tavern Helper Script / QR)
-     */
-    private fun buildComponentVisual(box: LinearLayout, trimmed: String) {
-        if (trimmed.startsWith("{")) {
-            val obj = JSONObject(trimmed)
-            if (obj.has("findRegex") && obj.has("replaceString")) {
-                val etName = addCleanFieldCard(box, "正则名称", "scriptName", obj.optString("scriptName", ""), singleLine = true, monospace = false)
-                val etFind = addCleanFieldCard(box, "查找正则", "findRegex", obj.optString("findRegex", ""), singleLine = false, monospace = true, minLines = 3)
-                val etRep = addCleanFieldCard(box, "替换内容 (HTML / CSS / 文本)", "replaceString", obj.optString("replaceString", ""), singleLine = false, monospace = true, minLines = 12)
-                visualCommitCallbacks.add {
-                    obj.put("scriptName", etName.text?.toString()?.trim().orEmpty())
-                    obj.put("findRegex", etFind.text?.toString().orEmpty())
-                    obj.put("replaceString", etRep.text?.toString().orEmpty())
-                    currentCode = obj.toString(2)
+    private fun buildComponentVisual(box: LinearLayout, root: JSONObject?) {
+        if (root != null) {
+            if (root.has("findRegex") && root.has("replaceString")) {
+                addPreviewActionButton(box, "渲染预览") {
+                    flushVisualEdits()
+                    val title = root.optString("scriptName", binding.tvEditorTitle.text?.toString().orEmpty()).ifBlank { "正则预览" }
+                    ComponentPreviewActivity.openRegex(
+                        this,
+                        title,
+                        root.optString("findRegex", ""),
+                        root.optString("replaceString", ""),
+                        ""
+                    )
                 }
+                addEntryCard(box, "正则名称", null, null,
+                    listOf(LazyField("名称", { root.optString("scriptName", "") }, { root.put("scriptName", it.trim()) }, single = true)),
+                    expanded = true)
+                addEntryCard(box, "查找正则", null, null,
+                    listOf(LazyField("正则", { root.optString("findRegex", "") }, { root.put("findRegex", it) }, mono = true, minLines = 3)),
+                    expanded = true)
+                val rep = root.optString("replaceString", "")
+                addEntryCard(box, "替换内容", "${rep.length} 字", null,
+                    listOf(LazyField("替换内容", { root.optString("replaceString", "") }, { root.put("replaceString", it) }, mono = true, minLines = 12)),
+                    preview = rep)
                 return
             }
-            if (obj.has("content") || obj.has("script")) {
-                val key = if (obj.has("content")) "content" else "script"
-                val etName = addCleanFieldCard(box, "脚本名称", "name", obj.optString("name", ""), singleLine = true, monospace = false)
-                val etCode = addCleanFieldCard(box, "脚本代码", key, obj.optString(key, ""), singleLine = false, monospace = true, minLines = 15)
-                visualCommitCallbacks.add {
-                    obj.put("name", etName.text?.toString()?.trim().orEmpty())
-                    obj.put(key, etCode.text?.toString().orEmpty())
-                    currentCode = obj.toString(2)
+            if (root.has("content") || root.has("script")) {
+                val key = if (root.has("content")) "content" else "script"
+                addPreviewActionButton(box, "沙盒预览") {
+                    flushVisualEdits()
+                    val title = root.optString("name", binding.tvEditorTitle.text?.toString().orEmpty()).ifBlank { "脚本预览" }
+                    ComponentPreviewActivity.openHelper(this, title, root.optString(key, ""), "")
                 }
+                addEntryCard(box, "脚本名称", null, null,
+                    listOf(LazyField("名称", { root.optString("name", "") }, { root.put("name", it.trim()) }, single = true)),
+                    expanded = true)
+                val code = root.optString(key, "")
+                addEntryCard(box, "脚本代码", "${code.length} 字", null,
+                    listOf(LazyField("代码", { root.optString(key, "") }, { root.put(key, it) }, mono = true, minLines = 15)),
+                    preview = code)
                 return
             }
+            buildPlainRawNotice(box)
+            return
         }
-        val etRaw = addCleanFieldCard(box, "组件代码", "直接编辑脚本内容", currentCode, singleLine = false, monospace = true, minLines = 16)
-        visualCommitCallbacks.add {
-            currentCode = etRaw.text?.toString().orEmpty()
-        }
+        buildPlainVisual(box, "组件代码")
     }
 
-    private fun buildFallbackRawNotice(box: LinearLayout) {
-        val et = addCleanFieldCard(
-            parent = box,
-            title = "代码内容",
-            subtitle = "可直接编辑，或点右上角「源码」切换全屏代码视图",
-            initialValue = currentCode,
-            singleLine = false,
-            monospace = true,
-            minLines = 16
-        )
-        visualCommitCallbacks.add {
-            currentCode = et.text?.toString().orEmpty()
-        }
+    private fun addPreviewActionButton(parent: LinearLayout, label: String, onClick: () -> Unit) {
+        parent.addView(TextView(this).apply {
+            text = label
+            setTextColor(col(R.color.on_accent))
+            textSize = 13f
+            setTypeface(null, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                setColor(col(R.color.accent))
+                cornerRadius = dp(12).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(42)
+            ).apply { bottomMargin = dp(10) }
+            setOnClickListener { onClick() }
+        })
     }
 
-    // ==================== VISUAL CARD UI HELPERS ====================
+    private fun buildPlainRawNotice(box: LinearLayout) {
+        box.addView(TextView(this).apply {
+            text = "该内容结构较特殊，请点右上角「源码」编辑"
+            setTextColor(col(R.color.text_muted))
+            textSize = 12.5f
+            setPadding(dp(4), dp(12), dp(4), dp(12))
+        })
+    }
 
-    private fun makeSectionCard(parent: LinearLayout): Pair<MaterialCardView, LinearLayout> {
+    // ==================== LAZY CARD UI ====================
+
+    private fun addSectionTitle(parent: LinearLayout, text: String) {
+        parent.addView(TextView(this).apply {
+            this.text = text
+            setTextColor(col(R.color.text_primary))
+            textSize = 12.5f
+            setTypeface(null, Typeface.BOLD)
+            setPadding(dp(2), dp(10), dp(2), dp(6))
+        })
+    }
+
+    /** Adds items in chunks; "show more" appends the next chunk instead of inflating thousands of views at once. */
+    private fun addPaged(parent: LinearLayout, items: List<() -> Unit>) {
+        var shown = 0
+        lateinit var moreBtn: TextView
+        fun showNext() {
+            val end = minOf(shown + PAGE_SIZE, items.size)
+            if (moreBtn.parent != null) parent.removeView(moreBtn)
+            for (i in shown until end) items[i]()
+            shown = end
+            if (shown < items.size) {
+                moreBtn.text = "显示更多（剩余 ${items.size - shown}）"
+                parent.addView(moreBtn)
+            }
+        }
+        moreBtn = TextView(this).apply {
+            setTextColor(col(R.color.text_primary))
+            textSize = 12.5f
+            gravity = Gravity.CENTER
+            setBackgroundResource(R.drawable.bg_pill_accent)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40)).apply {
+                topMargin = dp(4); bottomMargin = dp(10)
+            }
+            setOnClickListener { showNext() }
+        }
+        showNext()
+    }
+
+    private fun addEntryCard(
+        parent: LinearLayout,
+        title: String,
+        subtitle: String?,
+        dotColor: Int?,
+        fields: List<LazyField>,
+        expanded: Boolean = false,
+        preview: String? = null
+    ) {
         val card = MaterialCardView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(10) }
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(8) }
             radius = dp(12).toFloat()
             cardElevation = 0f
             setCardBackgroundColor(col(R.color.surface))
@@ -647,204 +651,21 @@ class CodeEditorActivity : AppCompatActivity() {
         }
         val inner = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(12), dp(14), dp(12))
+            setPadding(dp(14), dp(11), dp(14), dp(11))
         }
         card.addView(inner)
         parent.addView(card)
-        return card to inner
-    }
 
-    private fun makeCleanEditText(
-        initialValue: String,
-        singleLine: Boolean,
-        monospace: Boolean,
-        minLines: Int = 4,
-        hintText: String = ""
-    ): EditText {
-        return EditText(this).apply {
-            setText(initialValue)
-            if (hintText.isNotEmpty()) hint = hintText
-            setBackgroundResource(R.drawable.bg_input)
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            setTextColor(col(R.color.text_primary))
-            setHintTextColor(col(R.color.text_muted))
-            textSize = if (monospace) 12f else 13f
-            if (monospace) typeface = Typeface.MONOSPACE
-            if (singleLine) {
-                isSingleLine = true
-            } else {
-                isSingleLine = false
-                this.minLines = minLines
-                gravity = Gravity.TOP or Gravity.START
-            }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(8) }
-            addTextChangedListener(object : TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-                override fun afterTextChanged(s: Editable?) {
-                    dirty = true
-                }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        if (dotColor != null) {
+            header.addView(View(this).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(7), dp(7)).apply { marginEnd = dp(8) }
+                background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(dotColor) }
             })
         }
-    }
-
-    private fun addCleanFieldCard(
-        parent: LinearLayout,
-        title: String,
-        subtitle: String,
-        initialValue: String,
-        singleLine: Boolean,
-        monospace: Boolean,
-        minLines: Int = 5
-    ): EditText {
-        val (_, inner) = makeSectionCard(parent)
-        inner.addView(TextView(this).apply {
-            text = title
-            setTextColor(col(R.color.text_primary))
-            textSize = 13.5f
-            setTypeface(null, Typeface.BOLD)
-        })
-        if (subtitle.isNotBlank()) {
-            inner.addView(TextView(this).apply {
-                text = subtitle
-                setTextColor(col(R.color.text_muted))
-                textSize = 11.5f
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = dp(2) }
-            })
-        }
-        val et = makeCleanEditText(initialValue, singleLine, monospace, minLines)
-        inner.addView(et)
-        return et
-    }
-
-    private fun addCollapsibleFieldCard(
-        parent: LinearLayout,
-        title: String,
-        subtitle: String,
-        initialValue: String,
-        singleLine: Boolean,
-        monospace: Boolean
-    ): EditText {
-        val (_, inner) = makeSectionCard(parent)
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        header.addView(TextView(this).apply {
-            text = title
-            setTextColor(col(R.color.text_primary))
-            textSize = 13.5f
-            setTypeface(null, Typeface.BOLD)
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        })
-        val tvSub = TextView(this).apply {
-            text = "$subtitle ▾"
-            setTextColor(col(R.color.text_muted))
-            textSize = 11.5f
-        }
-        header.addView(tvSub)
-        inner.addView(header)
-
-        val et = makeCleanEditText(initialValue, singleLine, monospace, minLines = if (singleLine) 1 else 5).apply {
-            visibility = View.GONE
-        }
-        inner.addView(et)
-        header.setOnClickListener {
-            val show = et.visibility != View.VISIBLE
-            et.visibility = if (show) View.VISIBLE else View.GONE
-            tvSub.text = if (show) "$subtitle ▴" else "$subtitle ▾"
-        }
-        return et
-    }
-
-    private fun addCollapsibleDualFieldCard(
-        parent: LinearLayout,
-        title: String,
-        subtitle: String,
-        dotColor: Int,
-        field1Hint: String,
-        field1Value: String,
-        field2Hint: String,
-        field2Value: String
-    ): Pair<EditText, EditText> {
-        val (_, inner) = makeSectionCard(parent)
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        header.addView(View(this).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(7), dp(7)).apply { marginEnd = dp(8) }
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(dotColor)
-            }
-        })
-        val tvTitle = TextView(this).apply {
-            text = title
-            setTextColor(col(R.color.text_primary))
-            textSize = 13.5f
-            setTypeface(null, Typeface.BOLD)
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        header.addView(tvTitle)
-        val tvSub = TextView(this).apply {
-            text = "$subtitle ▾"
-            setTextColor(col(R.color.text_muted))
-            textSize = 11f
-        }
-        header.addView(tvSub)
-        inner.addView(header)
-
-        val bodyBox = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            visibility = View.GONE
-        }
-        val et1 = makeCleanEditText(field1Value, singleLine = true, monospace = false, minLines = 1, hintText = field1Hint)
-        val et2 = makeCleanEditText(field2Value, singleLine = false, monospace = false, minLines = 6, hintText = field2Hint)
-        bodyBox.addView(et1)
-        bodyBox.addView(et2)
-        inner.addView(bodyBox)
-
-        header.setOnClickListener {
-            val show = bodyBox.visibility != View.VISIBLE
-            bodyBox.visibility = if (show) View.VISIBLE else View.GONE
-            tvSub.text = if (show) "$subtitle ▴" else "$subtitle ▾"
-        }
-        return et1 to et2
-    }
-
-    private fun addCollapsibleTripleFieldCard(
-        parent: LinearLayout,
-        title: String,
-        subtitle: String,
-        dotColor: Int,
-        f1Hint: String,
-        f1Val: String,
-        f2Hint: String,
-        f2Val: String,
-        f3Hint: String,
-        f3Val: String
-    ): Triple<EditText, EditText, EditText> {
-        val (_, inner) = makeSectionCard(parent)
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        header.addView(View(this).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(7), dp(7)).apply { marginEnd = dp(8) }
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(dotColor)
-            }
-        })
         header.addView(TextView(this).apply {
             text = title
             setTextColor(col(R.color.text_primary))
@@ -854,15 +675,14 @@ class CodeEditorActivity : AppCompatActivity() {
             ellipsize = android.text.TextUtils.TruncateAt.END
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
-        val tvSub = TextView(this).apply {
-            text = "编辑 ▾"
+        val tvToggle = TextView(this).apply {
             setTextColor(col(R.color.text_muted))
             textSize = 11f
         }
-        header.addView(tvSub)
+        header.addView(tvToggle)
         inner.addView(header)
 
-        if (subtitle.isNotBlank()) {
+        if (!subtitle.isNullOrBlank()) {
             inner.addView(TextView(this).apply {
                 text = subtitle
                 setTextColor(col(R.color.text_muted))
@@ -870,64 +690,123 @@ class CodeEditorActivity : AppCompatActivity() {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
                 layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = dp(2); marginStart = dp(15) }
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(2) }
             })
         }
 
-        val bodyBox = LinearLayout(this).apply {
+        val tvPreview = if (!preview.isNullOrBlank()) TextView(this).apply {
+            text = preview.take(PREVIEW_CHARS).replace('\n', ' ')
+            setTextColor(col(R.color.text_muted))
+            textSize = 12f
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(4) }
+        }.also { inner.addView(it) } else null
+
+        val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
         }
-        val et1 = makeCleanEditText(f1Val, singleLine = true, monospace = false, minLines = 1, hintText = f1Hint)
-        val et2 = makeCleanEditText(f2Val, singleLine = true, monospace = false, minLines = 1, hintText = f2Hint)
-        val et3 = makeCleanEditText(f3Val, singleLine = false, monospace = false, minLines = 6, hintText = f3Hint)
-        bodyBox.addView(et1)
-        bodyBox.addView(et2)
-        bodyBox.addView(et3)
-        inner.addView(bodyBox)
+        inner.addView(body)
 
-        header.setOnClickListener {
-            val show = bodyBox.visibility != View.VISIBLE
-            bodyBox.visibility = if (show) View.VISIBLE else View.GONE
-            tvSub.text = if (show) "收起 ▴" else "编辑 ▾"
-        }
-        return Triple(et1, et2, et3)
-    }
+        val built = mutableListOf<Pair<LazyField, EditText>>()
+        val touched = HashSet<EditText>()
+        var inflated = false
 
-    // ==================== RAW MODE HELPERS & SAVE ====================
-
-    private fun prettyJsonIfPossible(raw: String): String {
-        val trimmed = raw.trim()
-        return try {
-            when {
-                trimmed.startsWith("{") -> JSONObject(trimmed).toString(2)
-                trimmed.startsWith("[") -> JSONArray(trimmed).toString(2)
-                else -> raw
+        fun inflateBody() {
+            if (inflated) return
+            inflated = true
+            for (fld in fields) {
+                val value = fld.get()
+                if (value.length > MAX_EDIT_CHARS) {
+                    body.addView(TextView(this).apply {
+                        text = "内容过大（${value.length / 1000}K 字），仅预览前 3000 字，保持原样不会改动。\n\n" + value.take(3000)
+                        setTextColor(col(R.color.text_muted))
+                        textSize = 12f
+                        typeface = if (fld.mono) Typeface.MONOSPACE else Typeface.DEFAULT
+                        setPadding(dp(2), dp(8), dp(2), dp(2))
+                    })
+                    continue
+                }
+                val et = EditText(this).apply {
+                    setText(value)
+                    if (fld.hint.isNotEmpty()) hint = fld.hint
+                    setBackgroundResource(R.drawable.bg_input)
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    setTextColor(col(R.color.text_primary))
+                    setHintTextColor(col(R.color.text_muted))
+                    textSize = if (fld.mono) 12f else 13f
+                    if (fld.mono) typeface = Typeface.MONOSPACE
+                    if (fld.single) {
+                        isSingleLine = true
+                    } else {
+                        isSingleLine = false
+                        minLines = fld.minLines
+                        maxLines = 30
+                        gravity = Gravity.TOP or Gravity.START
+                    }
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(8) }
+                }
+                et.addTextChangedListener(object : TextWatcher {
+                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                    override fun afterTextChanged(s: Editable?) {
+                        touched.add(et)
+                        if (!dirty) {
+                            dirty = true
+                            updateMetaBar()
+                        }
+                    }
+                })
+                body.addView(et)
+                built.add(fld to et)
             }
-        } catch (_: Exception) {
-            raw
+        }
+
+        fun setExpanded(show: Boolean) {
+            if (show) inflateBody()
+            body.visibility = if (show) View.VISIBLE else View.GONE
+            tvPreview?.visibility = if (show) View.GONE else View.VISIBLE
+            tvToggle.text = if (show) "收起 ▴" else "编辑 ▾"
+        }
+        header.setOnClickListener { setExpanded(body.visibility != View.VISIBLE) }
+        tvPreview?.setOnClickListener { setExpanded(true) }
+        setExpanded(expanded)
+
+        visualCommitCallbacks.add {
+            for ((fld, et) in built) {
+                if (et in touched) fld.set(et.text?.toString().orEmpty())
+            }
+            touched.clear()
         }
     }
+
+    // ==================== RAW HELPERS & SAVE ====================
 
     private fun formatCode() {
         val cur = binding.etCodeContent.text?.toString().orEmpty()
-        val trimmed = cur.trim()
-        if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+        val t = cur.trim()
+        if (!t.startsWith("{") && !t.startsWith("[")) {
             toast("当前不是 JSON 格式")
             return
         }
-        try {
-            val formatted = if (trimmed.startsWith("{")) {
-                JSONObject(trimmed).toString(2)
-            } else {
-                JSONArray(trimmed).toString(2)
+        lifecycleScope.launch {
+            val out = withContext(Dispatchers.IO) {
+                try {
+                    if (t.startsWith("{")) JSONObject(t).toString(2) else JSONArray(t).toString(2)
+                } catch (e: Exception) { null }
             }
-            binding.etCodeContent.setText(formatted)
-            toast("已格式化")
-        } catch (e: Exception) {
-            toast("JSON 语法错误：${e.message}")
+            if (out == null) {
+                toast("JSON 语法有误")
+            } else {
+                binding.etCodeContent.setText(out)
+                toast("已格式化")
+            }
         }
     }
 
@@ -948,17 +827,12 @@ class CodeEditorActivity : AppCompatActivity() {
         }
         matchIndices = list
         currentMatchPos = 0
-        if (list.isEmpty()) {
-            binding.tvFindCount.text = "0/0"
-        } else {
-            focusMatch(0)
-        }
+        if (list.isEmpty()) binding.tvFindCount.text = "0/0" else focusMatch(0)
     }
 
     private fun jumpMatch(delta: Int) {
         if (matchIndices.isEmpty()) return
-        val next = (currentMatchPos + delta + matchIndices.size) % matchIndices.size
-        focusMatch(next)
+        focusMatch((currentMatchPos + delta + matchIndices.size) % matchIndices.size)
     }
 
     private fun focusMatch(pos: Int) {
@@ -972,76 +846,58 @@ class CodeEditorActivity : AppCompatActivity() {
     }
 
     private fun saveCode() {
-        flushVisualEditsToCode()
-        val newCode = currentCode
-        if (newCode.isBlank()) {
-            toast("内容不能为空")
-            return
-        }
-
-        val trimmed = newCode.trim()
-        val needsJson = module == MODULE_CHARACTER || module == MODULE_WORLDBOOK || module == MODULE_PRESET ||
-            (module == MODULE_THEME && trimmed.startsWith("{"))
-        if (needsJson) {
-            try {
-                if (trimmed.startsWith("[")) JSONArray(trimmed) else JSONObject(trimmed)
-            } catch (e: Exception) {
-                toast("JSON 语法有误：${e.message}")
-                return
-            }
-        }
+        val rawText: String? = if (showingRawMode) binding.etCodeContent.text?.toString().orEmpty() else null
+        if (!showingRawMode) flushVisualEdits()
+        binding.btnEditorSave.isEnabled = false
 
         lifecycleScope.launch {
-            val (ok, errMsg) = withContext(Dispatchers.IO) {
+            val (ok, msg, saved) = withContext(Dispatchers.IO) {
                 try {
-                    when (module) {
-                        MODULE_THEME -> {
-                            val saved = vaultRepo.overwriteSourceContent(recordId, newCode)
-                            saved to if (saved) "" else "保存美化失败"
+                    val newCode = rawText ?: serializeCurrent()
+                    if (newCode.isBlank()) return@withContext Triple(false, "内容不能为空", null as String?)
+                    val t = newCode.trim()
+                    val needsJson = module == MODULE_CHARACTER || module == MODULE_WORLDBOOK ||
+                        module == MODULE_PRESET || (module == MODULE_THEME && t.startsWith("{"))
+                    if (needsJson) {
+                        try {
+                            if (t.startsWith("[")) JSONArray(t) else JSONObject(t)
+                        } catch (e: Exception) {
+                            return@withContext Triple(false, "JSON 语法有误：${e.message}", null)
                         }
-                        MODULE_CHARACTER -> {
-                            if (!CharacterCardParser.isCharacterCardJson(newCode)) {
-                                return@withContext false to "JSON 缺少角色卡必要字段"
-                            }
-                            val saved = libRepo.updateCharacterRawJson(recordId, newCode)
-                            saved to if (saved) "" else "保存角色卡失败"
-                        }
-                        MODULE_WORLDBOOK -> {
-                            if (!WorldBookParser.isWorldBookJson(newCode)) {
-                                return@withContext false to "JSON 缺少世界书 entries 字段"
-                            }
-                            val saved = libRepo.updateWorldBookRawJson(recordId, newCode)
-                            saved to if (saved) "" else "保存世界书失败"
-                        }
-                        MODULE_PRESET -> {
-                            if (!PresetParser.isPresetJson(newCode)) {
-                                return@withContext false to "JSON 缺少预设 prompts 字段"
-                            }
-                            val saved = libRepo.updatePresetRawJson(recordId, newCode)
-                            saved to if (saved) "" else "保存预设失败"
-                        }
+                    }
+                    val res: Pair<Boolean, String> = when (module) {
+                        MODULE_THEME -> vaultRepo.overwriteSourceContent(recordId, newCode).let { it to "保存美化失败" }
+                        MODULE_CHARACTER ->
+                            if (!CharacterCardParser.isCharacterCardJson(newCode)) false to "缺少角色卡必要字段"
+                            else libRepo.updateCharacterRawJson(recordId, newCode) to "保存角色卡失败"
+                        MODULE_WORLDBOOK ->
+                            if (!WorldBookParser.isWorldBookJson(newCode)) false to "缺少世界书 entries"
+                            else libRepo.updateWorldBookRawJson(recordId, newCode) to "保存世界书失败"
+                        MODULE_PRESET ->
+                            if (!PresetParser.isPresetJson(newCode)) false to "缺少预设 prompts"
+                            else libRepo.updatePresetRawJson(recordId, newCode) to "保存预设失败"
                         MODULE_COMPONENT -> {
-                            val rec = libRepo.getComponentById(recordId) ?: return@withContext false to "找不到组件"
-                            if (ComponentParser.parse(newCode, rec.fileName) == null) {
-                                return@withContext false to "组件代码格式无效"
-                            }
-                            val saved = libRepo.updateComponentRawText(recordId, newCode)
-                            saved to if (saved) "" else "保存组件失败"
+                            val rec = libRepo.getComponentById(recordId)
+                            if (rec == null) false to "找不到组件"
+                            else if (ComponentParser.parse(newCode, rec.fileName) == null) false to "组件代码格式无效"
+                            else libRepo.updateComponentRawText(recordId, newCode) to "保存组件失败"
                         }
                         else -> false to "未知模块"
                     }
-                } catch (e: Exception) {
-                    false to (e.message ?: "保存异常")
+                    Triple(res.first, if (res.first) "" else res.second, if (res.first) newCode else null)
+                } catch (e: Throwable) {
+                    Triple(false, e.message ?: "保存异常", null as String?)
                 }
             }
+            binding.btnEditorSave.isEnabled = true
             if (ok) {
-                initialCode = newCode
+                if (saved != null) totalChars = saved.length
                 dirty = false
                 updateMetaBar()
-                toast("已保存修改")
+                toast("已保存")
                 setResult(RESULT_OK)
             } else {
-                toast(errMsg)
+                toast(msg)
             }
         }
     }
@@ -1060,6 +916,12 @@ class CodeEditorActivity : AppCompatActivity() {
         const val MODULE_WORLDBOOK = "worldbook"
         const val MODULE_PRESET = "preset"
         const val MODULE_COMPONENT = "component"
+
+        private const val PAGE_SIZE = 30
+        private const val PREVIEW_CHARS = 140
+        private const val MAX_EAGER_CHARS = 6_000     // auto-expand only small fields
+        private const val MAX_EDIT_CHARS = 150_000    // above this a field is preview-only
+        private const val RAW_LIMIT = 400_000         // raw source mode disabled beyond this
 
         fun createIntent(ctx: Context, module: String, id: String, title: String): Intent {
             return Intent(ctx, CodeEditorActivity::class.java).apply {

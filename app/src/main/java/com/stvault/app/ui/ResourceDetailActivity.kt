@@ -378,7 +378,7 @@ class ResourceDetailActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val data = withContext(Dispatchers.IO) {
                 val rec = libRepo.getCharacterById(resId) ?: return@withContext null
-                val parsed = libRepo.parseCharacterDetail(rec)
+                val parsed = try { libRepo.parseCharacterDetail(rec) } catch (_: Throwable) { null }
                 val versions = libRepo.getVersionsForCharacter(rec.seriesKey)
                 Triple(rec, parsed, versions)
             }
@@ -458,7 +458,7 @@ class ResourceDetailActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val data = withContext(Dispatchers.IO) {
                 val rec = libRepo.getWorldBookById(resId) ?: return@withContext null
-                val parsed = libRepo.parseWorldBookDetail(rec)
+                val parsed = try { libRepo.parseWorldBookDetail(rec) } catch (_: Throwable) { null }
                 val versions = libRepo.getVersionsForWorldBook(rec.seriesKey)
                 Triple(rec, parsed, versions)
             }
@@ -506,7 +506,7 @@ class ResourceDetailActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val data = withContext(Dispatchers.IO) {
                 val rec = libRepo.getPresetById(resId) ?: return@withContext null
-                val parsed = libRepo.parsePresetDetail(rec)
+                val parsed = try { libRepo.parsePresetDetail(rec) } catch (_: Throwable) { null }
                 val versions = libRepo.getVersionsForPreset(rec.seriesKey)
                 val linked = libRepo.getComponentsLinkedTo("preset", rec.id)
                 listOf(rec, parsed, versions, linked)
@@ -1080,13 +1080,16 @@ class ResourceDetailActivity : AppCompatActivity() {
                         textSize = if (editorial && !item.compact) 14f else 13f
                         setTypeface(null, Typeface.BOLD)
                     })
+                    val displayBody = if (item.body.length > MAX_DETAIL_TEXT_CHARS) {
+                        item.body.take(MAX_DETAIL_TEXT_CHARS) + "\n\n……（内容较长，共 ${item.body.length} 字，仅预览前 20,000 字）"
+                    } else item.body
                     box.addView(TextView(ctx).apply {
-                        text = item.body
+                        text = displayBody
                         setTextColor(col(if (editorial && !item.compact) R.color.text_primary else R.color.text_muted))
                         alpha = if (editorial && !item.compact) 0.86f else 1f
                         textSize = if (editorial && !item.compact) 14f else 12.5f
                         setLineSpacing(dp(if (editorial && !item.compact) 5 else 2).toFloat(), 1f)
-                        setTextIsSelectable(true)
+                        if (displayBody.length <= 12_000) setTextIsSelectable(true)
                         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                             topMargin = dp(6)
                         }
@@ -1152,8 +1155,15 @@ class ResourceDetailActivity : AppCompatActivity() {
                         })
                     }
 
+                    val displayBody = if (!isExpanded) {
+                        item.body.take(240).replace('\n', ' ')
+                    } else if (item.body.length > MAX_DETAIL_TEXT_CHARS) {
+                        item.body.take(MAX_DETAIL_TEXT_CHARS) + "\n\n……（内容较长，共 ${item.body.length} 字，仅预览前 20,000 字）"
+                    } else {
+                        item.body
+                    }
                     val tvBody = TextView(ctx).apply {
-                        text = item.body
+                        text = displayBody
                         setTextColor(col(R.color.text_muted))
                         textSize = if (editorial) 13f else 12.5f
                         maxLines = if (isExpanded) Int.MAX_VALUE else 2
@@ -1215,6 +1225,7 @@ class ResourceDetailActivity : AppCompatActivity() {
         private val DOT_BLUE = Color.parseColor("#3B82F6")
         private val DOT_GREEN = Color.parseColor("#2F7D57")
         private val DOT_GRAY = Color.parseColor("#8E8E98")
+        private const val MAX_DETAIL_TEXT_CHARS = 20_000
 
         fun open(context: Context, type: String, id: String) {
             context.startActivity(Intent(context, ResourceDetailActivity::class.java).apply {

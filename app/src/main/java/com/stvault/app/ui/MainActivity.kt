@@ -2851,6 +2851,10 @@ class MainActivity : AppCompatActivity() {
             }
         })
         actions.add(SheetAction("关联宿主", "关联到角色卡 / 预设 / 世界书 / 美化") { showLinkComponentDialog(comp) })
+        actions.add(SheetAction("导出文件", "导出组件原始文件") {
+            pendingExportCompFile = libRepo.getComponentFile(comp)
+            exportCompFileLauncher.launch(comp.fileName)
+        })
         actions.add(SheetAction("删除组件", destructive = true) { confirmDeleteComponent(comp) })
 
         VaultSheets.actionList(ctx = this, title = comp.name, actions = actions)
@@ -3004,6 +3008,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showComponentDetailDialog(comp: ComponentRecord) {
+        if (comp.type == "regex" || comp.type == "helper") {
+            launchComponentPreview(comp)
+            return
+        }
         lifecycleScope.launch {
             val content = withContext(Dispatchers.IO) { libRepo.readComponentText(comp) }
             val linkInfo = if (comp.linkedTargetName.isNotEmpty()) {
@@ -3011,21 +3019,15 @@ class MainActivity : AppCompatActivity() {
             } else {
                 "当前状态：全局独立"
             }
-            val canPreview = comp.type == "regex" || comp.type == "helper"
             val preview = "$linkInfo\n\n${content.take(2000)}" + if (content.length > 2000) "\n..." else ""
             VaultSheets.info(
                 ctx = this@MainActivity,
                 title = comp.name,
                 message = preview,
-                primaryText = if (canPreview) "沙盒预览" else "关联宿主",
-                onPrimary = {
-                    if (canPreview) launchComponentPreview(comp, content)
-                    else showLinkComponentDialog(comp)
-                },
-                secondaryText = if (canPreview) "关联宿主" else "关闭",
-                onSecondary = {
-                    if (canPreview) showLinkComponentDialog(comp)
-                },
+                primaryText = "关联宿主",
+                onPrimary = { showLinkComponentDialog(comp) },
+                secondaryText = "关闭",
+                onSecondary = {},
                 tertiaryText = "导出",
                 onTertiary = {
                     pendingExportCompFile = libRepo.getComponentFile(comp)
@@ -3035,42 +3037,52 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun launchComponentPreview(comp: ComponentRecord, rawContent: String) {
+    private fun launchComponentPreview(comp: ComponentRecord) {
         lifecycleScope.launch {
-            val linkedGreeting = withContext(Dispatchers.IO) {
-                if (comp.linkedTargetType == "character" && comp.linkedTargetId.isNotEmpty()) {
-                    libRepo.getCharacterById(comp.linkedTargetId)?.let { libRepo.parseCharacterDetail(it)?.firstMes }.orEmpty()
-                } else ""
-            }
-            val trimmed = rawContent.trim()
-            if (comp.type == "regex") {
+            val parsed = withContext(Dispatchers.IO) {
                 try {
-                    val obj = if (trimmed.startsWith("[")) {
-                        org.json.JSONArray(trimmed).optJSONObject(0)
+                    val rawContent = libRepo.readComponentText(comp)
+                    val trimmed = rawContent.trim()
+                    if (comp.type == "regex") {
+                        val linkedGreeting = if (comp.linkedTargetType == "character" && comp.linkedTargetId.isNotEmpty()) {
+                            libRepo.getCharacterById(comp.linkedTargetId)?.let { libRepo.parseCharacterDetail(it)?.firstMes }.orEmpty()
+                        } else ""
+                        val obj = if (trimmed.startsWith("[")) {
+                            org.json.JSONArray(trimmed).optJSONObject(0)
+                        } else {
+                            org.json.JSONObject(trimmed)
+                        }
+                        val find = obj?.optString("findRegex", "").orEmpty()
+                        val rep = obj?.optString("replaceString", "").orEmpty()
+                        listOf("regex", find, rep, rawContent, linkedGreeting)
                     } else {
-                        org.json.JSONObject(trimmed)
+                        val code = try {
+                            if (trimmed.startsWith("{")) {
+                                val o = org.json.JSONObject(trimmed)
+                                o.optString("content", o.optString("script", rawContent))
+                            } else if (trimmed.startsWith("[")) {
+                                val o = org.json.JSONArray(trimmed).optJSONObject(0)
+                                o?.optString("content", o.optString("script", rawContent)) ?: rawContent
+                            } else rawContent
+                        } catch (_: Exception) {
+                            rawContent
+                        }
+                        listOf("helper", code, rawContent)
                     }
-                    val find = obj?.optString("findRegex", "").orEmpty()
-                    val rep = obj?.optString("replaceString", "").orEmpty()
-                    ComponentPreviewActivity.openRegex(
-                        this@MainActivity, comp.name, find, rep, rawContent, linkedGreeting
-                    )
-                } catch (_: Exception) {
-                    toast("正则 JSON 解析失败")
+                } catch (_: Throwable) {
+                    null
                 }
+            }
+            if (parsed == null) {
+                toast("组件解析失败")
+                return@launch
+            }
+            if (parsed[0] == "regex") {
+                ComponentPreviewActivity.openRegex(
+                    this@MainActivity, comp.name, parsed[1], parsed[2], parsed[3], parsed[4]
+                )
             } else {
-                val code = try {
-                    if (trimmed.startsWith("{")) {
-                        val o = org.json.JSONObject(trimmed)
-                        o.optString("content", o.optString("script", rawContent))
-                    } else if (trimmed.startsWith("[")) {
-                        val o = org.json.JSONArray(trimmed).optJSONObject(0)
-                        o?.optString("content", o.optString("script", rawContent)) ?: rawContent
-                    } else rawContent
-                } catch (_: Exception) {
-                    rawContent
-                }
-                ComponentPreviewActivity.openHelper(this@MainActivity, comp.name, code, rawContent)
+                ComponentPreviewActivity.openHelper(this@MainActivity, comp.name, parsed[1], parsed[2])
             }
         }
     }
