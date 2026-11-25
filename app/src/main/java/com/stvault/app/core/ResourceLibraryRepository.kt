@@ -1061,7 +1061,7 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                 }
             }
             if (categoryFilter.isNotBlank()) {
-                list = list.filter { catMgr.matchesCategory(it.categories, categoryFilter) }
+                list = list.filter { catMgr.matchesFilter(it.categories, categoryFilter) }
             }
             list = when (filter) {
                 "standalone" -> list.filter { it.originCardId.isEmpty() }
