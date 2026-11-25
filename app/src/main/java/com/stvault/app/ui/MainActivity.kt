@@ -1150,7 +1150,7 @@ class MainActivity : AppCompatActivity() {
             if (batchMode) exitBatchMode()
         } else if (vaultSearchModeSources) {
             binding.btnImportInVault.visibility = View.VISIBLE
-            binding.btnImportInVault.text = "+ 导入文件"
+            binding.btnImportInVault.text = "+ 添加"
             binding.btnThemeCatFilter.visibility = View.VISIBLE
             binding.btnThemeCatFilter.text = if (activeThemeCategory.isEmpty()) "分类 ▾" else "${activeThemeCategory.substringAfterLast('/')} ▾"
             binding.btnThemeBatch.visibility = View.VISIBLE
@@ -1238,7 +1238,18 @@ class MainActivity : AppCompatActivity() {
             if (actionId == EditorInfo.IME_ACTION_SEARCH) { refreshCharactersList(); true } else false
         }
         binding.wsCharacters.btnCharQuickImport.setOnClickListener {
-            openFileBrowser("characters", FileBrowserActivity.MODE_FILES, "导入角色卡")
+            VaultSheets.actionList(
+                ctx = this,
+                title = "添加角色卡",
+                actions = listOf(
+                    SheetAction("导入角色卡文件", "从本地选择 PNG / JSON 角色卡") {
+                        openFileBrowser("characters", FileBrowserActivity.MODE_FILES, "导入角色卡")
+                    },
+                    SheetAction("新建空白角色卡", "创建标准 V2 角色卡并直接编辑") {
+                        showCreateNewCharacterDialog()
+                    }
+                )
+            )
         }
         binding.wsCharacters.btnCharQuickUrl.setOnClickListener { showImportCharacterUrlDialog() }
         binding.wsCharacters.btnCharScanFolder.setOnClickListener {
@@ -1252,7 +1263,18 @@ class MainActivity : AppCompatActivity() {
             if (actionId == EditorInfo.IME_ACTION_SEARCH) { refreshWorldBooksList(); true } else false
         }
         binding.wsWorldBooks.btnWbQuickImport.setOnClickListener {
-            openFileBrowser("worldbooks", FileBrowserActivity.MODE_FILES, "导入世界书")
+            VaultSheets.actionList(
+                ctx = this,
+                title = "添加世界书",
+                actions = listOf(
+                    SheetAction("导入世界书文件", "从本地选择 JSON 世界书") {
+                        openFileBrowser("worldbooks", FileBrowserActivity.MODE_FILES, "导入世界书")
+                    },
+                    SheetAction("新建空白世界书", "创建空白世界书并直接编辑") {
+                        showCreateNewWorldBookDialog()
+                    }
+                )
+            )
         }
         binding.wsWorldBooks.btnWbScanFolder.setOnClickListener {
             openFileBrowser("worldbooks", FileBrowserActivity.MODE_FOLDER, "扫描世界书目录")
@@ -1265,7 +1287,18 @@ class MainActivity : AppCompatActivity() {
             if (actionId == EditorInfo.IME_ACTION_SEARCH) { refreshPresetsList(); true } else false
         }
         binding.wsPresets.btnPresetImportFile.setOnClickListener {
-            openFileBrowser("presets", FileBrowserActivity.MODE_FILES, "导入预设")
+            VaultSheets.actionList(
+                ctx = this,
+                title = "添加预设",
+                actions = listOf(
+                    SheetAction("导入预设文件", "从本地选择 JSON 预设") {
+                        openFileBrowser("presets", FileBrowserActivity.MODE_FILES, "导入预设")
+                    },
+                    SheetAction("新建空白预设", "创建基础预设模板并直接编辑") {
+                        showCreateNewPresetDialog()
+                    }
+                )
+            )
         }
         binding.wsPresets.btnPresetScanFolder.setOnClickListener {
             openFileBrowser("presets", FileBrowserActivity.MODE_FOLDER, "扫描预设目录")
@@ -1277,7 +1310,27 @@ class MainActivity : AppCompatActivity() {
             if (actionId == EditorInfo.IME_ACTION_SEARCH) { refreshComponentsList(); true } else false
         }
         binding.wsComponents.btnCompImportFile.setOnClickListener {
-            openFileBrowser("components", FileBrowserActivity.MODE_FILES, "导入组件")
+            VaultSheets.actionList(
+                ctx = this,
+                title = "添加组件",
+                actions = listOf(
+                    SheetAction("导入组件文件", "正则 / 酒馆助手 / 快速回复 / 文档") {
+                        openFileBrowser("components", FileBrowserActivity.MODE_FILES, "导入组件")
+                    },
+                    SheetAction("新建文档 / 笔记", "创建纯文本笔记并直接编辑") {
+                        showCreateNewComponentDialog("doc")
+                    },
+                    SheetAction("新建正则脚本", "创建 SillyTavern 正则模板") {
+                        showCreateNewComponentDialog("regex")
+                    },
+                    SheetAction("新建酒馆助手脚本", "创建 JS / HTML 助手脚本模板") {
+                        showCreateNewComponentDialog("helper")
+                    },
+                    SheetAction("新建快速回复", "创建 Quick Reply 模板") {
+                        showCreateNewComponentDialog("qr")
+                    }
+                )
+            )
         }
         binding.wsComponents.btnCompScanFolder.setOnClickListener {
             openFileBrowser("components", FileBrowserActivity.MODE_FOLDER, "扫描组件目录")
@@ -1294,7 +1347,18 @@ class MainActivity : AppCompatActivity() {
             if (vaultModeBgs) {
                 pickBgImagesLauncher.launch("image/*")
             } else {
-                openFileBrowser("themes", FileBrowserActivity.MODE_FILES, "导入美化文件")
+                VaultSheets.actionList(
+                    ctx = this,
+                    title = "添加美化",
+                    actions = listOf(
+                        SheetAction("导入美化文件", "从本地选择 JSON / CSS 美化") {
+                            openFileBrowser("themes", FileBrowserActivity.MODE_FILES, "导入美化文件")
+                        },
+                        SheetAction("新建空白美化", "创建标准酒馆美化模板并直接编辑") {
+                            showCreateNewThemeDialog()
+                        }
+                    )
+                )
             }
         }
         binding.btnOpenTTFolder.setOnClickListener { openTauriTavernThemesFolder() }
@@ -3854,6 +3918,251 @@ class MainActivity : AppCompatActivity() {
                 batchSelectedIds.clear()
                 syncBatchUi()
                 refreshActiveWorkspace()
+            }
+        }
+    }
+
+    // ================== Create New Blank Resources ==================
+
+    private fun safeCreateFileName(name: String, ext: String): String {
+        val base = name.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().take(60).ifBlank { "新建_${System.currentTimeMillis() % 10000}" }
+        return "$base.$ext"
+    }
+
+    private fun showCreateNewThemeDialog() {
+        VaultSheets.input(
+            ctx = this,
+            title = "新建空白美化",
+            hint = "输入美化名称",
+            confirmText = "创建并编辑"
+        ) { raw ->
+            val name = raw.trim()
+            if (name.isEmpty()) { toast("请输入名称"); return@input }
+            val json = org.json.JSONObject().apply {
+                put("name", name)
+                put("main_text_color", "rgba(220, 220, 210, 1)")
+                put("italics_text_color", "rgba(145, 145, 145, 1)")
+                put("quote_text_color", "rgba(225, 138, 36, 1)")
+                put("blur_tint_color", "rgba(23, 23, 23, 0.85)")
+                put("chat_tint_color", "rgba(23, 23, 23, 0.8)")
+                put("user_mes_blur_tint_color", "rgba(0, 0, 0, 0.3)")
+                put("bot_mes_blur_tint_color", "rgba(0, 0, 0, 0.3)")
+                put("border_color", "rgba(255, 255, 255, 0.15)")
+                put("chat_display", 0)
+                put("custom_css", "/* 在此编写自定义 CSS */\n")
+            }.toString(2)
+            val fn = safeCreateFileName(name, "json")
+            lifecycleScope.launch {
+                val created = withContext(Dispatchers.IO) {
+                    repo.importRawThemeText(json, fn, "新建")
+                    repo.getAllSources().firstOrNull { it.fileName == fn } ?: repo.getAllSources().maxByOrNull { it.scannedAt }
+                }
+                refreshVaultList()
+                if (created != null) {
+                    toast("已新建美化：$name")
+                    CodeEditorActivity.open(this@MainActivity, CodeEditorActivity.MODULE_THEME, created.id, created.name)
+                }
+            }
+        }
+    }
+
+    private fun showCreateNewCharacterDialog() {
+        VaultSheets.input(
+            ctx = this,
+            title = "新建空白角色卡",
+            hint = "输入角色名称",
+            confirmText = "创建并编辑"
+        ) { raw ->
+            val name = raw.trim()
+            if (name.isEmpty()) { toast("请输入角色名称"); return@input }
+            val json = org.json.JSONObject().apply {
+                put("spec", "chara_card_v2")
+                put("spec_version", "2.0")
+                put("data", org.json.JSONObject().apply {
+                    put("name", name)
+                    put("description", "")
+                    put("personality", "")
+                    put("scenario", "")
+                    put("first_mes", "")
+                    put("mes_example", "")
+                    put("creator_notes", "")
+                    put("system_prompt", "")
+                    put("alternate_greetings", org.json.JSONArray())
+                    put("tags", org.json.JSONArray())
+                    put("creator", "")
+                    put("character_version", "1.0")
+                })
+            }.toString(2)
+            val fn = safeCreateFileName(name, "json")
+            lifecycleScope.launch {
+                val rec = withContext(Dispatchers.IO) {
+                    libRepo.importCharacterFromBytes(json.toByteArray(Charsets.UTF_8), fn, "新建").first
+                }
+                libRepo.refreshCounts()
+                refreshCharactersList()
+                if (rec != null) {
+                    toast("已新建角色卡：$name")
+                    CodeEditorActivity.open(this@MainActivity, CodeEditorActivity.MODULE_CHARACTER, rec.id, rec.name)
+                }
+            }
+        }
+    }
+
+    private fun showCreateNewWorldBookDialog() {
+        VaultSheets.input(
+            ctx = this,
+            title = "新建空白世界书",
+            hint = "输入世界书名称",
+            confirmText = "创建并编辑"
+        ) { raw ->
+            val name = raw.trim()
+            if (name.isEmpty()) { toast("请输入世界书名称"); return@input }
+            val json = org.json.JSONObject().apply {
+                put("entries", org.json.JSONObject().apply {
+                    put("0", org.json.JSONObject().apply {
+                        put("uid", 0)
+                        put("key", org.json.JSONArray().put("关键词"))
+                        put("keysecondary", org.json.JSONArray())
+                        put("comment", "条目 1")
+                        put("content", "")
+                        put("constant", false)
+                        put("selective", true)
+                        put("order", 100)
+                        put("position", 0)
+                        put("disable", false)
+                    })
+                })
+            }.toString(2)
+            val fn = safeCreateFileName(name, "json")
+            lifecycleScope.launch {
+                val rec = withContext(Dispatchers.IO) {
+                    libRepo.importWorldBookFromText(json, fn).first
+                }
+                libRepo.refreshCounts()
+                refreshWorldBooksList()
+                if (rec != null) {
+                    toast("已新建世界书：$name")
+                    CodeEditorActivity.open(this@MainActivity, CodeEditorActivity.MODULE_WORLDBOOK, rec.id, rec.name)
+                }
+            }
+        }
+    }
+
+    private fun showCreateNewPresetDialog() {
+        VaultSheets.input(
+            ctx = this,
+            title = "新建空白预设",
+            hint = "输入预设名称",
+            confirmText = "创建并编辑"
+        ) { raw ->
+            val name = raw.trim()
+            if (name.isEmpty()) { toast("请输入预设名称"); return@input }
+            val json = org.json.JSONObject().apply {
+                put("temperature", 1.0)
+                put("top_p", 0.95)
+                put("prompts", org.json.JSONArray().put(org.json.JSONObject().apply {
+                    put("identifier", "main")
+                    put("name", "主提示词")
+                    put("role", "system")
+                    put("content", "")
+                    put("system_prompt", true)
+                    put("enabled", true)
+                }))
+                put("prompt_order", org.json.JSONArray().put(org.json.JSONObject().apply {
+                    put("character_id", 100001)
+                    put("order", org.json.JSONArray().put(org.json.JSONObject().apply {
+                        put("identifier", "main")
+                        put("enabled", true)
+                    }))
+                }))
+            }.toString(2)
+            val fn = safeCreateFileName(name, "json")
+            lifecycleScope.launch {
+                val rec = withContext(Dispatchers.IO) {
+                    libRepo.importPresetFromText(json, fn).first
+                }
+                libRepo.refreshCounts()
+                refreshPresetsList()
+                if (rec != null) {
+                    toast("已新建预设：$name")
+                    CodeEditorActivity.open(this@MainActivity, CodeEditorActivity.MODULE_PRESET, rec.id, rec.name)
+                }
+            }
+        }
+    }
+
+    private fun showCreateNewComponentDialog(type: String) {
+        val label = when (type) {
+            "doc" -> "新建文档 / 笔记"
+            "regex" -> "新建正则脚本"
+            "helper" -> "新建酒馆助手脚本"
+            else -> "新建快速回复"
+        }
+        VaultSheets.input(
+            ctx = this,
+            title = label,
+            hint = "输入名称",
+            confirmText = "创建并编辑"
+        ) { raw ->
+            val name = raw.trim()
+            if (name.isEmpty()) { toast("请输入名称"); return@input }
+            lifecycleScope.launch {
+                val rec = withContext(Dispatchers.IO) {
+                    if (type == "doc") {
+                        val fn = safeCreateFileName(name, "txt")
+                        val initText = "# $name\n\n"
+                        libRepo.importDocumentBytes(initText.toByteArray(Charsets.UTF_8), fn, name).first
+                    } else {
+                        val uid = java.util.UUID.randomUUID().toString()
+                        val json = when (type) {
+                            "regex" -> org.json.JSONObject().apply {
+                                put("id", uid)
+                                put("scriptName", name)
+                                put("findRegex", "/<example>([\\s\\S]*?)<\\/example>/g")
+                                put("replaceString", "<div>$1</div>")
+                                put("trimStrings", org.json.JSONArray())
+                                put("placement", org.json.JSONArray().put(2))
+                                put("disabled", false)
+                                put("markdownOnly", true)
+                                put("promptOnly", false)
+                                put("runOnEdit", true)
+                            }.toString(2)
+                            "helper" -> org.json.JSONObject().apply {
+                                put("type", "script")
+                                put("id", uid)
+                                put("name", name)
+                                put("content", "// 酒馆助手脚本\n")
+                                put("info", "")
+                                put("enabled", true)
+                            }.toString(2)
+                            else -> org.json.JSONObject().apply {
+                                put("version", 2)
+                                put("name", name)
+                                put("disableSend", false)
+                                put("placeBeforeInput", false)
+                                put("injectInput", false)
+                                put("color", "rgba(0, 0, 0, 0)")
+                                put("qrList", org.json.JSONArray().put(org.json.JSONObject().apply {
+                                    put("id", 1)
+                                    put("label", "示例回复")
+                                    put("title", "")
+                                    put("message", "")
+                                    put("contextList", org.json.JSONArray())
+                                    put("preventAutoExecute", true)
+                                    put("isHidden", false)
+                                }))
+                            }.toString(2)
+                        }
+                        val fn = safeCreateFileName(name, "json")
+                        libRepo.importComponentFromText(json, fn).first
+                    }
+                }
+                libRepo.refreshCounts()
+                refreshComponentsList()
+                if (rec != null) {
+                    toast("已新建：$name")
+                    CodeEditorActivity.open(this@MainActivity, CodeEditorActivity.MODULE_COMPONENT, rec.id, rec.name)
+                }
             }
         }
     }

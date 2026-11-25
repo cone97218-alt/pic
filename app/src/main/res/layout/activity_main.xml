@@ -801,7 +801,7 @@
                     android:insetBottom="0dp"
                     android:minWidth="0dp"
                     android:paddingHorizontal="10dp"
-                    android:text="+ 导入文件"
+                    android:text="+ 添加"
                     android:textColor="@color/text_primary"
                     android:textSize="12sp"
                     android:textStyle="bold" />
