@@ -1256,11 +1256,11 @@ class DiscordBrowserActivity : AppCompatActivity() {
 
                     override fun onOpenPost(post: FeedPost, overrideUrl: String?) {
                         val target = overrideUrl?.takeIf { it.isNotBlank() } ?: post.url
-                        navigateDiscordSpa(target)
+                        navigateDiscordSpa(target, hideSidebar = true)
                     }
 
                     override fun onOpenChannel(channel: WatchedChannel) {
-                        navigateDiscordSpa(channel.url)
+                        navigateDiscordSpa(channel.url, hideSidebar = true)
                     }
 
                     override fun onDataChanged() {
@@ -1336,16 +1336,30 @@ class DiscordBrowserActivity : AppCompatActivity() {
         }
     }
 
-    private fun navigateDiscordSpa(targetUrl: String) {
+    private fun setSidebarHiddenUi(hidden: Boolean) {
+        sidebarHidden = hidden
+        binding.btnWebSidebar.text = if (hidden) "频道" else "看消息"
+        binding.webDiscord.evaluateJavascript(
+            "if(window.__stSetSidebarHidden) window.__stSetSidebarHidden(${if (hidden) "true" else "false"});",
+            null
+        )
+    }
+
+    private fun navigateDiscordSpa(targetUrl: String, hideSidebar: Boolean = false) {
         val path = targetUrl.substringAfter("discord.com", "").ifBlank { targetUrl }
+        if (hideSidebar) {
+            setSidebarHiddenUi(true)
+        }
         if (!path.startsWith("/channels/")) {
             binding.webDiscord.loadUrl(targetUrl)
+            if (hideSidebar) binding.webDiscord.postDelayed({ setSidebarHiddenUi(true) }, 650L)
             return
         }
         val escapedPath = JSONObject.quote(path)
         val js = """
-            (function(p) {
+            (function(p, hideSb) {
               try {
+                if (hideSb && window.__stSetSidebarHidden) window.__stSetSidebarHidden(true);
                 if (location.hostname.indexOf('discord.com') !== -1) {
                   // Close any open forum thread side-layer before switching channels
                   var layer = document.querySelector('div[class*="chatLayerWrapper_"]');
@@ -1366,11 +1380,14 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 }
               } catch (e) {}
               return 'FALLBACK';
-            })($escapedPath);
+            })($escapedPath, ${if (hideSidebar) "true" else "false"});
         """.trimIndent()
         binding.webDiscord.evaluateJavascript(js) { res ->
             if (res == null || res.contains("FALLBACK")) {
                 binding.webDiscord.loadUrl(targetUrl)
+            }
+            if (hideSidebar) {
+                binding.webDiscord.postDelayed({ setSidebarHiddenUi(true) }, 550L)
             }
         }
     }
@@ -1507,6 +1524,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
             val author = o.optString("author", "").trim()
             val url = o.optString("url", "").trim()
             if (pid.isEmpty() || title.isEmpty() || url.isEmpty()) continue
+            val realTs = DiscordWatchRepository.snowflakeToEpochMs(pid).takeIf { it > 0L } ?: (now - i)
             out.add(
                 ObservedPost(
                     postId = pid,
@@ -1516,7 +1534,7 @@ class DiscordBrowserActivity : AppCompatActivity() {
                     title = title.take(140),
                     author = author.take(40),
                     url = url,
-                    discoveredAt = now - i // preserve visual top-to-bottom order
+                    discoveredAt = realTs
                 )
             )
         }

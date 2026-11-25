@@ -22,6 +22,7 @@ data class WatchedChannel(
     val category: String = "其他",
     val priority: Int = 0,
     val seenPostIds: List<String> = emptyList(),
+    val lastMaxPostId: Long = 0L,
     val lastCheckedAt: Long = 0L
 )
 
@@ -89,6 +90,8 @@ class DiscordWatchRepository private constructor(private val appContext: Context
                     val sid = seenArr.optString(j).trim()
                     if (sid.isNotEmpty()) seen.add(sid)
                 }
+                val savedMaxId = o.optLong("lastMaxPostId", 0L)
+                val derivedMaxId = if (savedMaxId > 0L) savedMaxId else seen.mapNotNull { it.toLongOrNull() }.maxOrNull() ?: 0L
                 channels.add(
                     WatchedChannel(
                         id = id,
@@ -98,6 +101,7 @@ class DiscordWatchRepository private constructor(private val appContext: Context
                         category = normalizeCategory(o.optString("category")),
                         priority = o.optInt("priority", i),
                         seenPostIds = seen,
+                        lastMaxPostId = derivedMaxId,
                         lastCheckedAt = o.optLong("lastCheckedAt", 0L)
                     )
                 )
@@ -172,6 +176,7 @@ class DiscordWatchRepository private constructor(private val appContext: Context
                         put("category", c.category)
                         put("priority", c.priority)
                         put("seenPostIds", seenArr)
+                        put("lastMaxPostId", c.lastMaxPostId)
                         put("lastCheckedAt", c.lastCheckedAt)
                     }
                 )
@@ -393,10 +398,29 @@ class DiscordWatchRepository private constructor(private val appContext: Context
 
         for (i in channels.indices) {
             val ch = channels[i]
-            val obs = observedByChannel[ch.id] ?: continue
+            val rawObs = observedByChannel[ch.id] ?: continue
+            // Sort by Discord Snowflake ID DESC = TRUE post publish time (ignores old posts bumped by comments!)
+            val obs = rawObs
+                .filter { it.postId.isNotBlank() }
+                .map { p ->
+                    val realTs = snowflakeToEpochMs(p.postId)
+                    if (realTs > 0L) p.copy(discoveredAt = realTs) else p
+                }
+                .sortedByDescending { it.postId.toLongOrNull() ?: 0L }
+
             val oldSeen = ch.seenPostIds.toHashSet()
-            val isFirstTime = oldSeen.isEmpty()
-            val fresh = obs.filter { it.postId.isNotBlank() && it.postId !in oldSeen }
+            val prevMaxId = ch.lastMaxPostId.takeIf { it > 0L }
+                ?: oldSeen.mapNotNull { it.toLongOrNull() }.maxOrNull() ?: 0L
+            val isFirstTime = prevMaxId == 0L && oldSeen.isEmpty()
+
+            val fresh = if (isFirstTime) {
+                obs
+            } else {
+                obs.filter { p ->
+                    val pidNum = p.postId.toLongOrNull() ?: 0L
+                    p.postId !in oldSeen && (pidNum == 0L || pidNum > prevMaxId)
+                }
+            }
 
             val toSurface = if (isFirstTime) {
                 initializedChannels++
@@ -406,13 +430,14 @@ class DiscordWatchRepository private constructor(private val appContext: Context
             }
             candidates.addAll(toSurface)
 
+            val maxObservedId = obs.mapNotNull { it.postId.toLongOrNull() }.maxOrNull() ?: 0L
+            val nextMaxId = max(prevMaxId, maxObservedId)
             val updatedSeen = LinkedHashSet<String>(oldSeen.size + obs.size)
             updatedSeen.addAll(ch.seenPostIds)
-            for (p in obs) {
-                if (p.postId.isNotBlank()) updatedSeen.add(p.postId)
-            }
+            for (p in obs) updatedSeen.add(p.postId)
             channels[i] = ch.copy(
                 seenPostIds = updatedSeen.toList().takeLast(MAX_SEEN_PER_CHANNEL),
+                lastMaxPostId = nextMaxId,
                 lastCheckedAt = now
             )
         }
@@ -519,6 +544,7 @@ class DiscordWatchRepository private constructor(private val appContext: Context
 
         if (newlyCreated.isNotEmpty()) {
             feed.addAll(0, newlyCreated)
+            feed.sortByDescending { it.discoveredAt }
             if (feed.size > MAX_FEED_ITEMS) {
                 val trimmed = feed.take(MAX_FEED_ITEMS)
                 feed.clear()
@@ -556,6 +582,13 @@ class DiscordWatchRepository private constructor(private val appContext: Context
         fun normalizeCategory(raw: String?): String {
             val t = raw?.trim().orEmpty()
             return if (t in CATEGORIES) t else "其他"
+        }
+
+        /** Decodes a Discord Snowflake ID into its exact UTC creation timestamp in epoch milliseconds. */
+        fun snowflakeToEpochMs(id: String?): Long {
+            val num = id?.trim()?.toLongOrNull() ?: return 0L
+            if (num < 4_194_304L) return 0L
+            return (num ushr 22) + 1_420_070_400_000L
         }
 
         fun normalizePostTitle(raw: String): String {

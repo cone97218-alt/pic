@@ -373,16 +373,48 @@
                     }
                 }
             }
-            // Extract theme <-> background bindings from st-theme-companion
+            // Extract theme <-> background bindings from st-theme-companion (v3 uses 'theme_companion_v3')
             const ctx = contextApi();
             const extSet = (ctx.extensionSettings || ctx.extension_settings || {});
-            const compSet = extSet['st-theme-companion'] || extSet['theme-companion'] || extSet['themeManager'] || {};
-            const bgMap = compSet.backgroundBindings || (tm && tm.getBackgroundBindings && tm.getBackgroundBindings()) || null;
-            if (bgMap && typeof bgMap === 'object') {
-                for (const [k, v] of Object.entries(bgMap)) {
-                    if (k && typeof v === 'string' && v.trim()) backgroundBindings[k] = v.trim();
+            const candidates = [
+                extSet['theme_companion_v3'],
+                extSet['st-theme-companion'],
+                extSet['theme-companion'],
+                extSet['themeManager']
+            ];
+            for (const compSet of candidates) {
+                const bgMap = compSet && compSet.backgroundBindings;
+                if (bgMap && typeof bgMap === 'object') {
+                    for (const [k, v] of Object.entries(bgMap)) {
+                        if (k && typeof v === 'string' && v.trim() && !backgroundBindings[k]) {
+                            backgroundBindings[k] = v.trim();
+                        }
+                    }
                 }
             }
+            if (tm && typeof tm.getBackgroundBindings === 'function') {
+                const tmBg = tm.getBackgroundBindings();
+                if (tmBg && typeof tmBg === 'object') {
+                    for (const [k, v] of Object.entries(tmBg)) {
+                        if (k && typeof v === 'string' && v.trim() && !backgroundBindings[k]) {
+                            backgroundBindings[k] = v.trim();
+                        }
+                    }
+                }
+            }
+            try {
+                const rawLs = mainWin.localStorage && mainWin.localStorage.getItem('themeManager_backgroundBindings');
+                if (rawLs) {
+                    const parsedLs = JSON.parse(rawLs);
+                    if (parsedLs && typeof parsedLs === 'object') {
+                        for (const [k, v] of Object.entries(parsedLs)) {
+                            if (k && typeof v === 'string' && v.trim() && !backgroundBindings[k]) {
+                                backgroundBindings[k] = v.trim();
+                            }
+                        }
+                    }
+                }
+            } catch (_) {}
         } catch (_) {}
         return { tagPaths, themeTags, backgroundBindings };
     }
@@ -654,7 +686,7 @@
             log('读取到预设 ' + prepared.length + ' 个，极速批量推送中...');
             totalSent += await pushItemsBatched('preset', prepared, '预设');
         }
-        if (kind === 'background') {
+        if (kind === 'all' || kind === 'background') {
             const bgs = await fetchStBackgrounds();
             log('读取到背景图 ' + bgs.length + ' 张，并发推送中...');
             let doneBgs = 0;
@@ -672,6 +704,23 @@
                     setStatus('推送背景图 ' + doneBgs + '/' + bgs.length, 'stv-ok');
                 }
             });
+        }
+        if (kind === 'theme') {
+            // Also push any backgrounds bound to themes so bindings immediately resolve in the App
+            const bgBindings = extractCompanionTagPayload().backgroundBindings || {};
+            const boundFiles = Array.from(new Set(Object.values(bgBindings).filter(Boolean)));
+            if (boundFiles.length > 0) {
+                log('同步推送已绑定背景图 ' + boundFiles.length + ' 张...');
+                await runPool(boundFiles, 3, async (bgName) => {
+                    try {
+                        const r = await mainFetch('/backgrounds/' + encodeURIComponent(bgName));
+                        if (!r.ok) return;
+                        await pushBytesToVault('background', bgName, new Uint8Array(await r.arrayBuffer()));
+                    } catch (_) {}
+                });
+            }
+        }
+        if (kind === 'all' || kind === 'theme' || kind === 'background') {
             await syncThemeTagsBidirectional(true);
         }
 
@@ -853,13 +902,25 @@
             const hit = themes.find(t => String(t.name || t.theme_name || '') === nameToFind) || themes[0];
             if (!hit) { log('未找到目标美化'); return; }
             const tName = String(hit.name || hit.theme_name || 'theme');
-            const companionMap = extractCompanionTagPayload().themeTags;
+            const companionPayload = extractCompanionTagPayload();
+            const companionMap = companionPayload.themeTags;
             const mergedTags = Array.from(new Set([...(companionMap[tName] || []), ...((hit._xia && Array.isArray(hit._xia.tags)) ? hit._xia.tags : [])])).filter(Boolean);
             const copy = Object.assign({}, hit);
             if (mergedTags.length > 0) copy._xia = Object.assign({}, copy._xia || {}, { tags: mergedTags });
             await pushBytesToVault('theme', tName + '.json', enc.encode(JSON.stringify(copy, null, 2)), mergedTags);
-            setStatus('已推送美化：' + tName, 'stv-ok');
-            log('单项推送美化成功：' + tName);
+            const boundBg = (companionPayload.backgroundBindings && companionPayload.backgroundBindings[tName])
+                || (hit._xia && typeof hit._xia.bg === 'string' ? hit._xia.bg.trim() : '');
+            if (boundBg) {
+                try {
+                    const br = await mainFetch('/backgrounds/' + encodeURIComponent(boundBg));
+                    if (br.ok) {
+                        await pushBytesToVault('background', boundBg, new Uint8Array(await br.arrayBuffer()));
+                    }
+                } catch (_) {}
+            }
+            await syncThemeTagsBidirectional(true);
+            setStatus('已推送美化：' + tName + (boundBg ? '（含绑定背景）' : ''), 'stv-ok');
+            log('单项推送美化成功：' + tName + (boundBg ? ' · 联动背景：' + boundBg : ''));
             return;
         }
         if (kind === 'character') {
