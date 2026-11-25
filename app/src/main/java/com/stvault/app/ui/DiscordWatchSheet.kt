@@ -466,7 +466,7 @@ object DiscordWatchSheet {
 
                 tvRank.text = (ch.priority + 1).toString()
                 tvName.text = ch.name
-                val seenLabel = if (ch.seenPostIds.isEmpty()) "待初始化" else formatShortTime(ch.lastCheckedAt)
+                val seenLabel = if (ch.seenPostIds.isEmpty()) "未巡检" else formatShortTime(ch.lastCheckedAt)
                 tvMeta.text = "${ch.category} · $seenLabel"
 
                 row.setOnClickListener {

@@ -1347,7 +1347,19 @@ class DiscordBrowserActivity : AppCompatActivity() {
             (function(p) {
               try {
                 if (location.hostname.indexOf('discord.com') !== -1) {
+                  // Close any open forum thread side-layer before switching channels
+                  var layer = document.querySelector('div[class*="chatLayerWrapper_"]');
+                  if (layer && layer.getBoundingClientRect().width > 40) {
+                    var closeBtn = layer.querySelector('[aria-label="关闭"], [aria-label="Close"], [class*="closeButton_"]');
+                    if (closeBtn) closeBtn.click();
+                  }
                   if (location.pathname === p) return 'SAME';
+                  // Prefer clicking real sidebar link if present (triggers Discord internal router cleanly)
+                  var link = document.querySelector('a[href="' + p + '"]');
+                  if (link) {
+                    link.click();
+                    return 'CLICK';
+                  }
                   window.history.pushState({}, '', p);
                   window.dispatchEvent(new PopStateEvent('popstate'));
                   return 'SPA';
@@ -1417,7 +1429,8 @@ class DiscordBrowserActivity : AppCompatActivity() {
                     navigateDiscordSpa(ch.url)
 
                     var collected = emptyList<ObservedPost>()
-                    for (attempt in 0 until 12) {
+                    var hardReloaded = false
+                    for (attempt in 0 until 18) {
                         delay(450L)
                         val raw = evaluateJsSuspend(CHANNEL_POSTS_SCAN_JS)
                         val obj = unwrapJsJsonObject(raw) ?: continue
@@ -1426,16 +1439,21 @@ class DiscordBrowserActivity : AppCompatActivity() {
                         val arr = obj.optJSONArray("posts") ?: JSONArray()
                         val parsed = parseObservedPosts(arr, ch)
                         val channelMatches = curCid == ch.id || curCid.isEmpty()
-                        if (mode != "loading" && parsed.isNotEmpty() && (channelMatches || attempt >= 4)) {
+                        if (mode != "loading" && parsed.isNotEmpty() && (channelMatches || attempt >= 5)) {
                             collected = parsed
                             // If only 1-2 posts rendered on the very first check, wait one brief tick for full viewport
-                            if (parsed.size <= 2 && attempt < 4) {
-                                delay(380L)
+                            if (parsed.size <= 2 && attempt < 5) {
+                                delay(400L)
                                 val retryObj = unwrapJsJsonObject(evaluateJsSuspend(CHANNEL_POSTS_SCAN_JS))
                                 val retryParsed = retryObj?.optJSONArray("posts")?.let { parseObservedPosts(it, ch) }.orEmpty()
                                 if (retryParsed.size > collected.size) collected = retryParsed
                             }
                             break
+                        }
+                        // If SPA route didn't switch guilds or posts haven't mounted after ~2s, do a real loadUrl fallback
+                        if (!hardReloaded && attempt == 4) {
+                            hardReloaded = true
+                            binding.webDiscord.loadUrl(ch.url)
                         }
                     }
                     if (collected.isNotEmpty()) {
@@ -1452,7 +1470,9 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 }
                 refreshWatchBadge()
                 val msg = buildString {
-                    if (summary.newCount > 0) {
+                    if (observedByChannel.isEmpty()) {
+                        append("未读取到频道帖子，请确认已登录并可正常浏览该频道")
+                    } else if (summary.newCount > 0) {
                         append("发现 ${summary.newCount} 条新帖")
                         if (summary.foldedDuplicateCount > 0) {
                             append("，已折 ${summary.foldedDuplicateCount} 条跨社区重复")
@@ -1966,35 +1986,109 @@ class DiscordBrowserActivity : AppCompatActivity() {
                   return ms && ms.length ? ms[ms.length - 1] : '';
                 }
 
-                // 1) Try Forum channel cards first
-                var forumCards = document.querySelectorAll('li[class*="card_"], div[class*="mainCard_"], [data-list-item-id*="forum-channel-list"]');
+                function readReactThread(el) {
+                  try {
+                    if (!el) return null;
+                    var keys = Object.keys(el);
+                    var fiberKey = '';
+                    var propsKey = '';
+                    for (var k = 0; k < keys.length; k++) {
+                      if (keys[k].indexOf('__reactFiber$') === 0) fiberKey = keys[k];
+                      else if (keys[k].indexOf('__reactProps$') === 0) propsKey = keys[k];
+                    }
+                    function inspectObj(o) {
+                      if (!o || typeof o !== 'object') return null;
+                      var cand = o.thread || o.channel || o.post || o.item || null;
+                      if (cand && cand.id && /^\d{17,20}$/.test(String(cand.id)) && String(cand.id) !== channelId) {
+                        return { id: String(cand.id), name: cand.name ? String(cand.name) : '' };
+                      }
+                      if (o.threadId && /^\d{17,20}$/.test(String(o.threadId)) && String(o.threadId) !== channelId) {
+                        return { id: String(o.threadId), name: o.threadName ? String(o.threadName) : '' };
+                      }
+                      return null;
+                    }
+                    if (propsKey && el[propsKey]) {
+                      var r0 = inspectObj(el[propsKey]);
+                      if (r0) return r0;
+                    }
+                    if (fiberKey && el[fiberKey]) {
+                      var f = el[fiberKey];
+                      for (var hops = 0; hops < 8 && f; hops++) {
+                        var r1 = inspectObj(f.memoizedProps);
+                        if (r1) return r1;
+                        f = f.return;
+                      }
+                    }
+                  } catch (e) {}
+                  return null;
+                }
+
+                // 1) Try Forum channel cards first (both List view and Gallery view)
+                var forumCards = document.querySelectorAll('li[class*="card_"], div[class*="mainCard_"], [data-list-item-id*="forum-channel-list"], [data-item-id]');
                 for (var i = 0; i < forumCards.length && posts.length < 35; i++) {
                   var card = forumCards[i];
                   if (layer && layer.contains(card)) continue;
+                  // Skip tiny nested wrappers inside an already-matched li card
+                  var outerLi = card.tagName === 'LI' ? card : card.closest('li[class*="card_"]');
+                  var targetEl = outerLi || card;
+
                   var pid = '';
-                  var dlid = card.getAttribute('data-list-item-id') || '';
-                  if (dlid) pid = extractSnowflake(dlid);
+                  var reactTitle = '';
+
+                  // (a) React Fiber / Props (most accurate on Discord Web)
+                  var rt = readReactThread(card) || (outerLi && outerLi !== card ? readReactThread(outerLi) : null);
+                  if (!rt) {
+                    var innerBtn = targetEl.querySelector('[role="button"], [tabindex]');
+                    if (innerBtn) rt = readReactThread(innerBtn);
+                  }
+                  if (rt) {
+                    pid = rt.id;
+                    reactTitle = rt.name || '';
+                  }
+
+                  // (b) Own or child data-list-item-id / data-item-id / href
                   if (!pid) {
-                    var link = card.querySelector('a[href*="/channels/"]');
+                    var idHolder = targetEl.getAttribute('data-list-item-id') || targetEl.getAttribute('data-item-id') || targetEl.id || '';
+                    pid = extractSnowflake(idHolder);
+                  }
+                  if (!pid) {
+                    var childIdEl = targetEl.querySelector('[data-list-item-id], [data-item-id]');
+                    if (childIdEl) {
+                      pid = extractSnowflake(childIdEl.getAttribute('data-list-item-id') || childIdEl.getAttribute('data-item-id') || '');
+                    }
+                  }
+                  if (!pid) {
+                    var link = targetEl.querySelector('a[href*="/channels/"]');
                     if (link) {
                       var lm = /\/channels\/\d+\/(\d{17,20})/.exec(link.getAttribute('href') || '');
                       if (lm) pid = lm[1];
                     }
                   }
-                  if (!pid && card.id) pid = extractSnowflake(card.id);
+                  // (c) Forum thumbnail image URL contains /attachments/<threadId>/<attId>/
+                  if (!pid) {
+                    var img = targetEl.querySelector('img[src*="/attachments/"]');
+                    if (img && img.src) {
+                      var im = /\/attachments\/(\d{17,20})\//.exec(img.src);
+                      if (im && im[1] !== channelId) pid = im[1];
+                    }
+                  }
+
                   if (!pid || pid === channelId || seen[pid]) continue;
 
-                  var titleEl = card.querySelector('[class*="postTitleText_"], h3[class*="title_"], [class*="headerText_"], h3');
-                  var title = titleEl ? (titleEl.textContent || '').replace(/\s+/g, ' ').trim() : '';
+                  var title = reactTitle.replace(/\s+/g, ' ').trim();
                   if (!title) {
-                    var aria = (card.getAttribute('aria-label') || '').trim();
+                    var titleEl = targetEl.querySelector('[class*="postTitleText_"], h3[class*="title_"], [class*="headerText_"], [class*="postTitle_"], h3');
+                    title = titleEl ? (titleEl.textContent || '').replace(/\s+/g, ' ').trim() : '';
+                  }
+                  if (!title) {
+                    var aria = (targetEl.getAttribute('aria-label') || '').trim();
                     if (aria) title = aria.split(',')[0].trim();
                   }
                   if (!title) continue;
 
                   var author = '';
-                  var aEl = card.querySelector('[class*="author_"] [class*="username_"], [class*="author_"], [class*="header_"] [class*="username_"]');
-                  if (aEl && aEl.textContent) {
+                  var aEl = targetEl.querySelector('[class*="author_"] [class*="username_"], [class*="postAuthor_"], [class*="author_"], [class*="header_"] [class*="username_"]');
+                  if (aEl && !aEl.closest('[class*="footer_"]') && aEl.textContent) {
                     author = aEl.textContent.replace(/\s+/g, ' ').trim();
                   }
                   seen[pid] = true;
