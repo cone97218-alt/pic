@@ -561,6 +561,14 @@ object InboxManager {
             extraTags = extraTags,
             summary = summary
         )
+        AppLogManager.record(
+            context,
+            AppLogManager.CAT_INBOX,
+            "入库",
+            dl.second,
+            detail = "来源链接：${url.take(120)}",
+            source = if (url.contains("discord", ignoreCase = true)) "囤囤网页" else "收件箱"
+        )
         return true
     }
 

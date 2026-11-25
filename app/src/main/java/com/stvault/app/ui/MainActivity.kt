@@ -758,6 +758,10 @@ class MainActivity : AppCompatActivity() {
             binding.drawerLayout.closeDrawer(GravityCompat.START)
             TavernBridgeActivity.open(this)
         }
+        binding.drawer.drawerItemLog.setOnClickListener {
+            binding.drawerLayout.closeDrawer(GravityCompat.START)
+            ActivityLogActivity.open(this)
+        }
         binding.drawer.drawerItemDedup.setOnClickListener {
             binding.drawerLayout.closeDrawer(GravityCompat.START)
             DuplicateCleanerActivity.open(this)
@@ -2670,7 +2674,7 @@ class MainActivity : AppCompatActivity() {
                         val safeName = if (rawName.endsWith(".json", ignoreCase = true)) rawName else "${source.name}.json"
                         safeName to outText.toByteArray(Charsets.UTF_8)
                     }
-                    enqueueToTavernBridge("theme", source.name, fileName, bytes, source.categories)
+                    enqueueToTavernBridge("theme", source.name, fileName, bytes, source.categories, hostId = source.id)
                 } catch (e: Exception) {
                     toast("读取美化失败：${e.message}")
                 }
@@ -2691,7 +2695,8 @@ class MainActivity : AppCompatActivity() {
         name: String,
         fileName: String,
         bytes: ByteArray,
-        tags: List<String> = emptyList()
+        tags: List<String> = emptyList(),
+        hostId: String = ""
     ) {
         val bridge = com.stvault.app.core.TavernBridgeManager.getInstance(this)
         val alreadyInstalled = when (kind) {
@@ -2708,6 +2713,9 @@ class MainActivity : AppCompatActivity() {
             }
             bridge.enqueueOutbox(kind, name, fileName, bytes, tags)
             toast("已加入待装入队列，切回 TT 酒馆即可自动装入")
+            if (hostId.isNotEmpty()) {
+                LinkedComponentPushHelper.promptIfLinked(this, kind, hostId, bridge, libRepo)
+            }
         }
         if (alreadyInstalled) {
             VaultSheets.confirm(
@@ -2732,7 +2740,7 @@ class MainActivity : AppCompatActivity() {
                             val f = libRepo.getCharacterFile(c)
                             if (f.exists()) f.readBytes() else null
                         }
-                        if (bytes != null) enqueueToTavernBridge("character", c.name, c.fileName, bytes)
+                        if (bytes != null) enqueueToTavernBridge("character", c.name, c.fileName, bytes, hostId = c.id)
                         else toast("找不到角色卡文件")
                     }
                 },
@@ -2767,7 +2775,7 @@ class MainActivity : AppCompatActivity() {
                             val f = libRepo.getWorldBookFile(w)
                             if (f.exists()) f.readBytes() else null
                         }
-                        if (bytes != null) enqueueToTavernBridge("worldbook", w.name, w.fileName, bytes)
+                        if (bytes != null) enqueueToTavernBridge("worldbook", w.name, w.fileName, bytes, hostId = w.id)
                         else toast("找不到世界书文件")
                     }
                 },
@@ -2801,7 +2809,7 @@ class MainActivity : AppCompatActivity() {
                             val f = libRepo.getPresetFile(p)
                             if (f.exists()) f.readBytes() else null
                         }
-                        if (bytes != null) enqueueToTavernBridge("preset", p.name, p.fileName, bytes)
+                        if (bytes != null) enqueueToTavernBridge("preset", p.name, p.fileName, bytes, hostId = p.id)
                         else toast("找不到预设文件")
                     }
                 },

@@ -336,6 +336,13 @@ class ThemePreviewActivity : AppCompatActivity() {
                     }
                     bridge.enqueueOutbox("theme", currentTitle, fn, bytes, tags)
                     toast("已加入待装入队列，切回 TT 酒馆自动装入")
+                    LinkedComponentPushHelper.promptIfLinked(
+                        this@ThemePreviewActivity,
+                        "theme",
+                        currentSourceId,
+                        bridge,
+                        com.stvault.app.core.ResourceLibraryRepository.getInstance(this@ThemePreviewActivity)
+                    )
                 } catch (e: Exception) {
                     toast("推送失败：${e.message}")
                 }

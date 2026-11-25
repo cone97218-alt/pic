@@ -1046,6 +1046,14 @@ class CodeEditorActivity : AppCompatActivity() {
                 if (saved != null) totalChars = saved.length
                 dirty = false
                 updateMetaBar()
+                com.stvault.app.core.AppLogManager.record(
+                    this@CodeEditorActivity,
+                    com.stvault.app.core.AppLogManager.CAT_LIBRARY,
+                    "编辑",
+                    binding.tvEditorTitle.text?.toString().orEmpty().ifBlank { "编辑内容" },
+                    detail = if (itemType.isNotEmpty()) "单条目编辑已保存" else "整文件编辑已保存（$totalChars 字）",
+                    source = "代码编辑"
+                )
                 toast("已保存")
                 setResult(RESULT_OK)
             } else {

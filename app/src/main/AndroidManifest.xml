@@ -108,6 +108,10 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
+        <activity
+            android:name=".ui.ActivityLogActivity"
+            android:exported="false" />
+
         <service
             android:name=".service.VaultDownloadService"
             android:exported="false"

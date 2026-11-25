@@ -73,6 +73,7 @@ class ResourceDetailActivity : AppCompatActivity() {
     private var activeTabKey: String = ""
     private var detailSearchQuery: String = ""
     private var searchDebounceJob: Job? = null
+    private val collapsedPresetGroups = HashSet<String>()
 
     private val codeEditorLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
@@ -537,6 +538,10 @@ class ResourceDetailActivity : AppCompatActivity() {
 
             currentPreset = rec
             currentParsedPreset = parsed
+            collapsedPresetGroups.clear()
+            parsed?.promptGroups?.forEach { g ->
+                if (g.collapsed) collapsedPresetGroups.add(g.id)
+            }
             binding.tvDetailTitle.text = if (versions.size > 1) {
                 rec.seriesName.ifBlank { com.stvault.app.core.VersionGrouper.extractDisplaySeriesName(rec.name) }
             } else rec.name
@@ -550,16 +555,20 @@ class ResourceDetailActivity : AppCompatActivity() {
             )
 
             val promptCount = parsed?.prompts?.size ?: 0
+            val sentCount = parsed?.let { computeSentPrompts(it).size } ?: 0
             val scriptCount = (parsed?.embeddedRegexScripts?.size ?: 0) +
                 (parsed?.embeddedHelperScripts?.size ?: 0) + linked.size
-            val tabs = mutableListOf("prompts" to "提示词 ($promptCount)")
+            val tabs = mutableListOf(
+                "prompts" to "提示词 ($promptCount)",
+                "sent" to "发送预览 ($sentCount)"
+            )
             if (scriptCount > 0) {
                 tabs.add("scripts" to "正则与脚本 ($scriptCount)")
             }
             activeTabKey = "prompts"
             setupHeaderTabs(tabs, activeTabKey) { key ->
                 activeTabKey = key
-                binding.detailSearchBox.visibility = if (key == "prompts") View.VISIBLE else View.GONE
+                binding.detailSearchBox.visibility = if (key == "prompts" || key == "sent") View.VISIBLE else View.GONE
                 rebuildCurrentList()
             }
             binding.detailSearchBox.visibility = View.VISIBLE
@@ -806,25 +815,111 @@ class ResourceDetailActivity : AppCompatActivity() {
         }
 
         if (activeTabKey == "prompts") {
-            val list = if (q.isEmpty()) parsed.prompts else parsed.prompts.filter {
-                it.name.lowercase().contains(q) || it.content.lowercase().contains(q)
+            val groupById = parsed.promptGroups.associateBy { it.id }
+            val hasGroups = groupById.isNotEmpty() && parsed.promptGroupMap.isNotEmpty()
+            if (hasGroups) {
+                out.add(DetailItem.CompactSummary("已识别预设分组（${parsed.promptGroups.size} 组）"))
+                val membersByGroup = LinkedHashMap<String, MutableList<Pair<Int, com.stvault.app.core.ParsedPresetPrompt>>>()
+                parsed.prompts.forEachIndexed { idx, p ->
+                    val gid = parsed.promptGroupMap[p.identifier]
+                    if (gid != null && gid in groupById) {
+                        membersByGroup.getOrPut(gid) { mutableListOf() }.add(idx to p)
+                    }
+                }
+                val emittedGroups = HashSet<String>()
+                parsed.prompts.forEachIndexed { idx, p ->
+                    val gid = parsed.promptGroupMap[p.identifier]
+                    if (gid != null && gid in groupById) {
+                        if (!emittedGroups.add(gid)) return@forEachIndexed
+                        val grp = groupById[gid]!!
+                        val allMembers = membersByGroup[gid].orEmpty()
+                        val matchedMembers = if (q.isEmpty()) allMembers else allMembers.filter { (_, mp) ->
+                            grp.name.lowercase().contains(q) ||
+                                mp.name.lowercase().contains(q) ||
+                                mp.content.lowercase().contains(q)
+                        }
+                        if (matchedMembers.isEmpty()) return@forEachIndexed
+                        val collapsed = q.isEmpty() && (gid in collapsedPresetGroups)
+                        val enabledCount = allMembers.count { it.second.enabled }
+                        out.add(
+                            DetailItem.GroupHeader(
+                                title = grp.name,
+                                subtitle = "${enabledCount}/${allMembers.size} 启用" + if (!grp.enabled) " · 组已禁用" else "",
+                                enabled = grp.enabled,
+                                collapsed = collapsed
+                            ) {
+                                if (gid in collapsedPresetGroups) collapsedPresetGroups.remove(gid)
+                                else collapsedPresetGroups.add(gid)
+                                rebuildCurrentList()
+                            }
+                        )
+                        if (!collapsed) {
+                            for ((mIdx, mp) in matchedMembers) {
+                                out.add(buildPresetPromptItem(mIdx, mp, groupEnabled = grp.enabled))
+                            }
+                        }
+                    } else {
+                        if (q.isNotEmpty() && !p.name.lowercase().contains(q) && !p.content.lowercase().contains(q)) {
+                            return@forEachIndexed
+                        }
+                        out.add(buildPresetPromptItem(idx, p, groupEnabled = true))
+                    }
+                }
+            } else {
+                val list = if (q.isEmpty()) parsed.prompts else parsed.prompts.filter {
+                    it.name.lowercase().contains(q) || it.content.lowercase().contains(q)
+                }
+                list.forEachIndexed { idx, p ->
+                    out.add(buildPresetPromptItem(idx, p, groupEnabled = true))
+                }
             }
-            list.forEachIndexed { idx, p ->
-                val dot = if (p.enabled) DOT_GREEN else DOT_GRAY
-                val sub = if (p.isMarker) "#${idx + 1} · ${p.role} · 系统占位" else "#${idx + 1} · ${p.role}"
-                val body = if (p.isMarker && p.content.isBlank()) "系统占位符标记" else p.content.ifBlank { "（空内容）" }
-                val editCb: (() -> Unit)? = if (!p.isMarker) {
-                    {
-                        openSingleItemEditor(
-                            CodeEditorActivity.MODULE_PRESET,
-                            p.name.ifBlank { "提示词 #${idx + 1}" },
-                            CodeEditorActivity.ITEM_PRESET_PROMPT,
-                            itemKey = p.identifier,
-                            itemIndex = idx
+        } else if (activeTabKey == "sent") {
+            val sent = computeSentPrompts(parsed)
+            val totalChars = sent.filter { !it.isMarker }.sumOf { it.content.length }
+            val approxTokens = (totalChars / 2.2).toInt()
+            val tokStr = if (approxTokens >= 1000) String.format("%.1fk", approxTokens / 1000.0) else "$approxTokens"
+            out.add(DetailItem.CompactSummary("按酒馆实际顺序发送 ${sent.size} 条 · 正文 $totalChars 字（≈ $tokStr tokens）"))
+            val filtered = if (q.isEmpty()) sent else sent.filter {
+                it.name.lowercase().contains(q) || it.content.lowercase().contains(q) || markerLabel(it.identifier).lowercase().contains(q)
+            }
+            if (filtered.isEmpty()) {
+                out.add(DetailItem.CompactSummary("没有匹配的发送条目"))
+            } else {
+                filtered.forEachIndexed { idx, p ->
+                    val roleTag = p.role.uppercase()
+                    if (p.isMarker) {
+                        val mLabel = markerLabel(p.identifier)
+                        out.add(
+                            DetailItem.CollapsibleEntry(
+                                title = mLabel,
+                                subtitle = "#${idx + 1} · 系统动态注入位置",
+                                body = "酒馆发送请求时将在此处自动填入 $mLabel 的实时内容。",
+                                dotColor = DOT_BLUE,
+                                dimmed = false
+                            )
+                        )
+                    } else {
+                        val editCb: () -> Unit = {
+                            openSingleItemEditor(
+                                CodeEditorActivity.MODULE_PRESET,
+                                p.name.ifBlank { "提示词 #${idx + 1}" },
+                                CodeEditorActivity.ITEM_PRESET_PROMPT,
+                                itemKey = p.identifier,
+                                itemIndex = idx
+                            )
+                        }
+                        out.add(
+                            DetailItem.CollapsibleEntry(
+                                title = p.name.ifBlank { p.identifier },
+                                subtitle = "#${idx + 1} · $roleTag · ${p.content.length} 字",
+                                body = p.content,
+                                dotColor = DOT_GREEN,
+                                dimmed = false,
+                                onEdit = editCb
+                            )
                         )
                     }
-                } else null
-                out.add(DetailItem.CollapsibleEntry(p.name, sub, body, dot, dimmed = !p.enabled || p.isMarker, onEdit = editCb))
+                }
             }
         } else {
             if (parsed.embeddedRegexScripts.isNotEmpty()) {
@@ -874,6 +969,56 @@ class ResourceDetailActivity : AppCompatActivity() {
             }
         }
         return out
+    }
+
+    private fun buildPresetPromptItem(
+        idx: Int,
+        p: com.stvault.app.core.ParsedPresetPrompt,
+        groupEnabled: Boolean
+    ): DetailItem.CollapsibleEntry {
+        val active = p.enabled && groupEnabled
+        val dot = if (active) DOT_GREEN else DOT_GRAY
+        val sub = buildString {
+            append("#${idx + 1} · ${p.role}")
+            if (p.isMarker) append(" · 系统占位")
+            if (!groupEnabled) append(" · 组已禁用")
+        }
+        val body = if (p.isMarker && p.content.isBlank()) markerLabel(p.identifier) else p.content.ifBlank { "（空内容）" }
+        val editCb: (() -> Unit)? = if (!p.isMarker) {
+            {
+                openSingleItemEditor(
+                    CodeEditorActivity.MODULE_PRESET,
+                    p.name.ifBlank { "提示词 #${idx + 1}" },
+                    CodeEditorActivity.ITEM_PRESET_PROMPT,
+                    itemKey = p.identifier,
+                    itemIndex = idx
+                )
+            }
+        } else null
+        return DetailItem.CollapsibleEntry(p.name, sub, body, dot, dimmed = !active || p.isMarker, onEdit = editCb)
+    }
+
+    private fun computeSentPrompts(parsed: ParsedPreset): List<com.stvault.app.core.ParsedPresetPrompt> {
+        val groupEnabledMap = parsed.promptGroups.associate { it.id to it.enabled }
+        return parsed.prompts.filter { p ->
+            if (!p.enabled) return@filter false
+            val gid = parsed.promptGroupMap[p.identifier]
+            if (gid != null && groupEnabledMap[gid] == false) return@filter false
+            p.isMarker || p.content.isNotBlank()
+        }
+    }
+
+    private fun markerLabel(identifier: String): String = when (identifier) {
+        "worldInfoBefore" -> "【世界书 · 角色前】"
+        "worldInfoAfter" -> "【世界书 · 角色后】"
+        "personaDescription" -> "【用户人设】"
+        "charDescription" -> "【角色设定】"
+        "charPersonality" -> "【角色性格】"
+        "scenario" -> "【情景设定】"
+        "dialogueExamples" -> "【对话示例】"
+        "chatHistory" -> "【聊天记录】"
+        "enhanceDefinitions" -> "【增强定义】"
+        else -> "【系统占位 · $identifier】"
     }
 
     private fun filterWorldEntries(entries: List<ParsedWorldEntry>, filter: String, q: String): List<ParsedWorldEntry> {
@@ -971,6 +1116,13 @@ class ResourceDetailActivity : AppCompatActivity() {
             val onPreview: (() -> Unit)? = null,
             val onEdit: (() -> Unit)? = null
         ) : DetailItem()
+        data class GroupHeader(
+            val title: String,
+            val subtitle: String,
+            val enabled: Boolean,
+            val collapsed: Boolean,
+            val onToggle: () -> Unit
+        ) : DetailItem()
         data class CollapsibleEntry(
             val title: String,
             val subtitle: String,
@@ -1003,6 +1155,7 @@ class ResourceDetailActivity : AppCompatActivity() {
             is DetailItem.ActionStrip -> 4
             is DetailItem.TextBlock -> 5
             is DetailItem.CollapsibleEntry -> 6
+            is DetailItem.GroupHeader -> 7
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
@@ -1225,6 +1378,51 @@ class ResourceDetailActivity : AppCompatActivity() {
                         })
                     }
                     holder.container.addView(wrapStyle(ctx, box, editorial, dp(10)))
+                }
+
+                is DetailItem.GroupHeader -> {
+                    val row = LinearLayout(ctx).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        setBackgroundResource(R.drawable.bg_input)
+                        setPadding(dp(12), dp(10), dp(12), dp(10))
+                        alpha = if (item.enabled) 1f else 0.58f
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply { topMargin = dp(6); bottomMargin = dp(4) }
+                        setOnClickListener { item.onToggle() }
+                    }
+                    row.addView(View(ctx).apply {
+                        layoutParams = LinearLayout.LayoutParams(dp(7), dp(7)).apply { marginEnd = dp(8) }
+                        background = GradientDrawable().apply {
+                            shape = GradientDrawable.OVAL
+                            setColor(if (item.enabled) DOT_GREEN else DOT_GRAY)
+                        }
+                    })
+                    val colText = LinearLayout(ctx).apply {
+                        orientation = LinearLayout.VERTICAL
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    }
+                    colText.addView(TextView(ctx).apply {
+                        text = item.title
+                        setTextColor(col(R.color.text_primary))
+                        textSize = 13.5f
+                        setTypeface(null, Typeface.BOLD)
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    })
+                    colText.addView(TextView(ctx).apply {
+                        text = item.subtitle
+                        setTextColor(col(R.color.text_muted))
+                        textSize = 11f
+                    })
+                    row.addView(colText)
+                    row.addView(TextView(ctx).apply {
+                        text = if (item.collapsed) "展开 ▾" else "收起 ▴"
+                        setTextColor(col(R.color.text_muted))
+                        textSize = 11.5f
+                    })
+                    holder.container.addView(row)
                 }
 
                 is DetailItem.CollapsibleEntry -> {

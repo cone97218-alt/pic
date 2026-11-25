@@ -116,6 +116,14 @@ object WorldBookParser {
     }
 }
 
+data class ParsedPresetGroup(
+    val id: String,
+    val name: String,
+    val order: Int,
+    val collapsed: Boolean = true,
+    val enabled: Boolean = true
+)
+
 data class ParsedPresetPrompt(
     val identifier: String,
     val name: String,
@@ -132,6 +140,8 @@ data class ParsedPreset(
     val maxTokens: Int?,
     val maxContext: Int?,
     val prompts: List<ParsedPresetPrompt>,
+    val promptGroups: List<ParsedPresetGroup> = emptyList(),
+    val promptGroupMap: Map<String, String> = emptyMap(),
     val embeddedRegexScripts: List<ParsedRegexScript> = emptyList(),
     val embeddedHelperScripts: List<ParsedHelperScript> = emptyList(),
     val rawJson: String
@@ -220,6 +230,8 @@ object PresetParser {
             helperList.addAll(CharacterCardParser.parseEmbeddedHelper(root))
         }
 
+        val (promptGroups, promptGroupMap) = parseBaiBaiPresetGroups(extObj, ordered.map { it.identifier })
+
         return ParsedPreset(
             name = fallbackName.substringBeforeLast('.'),
             temperature = temp,
@@ -227,10 +239,122 @@ object PresetParser {
             maxTokens = maxTokens,
             maxContext = maxContext,
             prompts = ordered,
+            promptGroups = promptGroups,
+            promptGroupMap = promptGroupMap,
             embeddedRegexScripts = regexList.distinctBy { it.name + it.findRegex },
             embeddedHelperScripts = helperList.distinctBy { it.name + it.content.take(40) },
             rawJson = trimmed
         )
+    }
+
+    /**
+     * Parses ST-BaiBai-Tools preset prompt groups (`extensions.baibaiToolkit.presetPromptGroups`)
+     * as well as compatible `extensions.entryGrouping` range/member definitions.
+     */
+    private fun parseBaiBaiPresetGroups(
+        extObj: JSONObject?,
+        orderedIds: List<String>
+    ): Pair<List<ParsedPresetGroup>, Map<String, String>> {
+        if (extObj == null || orderedIds.isEmpty()) return emptyList<ParsedPresetGroup>() to emptyMap()
+        val validIds = orderedIds.toHashSet()
+
+        // 1. Native ST-BaiBai-Tools format: extensions.baibaiToolkit.presetPromptGroups
+        val baibai = extObj.optJSONObject("baibaiToolkit")?.optJSONObject("presetPromptGroups")
+        if (baibai != null) {
+            val groupsArr = baibai.optJSONArray("groups")
+            val promptsObj = baibai.optJSONObject("prompts")
+            if (groupsArr != null && groupsArr.length() > 0 && promptsObj != null) {
+                val rawGroups = mutableListOf<ParsedPresetGroup>()
+                val seenGids = HashSet<String>()
+                for (i in 0 until groupsArr.length()) {
+                    val g = groupsArr.optJSONObject(i) ?: continue
+                    val gid = g.optString("id", "").trim()
+                    if (gid.isEmpty() || !seenGids.add(gid)) continue
+                    rawGroups.add(
+                        ParsedPresetGroup(
+                            id = gid,
+                            name = g.optString("name", "未命名分组").ifBlank { "未命名分组" },
+                            order = g.optInt("order", i),
+                            collapsed = g.optBoolean("collapsed", false),
+                            enabled = g.optBoolean("enabled", true)
+                        )
+                    )
+                }
+                val sortedGroups = rawGroups.sortedBy { it.order }
+                val validGids = sortedGroups.map { it.id }.toHashSet()
+                val map = LinkedHashMap<String, String>()
+                val it = promptsObj.keys()
+                while (it.hasNext()) {
+                    val pid = it.next()
+                    if (pid !in validIds) continue
+                    val meta = promptsObj.optJSONObject(pid)
+                    val gid = meta?.optString("groupId", "").orEmpty()
+                    if (gid.isNotEmpty() && gid in validGids) {
+                        map[pid] = gid
+                    }
+                }
+                if (sortedGroups.isNotEmpty() && map.isNotEmpty()) {
+                    return sortedGroups to map
+                }
+            }
+        }
+
+        // 2. Compat format: extensions.entryGrouping (range or member list)
+        val compatRaw = extObj.opt("entryGrouping")
+        val compatEntries: JSONArray? = when (compatRaw) {
+            is JSONArray -> compatRaw
+            is JSONObject -> compatRaw.optJSONArray("groups")
+                ?: compatRaw.optJSONArray("entries")
+                ?: compatRaw.optJSONArray("entryGroups")
+                ?: compatRaw.optJSONArray("items")
+            else -> null
+        }
+        if (compatEntries != null && compatEntries.length() > 0) {
+            val groups = mutableListOf<ParsedPresetGroup>()
+            val map = LinkedHashMap<String, String>()
+            for (i in 0 until compatEntries.length()) {
+                val e = compatEntries.optJSONObject(i) ?: continue
+                val gid = e.optString("id", "compat_$i").ifBlank { "compat_$i" }
+                val gName = e.optString("name", "未命名分组").ifBlank { "未命名分组" }
+                val startId = e.optString("startIdentifier", "")
+                val endId = e.optString("endIdentifier", "")
+                val matchedIds = mutableListOf<String>()
+                if (startId.isNotEmpty() && endId.isNotEmpty()) {
+                    val sIdx = orderedIds.indexOf(startId)
+                    val eIdx = orderedIds.indexOf(endId)
+                    if (sIdx >= 0 && eIdx >= 0) {
+                        val excl = e.optString("mode", "inclusive").equals("exclusive", ignoreCase = true)
+                        val from = minOf(sIdx, eIdx) + if (excl) 1 else 0
+                        val to = maxOf(sIdx, eIdx) - if (excl) 1 else 0
+                        if (from <= to) {
+                            for (k in from..to) matchedIds.add(orderedIds[k])
+                        }
+                    }
+                } else {
+                    val members = e.optJSONArray("members")
+                        ?: e.optJSONArray("identifiers")
+                        ?: e.optJSONArray("promptIds")
+                        ?: e.optJSONArray("prompts")
+                    if (members != null) {
+                        for (k in 0 until members.length()) {
+                            val pid = members.optString(k, "")
+                            if (pid in validIds) matchedIds.add(pid)
+                        }
+                    }
+                }
+                if (matchedIds.isNotEmpty()) {
+                    groups.add(ParsedPresetGroup(gid, gName, i, collapsed = true, enabled = e.optBoolean("enabled", true)))
+                    for (pid in matchedIds) {
+                        if (pid !in map) map[pid] = gid
+                    }
+                }
+            }
+            if (groups.isNotEmpty() && map.isNotEmpty()) {
+                return groups to map
+            }
+        }
+
+        return emptyList<ParsedPresetGroup>() to emptyMap()
     }
 }
 

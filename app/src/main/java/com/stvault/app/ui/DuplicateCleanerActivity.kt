@@ -99,6 +99,14 @@ class DuplicateCleanerActivity : AppCompatActivity() {
                     }
                     Unit
                 }
+                com.stvault.app.core.AppLogManager.record(
+                    this@DuplicateCleanerActivity,
+                    com.stvault.app.core.AppLogManager.CAT_LIBRARY,
+                    "查重",
+                    "保留最新「${newest.name}」",
+                    detail = "清理了 ${older.size} 个旧重复项（${cluster.moduleLabel}）",
+                    source = "查重整理"
+                )
                 toast("已保留最新项并清理 ${older.size} 个旧项")
                 rescan()
             }
@@ -122,6 +130,14 @@ class DuplicateCleanerActivity : AppCompatActivity() {
                 withContext(Dispatchers.IO) {
                     vaultRepo.mergeThemeSeries(ids, clean)
                 }
+                com.stvault.app.core.AppLogManager.record(
+                    this@DuplicateCleanerActivity,
+                    com.stvault.app.core.AppLogManager.CAT_LIBRARY,
+                    "合并",
+                    "归入系列「$clean」",
+                    detail = "合并了 ${ids.size} 个美化变体",
+                    source = "查重整理"
+                )
                 toast("已归入「$clean」系列")
                 rescan()
             }
@@ -151,6 +167,14 @@ class DuplicateCleanerActivity : AppCompatActivity() {
                         else -> Unit
                     }
                 }
+                com.stvault.app.core.AppLogManager.record(
+                    this@DuplicateCleanerActivity,
+                    com.stvault.app.core.AppLogManager.CAT_LIBRARY,
+                    "合并",
+                    "合并版本「$clean」",
+                    detail = "将 ${ids.size} 个${cluster.moduleLabel}合并为同一作品版本",
+                    source = "查重整理"
+                )
                 toast("已合并为「$clean」的不同版本")
                 rescan()
             }
