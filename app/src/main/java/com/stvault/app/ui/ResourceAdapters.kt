@@ -99,6 +99,7 @@ class WorldBooksAdapter(
             if (w.constantCount > 0) append(" · 常驻 ${w.constantCount}")
             append(" · $tokenStr")
             if (w.urls.isNotEmpty()) append(" · 图 ${w.urls.size}")
+            if (w.categories.isNotEmpty()) append(" · #${w.categories.joinToString(" #")}")
         }
         b.tvResMeta.text = meta
         b.root.setOnClickListener { if (selectionMode) onToggleSelect(w.id) else onClick(w) }

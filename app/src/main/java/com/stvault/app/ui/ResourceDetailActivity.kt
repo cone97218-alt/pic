@@ -212,6 +212,10 @@ class ResourceDetailActivity : AppCompatActivity() {
                     actions.add(SheetAction("图床换链复活", "保留原 PNG 无损替换失效链接") { runCharacterRepair(c) })
                 }
             }
+        } else if (resType == TYPE_WORLDBOOK) {
+            currentWorldBook?.let { w ->
+                actions.add(SheetAction("分类标签", "多选 1~3 级分类") { showWorldBookCategoryDialog(w) })
+            }
         }
         actions.add(SheetAction("修改版本号", "自定义当前版本的版本标签") { showEditVersionTagDialog() })
         actions.add(SheetAction("删除当前版本", destructive = true) { confirmDelete() })
@@ -301,6 +305,43 @@ class ResourceDetailActivity : AppCompatActivity() {
         ) { picked ->
             libRepo.setCharacterCategories(c.id, picked)
             currentCharacter = c.copy(categories = picked)
+            toast("分类已更新")
+            rebuildCurrentList()
+        }
+    }
+
+    private fun showWorldBookCategoryDialog(w: WorldBookRecord) {
+        val allCats = catManager.getCategories(CategoryManager.SCOPE_WORLDBOOKS)
+        if (allCats.isEmpty()) {
+            VaultSheets.input(
+                ctx = this,
+                title = "新建世界书分类（1~3级）",
+                message = "用斜杠 / 分隔层级，例如 世界观/奇幻",
+                hint = "例如：世界观/奇幻",
+                confirmText = "添加"
+            ) { raw ->
+                val added = catManager.addCategory(CategoryManager.SCOPE_WORLDBOOKS, raw)
+                if (added != null) showWorldBookCategoryDialog(w)
+            }
+            return
+        }
+        val items = allCats.map { PickerItem(it, catManager.formatIndentedLabel(it)) }
+        VaultSheets.multiSelect(
+            ctx = this,
+            title = "选择分类（可多选）",
+            items = items,
+            preselectedIds = w.categories.toSet(),
+            headerAction = "+ 新建" to {
+                VaultSheets.input(this, "新建世界书分类", "用 / 分隔 1~3 级", "例如：世界观/奇幻", confirmText = "添加") { raw ->
+                    if (catManager.addCategory(CategoryManager.SCOPE_WORLDBOOKS, raw) != null) {
+                        showWorldBookCategoryDialog(w)
+                    }
+                }
+            }
+        ) { picked ->
+            libRepo.setWorldBookCategories(w.id, picked)
+            currentWorldBook = w.copy(categories = picked)
+            setResult(RESULT_OK)
             toast("分类已更新")
             rebuildCurrentList()
         }
@@ -777,6 +818,7 @@ class ResourceDetailActivity : AppCompatActivity() {
         val meta = buildString {
             append("${rec.entryCount} 条目 · 常驻 ${rec.constantCount} · 约 $tokStr")
             if (rec.originCardName.isNotEmpty()) append(" · 来自 ${rec.originCardName}")
+            if (rec.categories.isNotEmpty()) append("\n分类：${rec.categories.joinToString(" / ")}")
         }
         out.add(DetailItem.CompactSummary(meta))
 
@@ -875,50 +917,60 @@ class ResourceDetailActivity : AppCompatActivity() {
             }
         } else if (activeTabKey == "sent") {
             val sent = computeSentPrompts(parsed)
-            val totalChars = sent.filter { !it.isMarker }.sumOf { it.content.length }
+            val localVars = HashMap<String, String>()
+            val globalVars = HashMap<String, String>()
+            val renderedList = mutableListOf<Triple<com.stvault.app.core.ParsedPresetPrompt, String, Boolean>>()
+            var silentVarEntries = 0
+            for (p in sent) {
+                if (p.isMarker) {
+                    renderedList.add(Triple(p, markerLabel(p.identifier), true))
+                } else {
+                    val evaluated = evaluateStMacros(p.content, localVars, globalVars)
+                    if (evaluated.isBlank()) {
+                        silentVarEntries++
+                    } else {
+                        renderedList.add(Triple(p, evaluated, false))
+                    }
+                }
+            }
+            val totalChars = renderedList.filter { !it.third }.sumOf { it.second.length }
             val approxTokens = (totalChars / 2.2).toInt()
             val tokStr = if (approxTokens >= 1000) String.format("%.1fk", approxTokens / 1000.0) else "$approxTokens"
-            out.add(DetailItem.CompactSummary("按酒馆实际顺序发送 ${sent.size} 条 · 正文 $totalChars 字（≈ $tokStr tokens）"))
-            val filtered = if (q.isEmpty()) sent else sent.filter {
-                it.name.lowercase().contains(q) || it.content.lowercase().contains(q) || markerLabel(it.identifier).lowercase().contains(q)
+            val summaryNote = buildString {
+                append("模拟实际发送 · 有效 ${renderedList.size} 段 · 约 $totalChars 字（≈ $tokStr tokens）")
+                if (silentVarEntries > 0) append(" · 已求值 $silentVarEntries 个变量/注释条目")
+            }
+            out.add(DetailItem.CompactSummary(summaryNote))
+
+            val filtered = if (q.isEmpty()) renderedList else renderedList.filter { (p, txt, _) ->
+                p.name.lowercase().contains(q) || txt.lowercase().contains(q)
             }
             if (filtered.isEmpty()) {
-                out.add(DetailItem.CompactSummary("没有匹配的发送条目"))
+                out.add(DetailItem.CompactSummary("没有匹配的发送内容"))
             } else {
-                filtered.forEachIndexed { idx, p ->
-                    val roleTag = p.role.uppercase()
-                    if (p.isMarker) {
-                        val mLabel = markerLabel(p.identifier)
-                        out.add(
-                            DetailItem.CollapsibleEntry(
-                                title = mLabel,
-                                subtitle = "#${idx + 1} · 系统动态注入位置",
-                                body = "酒馆发送请求时将在此处自动填入 $mLabel 的实时内容。",
-                                dotColor = DOT_BLUE,
-                                dimmed = false
-                            )
+                filtered.forEachIndexed { idx, (p, evaluatedText, isMarker) ->
+                    out.add(
+                        DetailItem.SentSegment(
+                            index = idx + 1,
+                            identifier = p.identifier,
+                            role = if (isMarker) "INJECT" else p.role.uppercase(),
+                            sourceName = if (isMarker) markerLabel(p.identifier) else p.name.ifBlank { p.identifier },
+                            content = evaluatedText,
+                            isMarker = isMarker,
+                            onJumpToEntry = { jumpToPresetPrompt(p.identifier) },
+                            onEdit = if (!isMarker) {
+                                {
+                                    openSingleItemEditor(
+                                        CodeEditorActivity.MODULE_PRESET,
+                                        p.name.ifBlank { "提示词" },
+                                        CodeEditorActivity.ITEM_PRESET_PROMPT,
+                                        itemKey = p.identifier,
+                                        itemIndex = idx
+                                    )
+                                }
+                            } else null
                         )
-                    } else {
-                        val editCb: () -> Unit = {
-                            openSingleItemEditor(
-                                CodeEditorActivity.MODULE_PRESET,
-                                p.name.ifBlank { "提示词 #${idx + 1}" },
-                                CodeEditorActivity.ITEM_PRESET_PROMPT,
-                                itemKey = p.identifier,
-                                itemIndex = idx
-                            )
-                        }
-                        out.add(
-                            DetailItem.CollapsibleEntry(
-                                title = p.name.ifBlank { p.identifier },
-                                subtitle = "#${idx + 1} · $roleTag · ${p.content.length} 字",
-                                body = p.content,
-                                dotColor = DOT_GREEN,
-                                dimmed = false,
-                                onEdit = editCb
-                            )
-                        )
-                    }
+                    )
                 }
             }
         } else {
@@ -995,7 +1047,89 @@ class ResourceDetailActivity : AppCompatActivity() {
                 )
             }
         } else null
-        return DetailItem.CollapsibleEntry(p.name, sub, body, dot, dimmed = !active || p.isMarker, onEdit = editCb)
+        return DetailItem.CollapsibleEntry(
+            title = p.name,
+            subtitle = sub,
+            body = body,
+            dotColor = dot,
+            dimmed = !active || p.isMarker,
+            onEdit = editCb,
+            entryKey = p.identifier
+        )
+    }
+
+    private fun evaluateStMacros(
+        raw: String,
+        localVars: MutableMap<String, String>,
+        globalVars: MutableMap<String, String>
+    ): String {
+        var s = raw
+        // Strip {{// comments}}
+        s = Regex("""\{\{//[\s\S]*?\}\}""").replace(s, "")
+        // Evaluate {{setvar::k::v}} & {{setglobalvar::k::v}}
+        s = Regex("""\{\{setvar::([^:}]+)::([\s\S]*?)\}\}""", RegexOption.IGNORE_CASE).replace(s) { m ->
+            localVars[m.groupValues[1].trim()] = m.groupValues[2]
+            ""
+        }
+        s = Regex("""\{\{setglobalvar::([^:}]+)::([\s\S]*?)\}\}""", RegexOption.IGNORE_CASE).replace(s) { m ->
+            globalVars[m.groupValues[1].trim()] = m.groupValues[2]
+            ""
+        }
+        s = Regex("""\{\{addvar::([^:}]+)::([\s\S]*?)\}\}""", RegexOption.IGNORE_CASE).replace(s) { m ->
+            val k = m.groupValues[1].trim()
+            val v = m.groupValues[2]
+            val prev = localVars[k].orEmpty()
+            val pNum = prev.toDoubleOrNull()
+            val vNum = v.toDoubleOrNull()
+            localVars[k] = if (pNum != null && vNum != null) {
+                val sum = pNum + vNum
+                if (sum % 1.0 == 0.0) sum.toLong().toString() else sum.toString()
+            } else prev + v
+            ""
+        }
+        // Evaluate {{getvar::k}} & {{getglobalvar::k}}
+        s = Regex("""\{\{getvar::([^}]+)\}\}""", RegexOption.IGNORE_CASE).replace(s) { m ->
+            localVars[m.groupValues[1].trim()].orEmpty()
+        }
+        s = Regex("""\{\{getglobalvar::([^}]+)\}\}""", RegexOption.IGNORE_CASE).replace(s) { m ->
+            globalVars[m.groupValues[1].trim()].orEmpty()
+        }
+        // Basic built-in macros
+        s = Regex("""\{\{random::([^}]+)\}\}""", RegexOption.IGNORE_CASE).replace(s) { m ->
+            m.groupValues[1].split("::").firstOrNull().orEmpty()
+        }
+        s = s.replace("{{newline}}", "\n", ignoreCase = true)
+            .replace("{{user}}", "User", ignoreCase = true)
+            .replace("{{char}}", "Char", ignoreCase = true)
+        s = Regex("""[ \t]*\r?\n?\{\{trim\}\}\r?\n?[ \t]*""", RegexOption.IGNORE_CASE).replace(s, "")
+        return s.trim()
+    }
+
+    private fun jumpToPresetPrompt(identifier: String) {
+        val parsed = currentParsedPreset ?: return
+        val gid = parsed.promptGroupMap[identifier]
+        if (gid != null) collapsedPresetGroups.remove(gid)
+        if (detailSearchQuery.isNotEmpty()) {
+            detailSearchQuery = ""
+            binding.etDetailSearch.setText("")
+        }
+        activeTabKey = "prompts"
+        // Visually check the first chip ("提示词")
+        val group = binding.detailTabGroup
+        for (i in 0 until group.childCount) {
+            val ch = group.getChildAt(i) as? Chip ?: continue
+            ch.isChecked = (i == 0)
+        }
+        lifecycleScope.launch {
+            val items = withContext(Dispatchers.IO) { buildPresetItems("") }
+            val targetPos = items.indexOfFirst { it is DetailItem.CollapsibleEntry && it.entryKey == identifier }
+            detailAdapter.submitList(items, preExpandedPos = if (targetPos >= 0) targetPos else null)
+            if (targetPos >= 0) {
+                binding.rvDetail.post {
+                    (binding.rvDetail.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(targetPos, 48)
+                }
+            }
+        }
     }
 
     private fun computeSentPrompts(parsed: ParsedPreset): List<com.stvault.app.core.ParsedPresetPrompt> {
@@ -1123,6 +1257,16 @@ class ResourceDetailActivity : AppCompatActivity() {
             val collapsed: Boolean,
             val onToggle: () -> Unit
         ) : DetailItem()
+        data class SentSegment(
+            val index: Int,
+            val identifier: String,
+            val role: String,
+            val sourceName: String,
+            val content: String,
+            val isMarker: Boolean,
+            val onJumpToEntry: () -> Unit,
+            val onEdit: (() -> Unit)? = null
+        ) : DetailItem()
         data class CollapsibleEntry(
             val title: String,
             val subtitle: String,
@@ -1130,7 +1274,8 @@ class ResourceDetailActivity : AppCompatActivity() {
             val dotColor: Int,
             val dimmed: Boolean = false,
             val onPreview: (() -> Unit)? = null,
-            val onEdit: (() -> Unit)? = null
+            val onEdit: (() -> Unit)? = null,
+            val entryKey: String = ""
         ) : DetailItem()
     }
 
@@ -1141,9 +1286,12 @@ class ResourceDetailActivity : AppCompatActivity() {
         private var items: List<DetailItem> = emptyList()
         private val expandedPositions = HashSet<Int>()
 
-        fun submitList(list: List<DetailItem>) {
+        fun submitList(list: List<DetailItem>, preExpandedPos: Int? = null) {
             items = list
             expandedPositions.clear()
+            if (preExpandedPos != null && preExpandedPos in list.indices) {
+                expandedPositions.add(preExpandedPos)
+            }
             notifyDataSetChanged()
         }
 
@@ -1156,6 +1304,7 @@ class ResourceDetailActivity : AppCompatActivity() {
             is DetailItem.TextBlock -> 5
             is DetailItem.CollapsibleEntry -> 6
             is DetailItem.GroupHeader -> 7
+            is DetailItem.SentSegment -> 8
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
@@ -1378,6 +1527,73 @@ class ResourceDetailActivity : AppCompatActivity() {
                         })
                     }
                     holder.container.addView(wrapStyle(ctx, box, editorial, dp(10)))
+                }
+
+                is DetailItem.SentSegment -> {
+                    val box = LinearLayout(ctx).apply {
+                        orientation = LinearLayout.VERTICAL
+                        setPadding(dp(2), dp(8), dp(2), dp(10))
+                    }
+                    val headerRow = LinearLayout(ctx).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                    }
+                    headerRow.addView(TextView(ctx).apply {
+                        text = item.role
+                        setTextColor(if (item.isMarker) DOT_BLUE else DOT_GREEN)
+                        textSize = 10f
+                        setTypeface(null, Typeface.BOLD)
+                        setBackgroundResource(R.drawable.bg_pill_accent)
+                        setPadding(dp(6), dp(2), dp(6), dp(2))
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply { marginEnd = dp(6) }
+                    })
+                    headerRow.addView(TextView(ctx).apply {
+                        text = "${item.sourceName} ↗"
+                        setTextColor(col(R.color.text_muted))
+                        textSize = 11.5f
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                        setOnClickListener { item.onJumpToEntry() }
+                    })
+                    if (item.onEdit != null) {
+                        headerRow.addView(TextView(ctx).apply {
+                            text = "编辑"
+                            setTextColor(col(R.color.text_muted))
+                            textSize = 11f
+                            setBackgroundResource(R.drawable.bg_pill_accent)
+                            setPadding(dp(8), dp(2), dp(8), dp(2))
+                            setOnClickListener { item.onEdit.invoke() }
+                        })
+                    }
+                    box.addView(headerRow)
+
+                    if (!item.isMarker) {
+                        val displayBody = if (item.content.length > MAX_DETAIL_TEXT_CHARS) {
+                            item.content.take(MAX_DETAIL_TEXT_CHARS) + "\n\n……（内容较长，仅预览前 20,000 字）"
+                        } else item.content
+                        box.addView(TextView(ctx).apply {
+                            text = displayBody
+                            setTextColor(col(R.color.text_primary))
+                            alpha = 0.9f
+                            textSize = 13.5f
+                            setLineSpacing(dp(4).toFloat(), 1f)
+                            layoutParams = LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                            ).apply { topMargin = dp(6) }
+                            setOnClickListener { item.onJumpToEntry() }
+                        })
+                    }
+                    box.addView(View(ctx).apply {
+                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
+                            topMargin = dp(10)
+                        }
+                        setBackgroundColor(col(R.color.border))
+                        alpha = 0.55f
+                    })
+                    holder.container.addView(box)
                 }
 
                 is DetailItem.GroupHeader -> {

@@ -191,6 +191,7 @@ class CategoryManager private constructor(context: Context) {
     companion object {
         const val SCOPE_THEMES = "themes"
         const val SCOPE_CHARACTERS = "characters"
+        const val SCOPE_WORLDBOOKS = "worldbooks"
 
         @Volatile
         private var INSTANCE: CategoryManager? = null

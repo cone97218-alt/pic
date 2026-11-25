@@ -1059,7 +1059,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="2dp"
-                    android:text="缓存"
+                    android:text="图床"
                     android:textColor="@color/text_primary"
                     android:textSize="10.5sp"
                     android:textStyle="bold" />
@@ -1087,7 +1087,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="2dp"
-                    android:text="图库"
+                    android:text="美化"
                     android:textColor="@color/text_muted"
                     android:textSize="10.5sp" />
             </LinearLayout>
@@ -1296,7 +1296,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="6dp"
-                android:text="缓存"
+                android:text="图床"
                 android:textColor="@color/on_accent"
                 android:textSize="12.5sp"
                 android:textStyle="bold" />
@@ -1325,7 +1325,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="6dp"
-                android:text="图库"
+                android:text="美化"
                 android:textColor="@color/text_muted"
                 android:textSize="12.5sp" />
         </LinearLayout>

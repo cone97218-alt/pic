@@ -381,7 +381,7 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="12dp"
             android:layout_weight="1"
-            android:text="收件箱"
+            android:text="信箱"
             android:textColor="@color/text_primary"
             android:textSize="13.5sp" />
 
@@ -417,7 +417,7 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="12dp"
             android:layout_weight="1"
-            android:text="酒馆互联"
+            android:text="互联"
             android:textColor="@color/text_primary"
             android:textSize="13.5sp" />
 
@@ -488,7 +488,7 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="12dp"
             android:layout_weight="1"
-            android:text="查重整理"
+            android:text="整理"
             android:textColor="@color/text_primary"
             android:textSize="13.5sp" />
     </LinearLayout>

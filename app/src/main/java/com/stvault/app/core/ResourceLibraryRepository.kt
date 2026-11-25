@@ -982,6 +982,7 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     seriesKey = o.optString("seriesKey", "").ifBlank { autoSeries },
                     seriesName = o.optString("seriesName", ""),
                     versionTag = o.optString("versionTag", "").ifBlank { autoVer },
+                    categories = readJsonStringList(o.optJSONArray("categories")),
                     addedAt = o.optLong("addedAt", 0L)
                 )
                 if (rec.id.isNotEmpty()) worldBooksMap[rec.id] = rec
@@ -1009,6 +1010,7 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
                     put("originCardName", b.originCardName)
                     put("seriesKey", b.seriesKey)
                     if (b.seriesName.isNotEmpty()) put("seriesName", b.seriesName)
+                    if (b.categories.isNotEmpty()) put("categories", JSONArray(b.categories))
                     put("versionTag", b.versionTag)
                     put("addedAt", b.addedAt)
                 })
@@ -1036,16 +1038,30 @@ class ResourceLibraryRepository private constructor(private val appContext: Cont
         }
     }
 
-    fun searchWorldBooks(query: String, filter: String = "all"): List<WorldBookRecord> {
+    fun setWorldBookCategories(id: String, categories: List<String>) {
+        val clean = categories.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        synchronized(lock) {
+            val cur = worldBooksMap[id] ?: return
+            worldBooksMap[id] = cur.copy(categories = clean)
+        }
+        saveWorldBooksIndex()
+    }
+
+    fun searchWorldBooks(query: String, filter: String = "all", categoryFilter: String = ""): List<WorldBookRecord> {
         val q = query.trim().lowercase()
+        val catMgr = CategoryManager.getInstance(appContext)
         synchronized(lock) {
             var list = worldBooksMap.values.toList()
             if (q.isNotEmpty()) {
                 list = list.filter {
                     it.name.lowercase().contains(q) ||
                         it.fileName.lowercase().contains(q) ||
-                        it.originCardName.lowercase().contains(q)
+                        it.originCardName.lowercase().contains(q) ||
+                        it.categories.any { c -> c.lowercase().contains(q) }
                 }
+            }
+            if (categoryFilter.isNotBlank()) {
+                list = list.filter { catMgr.matchesCategory(it.categories, categoryFilter) }
             }
             list = when (filter) {
                 "standalone" -> list.filter { it.originCardId.isEmpty() }

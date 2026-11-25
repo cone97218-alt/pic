@@ -366,6 +366,15 @@ object SmartImporter {
                 rec != null -> {
                     summary.worldBooks++
                     summary.newUrls += addedUrls
+                    if (tags.isNotEmpty()) {
+                        val resolved = tags.map { catMgr.resolveTagPath(CategoryManager.SCOPE_WORLDBOOKS, it) }
+                            .filter { it.isNotEmpty() }
+                            .distinct()
+                        resolved.forEach { catMgr.addCategory(CategoryManager.SCOPE_WORLDBOOKS, it) }
+                        if (resolved.isNotEmpty()) {
+                            libRepo.setWorldBookCategories(rec.id, (rec.categories + resolved).distinct())
+                        }
+                    }
                 }
                 else -> summary.skipped++
             }

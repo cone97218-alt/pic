@@ -602,14 +602,7 @@ class MainActivity : AppCompatActivity() {
                 refreshWorldBooksList()
             }
         }
-        buildSimpleChips(
-            binding.wsWorldBooks.chipGroupWbFilter,
-            listOf("all" to "全部", "multi_version" to "多版本", "standalone" to "独立世界书", "from_card" to "来自角色卡", "has_urls" to "含外链图"),
-            activeWbFilter
-        ) { key ->
-            activeWbFilter = key
-            refreshWorldBooksList()
-        }
+        refreshWbFilterChips()
 
         // 4. Presets
         binding.wsPresets.rvPresets.layoutManager = LinearLayoutManager(this)
@@ -2256,12 +2249,42 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun refreshWbFilterChips() {
+        val base = mutableListOf(
+            "all" to "全部",
+            "multi_version" to "多版本",
+            "standalone" to "独立世界书",
+            "from_card" to "来自角色卡",
+            "has_urls" to "含外链图"
+        )
+        val cats = catManager.getCategories(CategoryManager.SCOPE_WORLDBOOKS)
+        for (c in cats) {
+            base.add("cat:$c" to "#$c")
+        }
+        if (activeWbFilter.startsWith("cat:") && base.none { it.first == activeWbFilter }) {
+            activeWbFilter = "all"
+        }
+        buildSimpleChips(
+            binding.wsWorldBooks.chipGroupWbFilter,
+            base,
+            activeWbFilter
+        ) { key ->
+            activeWbFilter = key
+            refreshWorldBooksList()
+        }
+    }
+
     private fun refreshWorldBooksList() {
         val q = binding.wsWorldBooks.etWbSearch.text?.toString().orEmpty()
         val groupVersions = prefs.getBoolean("group_versions", true)
         lifecycleScope.launch {
             val (grouped, totalRaw, pendingCount) = withContext(Dispatchers.IO) {
-                val books = libRepo.searchWorldBooks(q, if (activeWbFilter == "multi_version") "all" else activeWbFilter)
+                val catFilter = if (activeWbFilter.startsWith("cat:")) activeWbFilter.removePrefix("cat:") else ""
+                val baseFilter = when {
+                    activeWbFilter == "multi_version" || activeWbFilter.startsWith("cat:") -> "all"
+                    else -> activeWbFilter
+                }
+                val books = libRepo.searchWorldBooks(q, baseFilter, catFilter)
                 val rawG = VersionGrouper.groupBySeries(
                     books, groupVersions, { it.seriesKey }, { it.addedAt }, { it.id },
                     { key -> VersionGrouper.getPreferredVersion(this@MainActivity, ResourceDetailActivity.TYPE_WORLDBOOK, key) }
@@ -2782,6 +2805,9 @@ class MainActivity : AppCompatActivity() {
                 SheetAction("编辑条目", "逐条编辑世界书条目或 JSON 源码") {
                     CodeEditorActivity.open(this, CodeEditorActivity.MODULE_WORLDBOOK, w.id, w.name)
                 },
+                SheetAction("分类标签", "多选 1~3 级分类") {
+                    showWorldBookCategoryAssignDialog(w)
+                },
                 SheetAction("重命名", "修改世界书显示名称") {
                     showRenameDialog("重命名世界书", w.name) { newName ->
                         if (libRepo.renameWorldBook(w.id, newName)) {
@@ -2796,6 +2822,45 @@ class MainActivity : AppCompatActivity() {
                 SheetAction("删除世界书", destructive = true) { confirmDeleteWorldBook(w) }
             )
         )
+    }
+
+    private fun showWorldBookCategoryAssignDialog(w: WorldBookRecord) {
+        val allCats = catManager.getCategories(CategoryManager.SCOPE_WORLDBOOKS)
+        if (allCats.isEmpty()) {
+            VaultSheets.input(
+                ctx = this,
+                title = "新建世界书分类（1~3级）",
+                message = "用斜杠 / 分隔层级，例如 世界观/奇幻",
+                hint = "例如：世界观/奇幻",
+                confirmText = "添加"
+            ) { raw ->
+                if (catManager.addCategory(CategoryManager.SCOPE_WORLDBOOKS, raw) != null) {
+                    refreshWbFilterChips()
+                    showWorldBookCategoryAssignDialog(w)
+                }
+            }
+            return
+        }
+        val items = allCats.map { PickerItem(it, catManager.formatIndentedLabel(it)) }
+        VaultSheets.multiSelect(
+            ctx = this,
+            title = "世界书分类标签",
+            items = items,
+            preselectedIds = w.categories.toSet(),
+            headerAction = "+ 新建" to {
+                VaultSheets.input(this, "新建世界书分类", "用 / 分隔 1~3 级", "例如：世界观/奇幻", confirmText = "添加") { raw ->
+                    if (catManager.addCategory(CategoryManager.SCOPE_WORLDBOOKS, raw) != null) {
+                        refreshWbFilterChips()
+                        showWorldBookCategoryAssignDialog(w)
+                    }
+                }
+            }
+        ) { picked ->
+            libRepo.setWorldBookCategories(w.id, picked)
+            refreshWbFilterChips()
+            refreshWorldBooksList()
+            toast("分类已更新")
+        }
     }
 
     private fun showPresetActionMenu(p: PresetRecord) {

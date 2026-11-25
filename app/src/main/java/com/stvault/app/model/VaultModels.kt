@@ -133,6 +133,7 @@ data class WorldBookRecord(
     val seriesKey: String = "",
     val seriesName: String = "",
     val versionTag: String = "",
+    val categories: List<String> = emptyList(),
     val addedAt: Long = System.currentTimeMillis()
 )
 
