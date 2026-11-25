@@ -112,13 +112,14 @@ object AppLogManager {
     fun getAllMerged(ctx: Context): List<AppLogEntry> {
         val local = synchronized(lock) { loadLocked(ctx).toList() }
         val bridgeLogs = try {
-            TavernBridgeManager.getInstance(ctx).stateFlow.value.syncLogs.map { b ->
+            TavernBridgeManager.getInstance(ctx).listLogs().map { b ->
                 val act = when (b.action) {
                     "overwritten" -> "覆盖"
-                    "added" -> "拉取"
+                    "imported", "added" -> "拉取"
                     "pushed" -> "装入"
                     "conflict" -> "冲突"
-                    "tags" -> "标签"
+                    "tags_merged", "tags" -> "标签"
+                    "unchanged" -> "未变"
                     else -> b.action
                 }
                 val detail = buildString {
