@@ -337,42 +337,54 @@
     function extractCompanionTagPayload() {
         const tagPaths = [];
         const themeTags = {};
+        const backgroundBindings = {};
         try {
             const tm = mainWin.themeManager;
-            if (!tm || typeof tm.getTags !== 'function') return { tagPaths, themeTags };
-            const tags = asArray(tm.getTags());
-            const byId = new Map();
-            for (const t of tags) {
-                if (t && t.id && t.name) byId.set(t.id, t);
-            }
-            function resolveFullPath(tag) {
-                const segs = [];
-                const visited = new Set();
-                let cur = tag;
-                while (cur && !visited.has(cur.id)) {
-                    visited.add(cur.id);
-                    segs.unshift(String(cur.name).trim());
-                    cur = cur.parentId ? byId.get(cur.parentId) : null;
+            if (tm && typeof tm.getTags === 'function') {
+                const tags = asArray(tm.getTags());
+                const byId = new Map();
+                for (const t of tags) {
+                    if (t && t.id && t.name) byId.set(t.id, t);
                 }
-                return segs.filter(Boolean).slice(0, 3).join('/');
-            }
-            for (const t of tags) {
-                if (!t || !t.name) continue;
-                const path = resolveFullPath(t);
-                if (!path) continue;
-                if (!tagPaths.includes(path)) tagPaths.push(path);
-                const themes = asArray(t.themes);
-                for (const tn of themes) {
-                    const cleanName = String(tn || '').trim();
-                    if (!cleanName) continue;
-                    if (!themeTags[cleanName]) themeTags[cleanName] = [];
-                    if (!themeTags[cleanName].includes(path)) {
-                        themeTags[cleanName].push(path);
+                function resolveFullPath(tag) {
+                    const segs = [];
+                    const visited = new Set();
+                    let cur = tag;
+                    while (cur && !visited.has(cur.id)) {
+                        visited.add(cur.id);
+                        segs.unshift(String(cur.name).trim());
+                        cur = cur.parentId ? byId.get(cur.parentId) : null;
+                    }
+                    return segs.filter(Boolean).slice(0, 3).join('/');
+                }
+                for (const t of tags) {
+                    if (!t || !t.name) continue;
+                    const path = resolveFullPath(t);
+                    if (!path) continue;
+                    if (!tagPaths.includes(path)) tagPaths.push(path);
+                    const themes = asArray(t.themes);
+                    for (const tn of themes) {
+                        const cleanName = String(tn || '').trim();
+                        if (!cleanName) continue;
+                        if (!themeTags[cleanName]) themeTags[cleanName] = [];
+                        if (!themeTags[cleanName].includes(path)) {
+                            themeTags[cleanName].push(path);
+                        }
                     }
                 }
             }
+            // Extract theme <-> background bindings from st-theme-companion
+            const ctx = contextApi();
+            const extSet = (ctx.extensionSettings || ctx.extension_settings || {});
+            const compSet = extSet['st-theme-companion'] || extSet['theme-companion'] || extSet['themeManager'] || {};
+            const bgMap = compSet.backgroundBindings || (tm && tm.getBackgroundBindings && tm.getBackgroundBindings()) || null;
+            if (bgMap && typeof bgMap === 'object') {
+                for (const [k, v] of Object.entries(bgMap)) {
+                    if (k && typeof v === 'string' && v.trim()) backgroundBindings[k] = v.trim();
+                }
+            }
         } catch (_) {}
-        return { tagPaths, themeTags };
+        return { tagPaths, themeTags, backgroundBindings };
     }
 
     async function syncThemeTagsBidirectional(silent) {
@@ -384,13 +396,15 @@
 
             const vaultPaths = asArray(res.vaultTagPaths);
             const vaultThemeTags = asObject(res.vaultThemeTags) || {};
+            const vaultBgBindings = asObject(res.backgroundBindings) || {};
 
-            // Broadcast vault tags to st-theme-companion so it merges them into its tag tree
+            // Broadcast vault tags & background bindings to st-theme-companion
             try {
                 mainDoc.dispatchEvent(new CustomEvent('stvault:tagsSynced', {
                     detail: {
                         tagPaths: vaultPaths,
-                        themeTags: vaultThemeTags
+                        themeTags: vaultThemeTags,
+                        backgroundBindings: vaultBgBindings
                     }
                 }));
             } catch (_) {}
@@ -398,7 +412,8 @@
             if (!silent) {
                 const uApp = res.updatedThemesInApp || 0;
                 const aCat = res.addedCategoryPaths || 0;
-                log('美化标签双向同步完成：推向酒馆匣更新 ' + uApp + ' 项（新分类 ' + aCat + '），从酒馆匣回传 ' + Object.keys(vaultThemeTags).length + ' 项');
+                const uBg = res.updatedBgBindings || 0;
+                log('联动同步完成：标签更新 ' + uApp + ' 项（新分类 ' + aCat + '），背景绑定 ' + uBg + ' 项');
             }
         } catch (e) {
             if (!silent) log('标签同步失败：' + (e && e.message ? e.message : String(e)));
@@ -731,6 +746,17 @@
             const qr = JSON.parse(text());
             const r = await mainFetch('/api/quick-replies/save', { method: 'POST', headers, body: JSON.stringify(qr) });
             if (!r.ok) throw new Error('保存快速回复失败');
+            return;
+        }
+        if (item.kind === 'background') {
+            delete headers['Content-Type'];
+            delete headers['content-type'];
+            const fn = item.fileName || (item.name + '.png');
+            const mime = /\.jpe?g$/i.test(fn) ? 'image/jpeg' : (/\.webp$/i.test(fn) ? 'image/webp' : 'image/png');
+            const form = new FormData();
+            form.append('avatar', new Blob([bytes], { type: mime }), fn);
+            const r = await mainFetch('/api/backgrounds/upload', { method: 'POST', headers, body: form });
+            if (!r.ok) throw new Error('上传背景图失败');
         }
     }
 
@@ -776,9 +802,91 @@
         }
     }
 
+    async function pushSingleItem(kind, targetName) {
+        if (!state.connected) {
+            try { await connect(); } catch (e) { log(e.message); return; }
+        }
+        const enc = new TextEncoder();
+        const headers = await getHeaders();
+        headers['Content-Type'] = 'application/json';
+        setStatus('正在推送单个' + kind + '...', 'stv-ok');
+
+        if (kind === 'theme') {
+            const src = await fetchStSettings();
+            const themes = asArray(src.themes).map(asObject).filter(Boolean);
+            const nameToFind = targetName || (mainDoc.querySelector('#themes')?.value || '');
+            const hit = themes.find(t => String(t.name || t.theme_name || '') === nameToFind) || themes[0];
+            if (!hit) { log('未找到目标美化'); return; }
+            const tName = String(hit.name || hit.theme_name || 'theme');
+            const companionMap = extractCompanionTagPayload().themeTags;
+            const mergedTags = Array.from(new Set([...(companionMap[tName] || []), ...((hit._xia && Array.isArray(hit._xia.tags)) ? hit._xia.tags : [])])).filter(Boolean);
+            const copy = Object.assign({}, hit);
+            if (mergedTags.length > 0) copy._xia = Object.assign({}, copy._xia || {}, { tags: mergedTags });
+            await pushBytesToVault('theme', tName + '.json', enc.encode(JSON.stringify(copy, null, 2)), mergedTags);
+            setStatus('已推送美化：' + tName, 'stv-ok');
+            log('单项推送美化成功：' + tName);
+            return;
+        }
+        if (kind === 'character') {
+            const chars = (await fetchStCharacters()).filter(c => c && c.avatar);
+            const ctx = contextApi();
+            const curChar = (ctx.characters && ctx.characterId != null) ? ctx.characters[ctx.characterId] : null;
+            const hit = targetName
+                ? chars.find(c => c.name === targetName || c.avatar === targetName)
+                : (curChar && curChar.avatar ? curChar : chars[0]);
+            if (!hit || !hit.avatar) { log('当前未打开角色卡或未找到目标角色卡'); return; }
+            const r = await mainFetch('/api/characters/export', {
+                method: 'POST', headers, body: JSON.stringify({ format: 'png', avatar_url: hit.avatar })
+            });
+            if (!r.ok) throw new Error('导出角色卡失败');
+            await pushBytesToVault('character', hit.avatar, new Uint8Array(await r.arrayBuffer()));
+            setStatus('已推送角色卡：' + (hit.name || hit.avatar), 'stv-ok');
+            log('单项推送角色卡成功：' + (hit.name || hit.avatar));
+            return;
+        }
+        if (kind === 'worldbook') {
+            const src = await fetchStSettings();
+            const names = asArray(src.world_names).map(w => String(w || '').trim()).filter(Boolean);
+            const name = targetName || names[0];
+            if (!name) { log('未找到目标世界书'); return; }
+            const r = await mainFetch('/api/worldinfo/get', { method: 'POST', headers, body: JSON.stringify({ name }) });
+            if (!r.ok) throw new Error('读取世界书失败');
+            const wb = await r.json();
+            wb.name = wb.name || name;
+            await pushBytesToVault('worldbook', name + '.json', enc.encode(JSON.stringify(wb, null, 2)));
+            setStatus('已推送世界书：' + name, 'stv-ok');
+            log('单项推送世界书成功：' + name);
+            return;
+        }
+        if (kind === 'preset') {
+            const src = await fetchStSettings();
+            const presetsArr = asArray(src.openai_settings);
+            const rawNames = src.openai_setting_names;
+            const curPreset = targetName || (mainDoc.querySelector('#settings_preset_openai')?.selectedOptions?.[0]?.textContent?.trim() || '');
+            let foundObj = null;
+            let foundName = curPreset;
+            if (Array.isArray(rawNames)) {
+                const idx = rawNames.findIndex(n => String(n || '').trim() === curPreset);
+                const pickIdx = idx >= 0 ? idx : 0;
+                foundObj = asObject(presetsArr[pickIdx]);
+                foundName = String(rawNames[pickIdx] || foundName || 'preset');
+            } else if (rawNames && typeof rawNames === 'object') {
+                const entry = Object.entries(rawNames).find(([k]) => k === curPreset) || Object.entries(rawNames)[0];
+                if (entry) {
+                    foundName = entry[0];
+                    foundObj = asObject(presetsArr[entry[1]]);
+                }
+            }
+            if (!foundObj) { log('未找到目标预设'); return; }
+            await pushBytesToVault('preset', foundName + '.json', enc.encode(JSON.stringify(foundObj, null, 2)));
+            setStatus('已推送预设：' + foundName, 'stv-ok');
+            log('单项推送预设成功：' + foundName);
+        }
+    }
+
     function startPolling() {
         if (state.pollTimer) clearInterval(state.pollTimer);
-        state.pollTimer = setInterval(pollOnce, 3000);
+        state.pollTimer = setInterval(pollOnce, 6000);
     }
 
     function injectStyles() {
@@ -786,37 +894,86 @@
         const st = mainDoc.createElement('style');
         st.id = 'stv_bridge_inline_style';
         st.textContent = `
-.stv-bridge-box{display:flex;flex-direction:column;gap:8px;padding:6px 2px}
-.stv-bridge-status{font-size:12.5px;padding:6px 10px;border-radius:8px;background:rgba(128,128,128,.12);opacity:.9}
-.stv-bridge-status.stv-ok{background:rgba(22,163,74,.16);color:#22c55e}
-.stv-bridge-status.stv-err{background:rgba(220,38,38,.16);color:#f87171}
-.stv-bridge-row{display:flex;flex-wrap:wrap;gap:6px}
-.stv-bridge-row .menu_button{flex:1 1 42%;justify-content:center;text-align:center;padding:7px 10px;font-size:12.5px}
-.stv-bridge-log{font-size:11px;line-height:1.45;max-height:120px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;padding:8px;border-radius:8px;background:rgba(0,0,0,.18);opacity:.8}
+.stv-card{display:flex;flex-direction:column;gap:10px;padding:8px 2px}
+.stv-sec{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border-radius:10px;background:rgba(128,128,128,.08);border:1px solid rgba(128,128,128,.16)}
+.stv-sec-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.stv-sec-title{font-size:12px;font-weight:600;opacity:.75;letter-spacing:.02em}
+.stv-bridge-status{font-size:12px;padding:6px 10px;border-radius:8px;background:rgba(128,128,128,.1);opacity:.92;line-height:1.4}
+.stv-bridge-status.stv-ok{background:rgba(22,163,74,.14);color:#22c55e}
+.stv-bridge-status.stv-err{background:rgba(220,38,38,.14);color:#f87171}
+.stv-grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.stv-grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+.stv-btn{display:flex;align-items:center;justify-content:center;padding:7px 10px;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(128,128,128,.14);border:1px solid rgba(128,128,128,.18);transition:opacity .15s;user-select:none;text-align:center}
+.stv-btn:hover{opacity:.85}
+.stv-btn-primary{background:var(--SmartThemeQuoteColor, #3b82f6);color:#fff;border-color:transparent;font-weight:600}
+.stv-toggle-row{display:flex;align-items:center;justify-content:space-between;font-size:12px;opacity:.88;padding-top:2px}
+.stv-single-row{display:flex;gap:6px;align-items:center}
+.stv-select{flex:1;min-width:0;padding:6px 8px;border-radius:8px;font-size:12px;background:rgba(0,0,0,.18);border:1px solid rgba(128,128,128,.22);color:inherit}
+.stv-details summary{font-size:12px;opacity:.72;cursor:pointer;padding:2px 0;user-select:none}
+.stv-bridge-log{font-size:11px;line-height:1.45;max-height:110px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;padding:8px;border-radius:8px;background:rgba(0,0,0,.16);opacity:.8}
 `;
         (mainDoc.head || mainDoc.documentElement).appendChild(st);
     }
 
     function buildHtml() {
+        const autoOn = localStorage.getItem('stv_bridge_auto_connect') === '1';
         return `
 <div class="inline-drawer">
   <div class="inline-drawer-toggle inline-drawer-header">
-    <b>酒馆匣互联 <span style="font-weight:normal;opacity:.55;font-size:11px;">v1.13.0</span></b>
+    <b>酒馆匣互联 <span style="font-weight:normal;opacity:.55;font-size:11px;">v1.15.1</span></b>
     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
   </div>
   <div class="inline-drawer-content">
-    <div class="stv-bridge-box">
-      <div class="stv-bridge-status" id="stv_bridge_status">未连接 · 请先在酒馆匣打开「酒馆互联 → 开启连接」</div>
-      <div class="stv-bridge-row">
-        <div class="menu_button" id="stv_btn_connect">连接酒馆匣</div>
-        <div class="menu_button" id="stv_btn_sync">同步清单</div>
-        <div class="menu_button" id="stv_btn_sync_tags">同步标签</div>
-        <div class="menu_button" id="stv_btn_push_themes">推美化</div>
-        <div class="menu_button" id="stv_btn_push_chars">推角色卡</div>
-        <div class="menu_button" id="stv_btn_push_wbs">推世界书</div>
-        <div class="menu_button" id="stv_btn_push_presets">推预设</div>
-        <div class="menu_button" id="stv_btn_receive">接收待装入</div>
+    <div class="stv-card">
+      <div class="stv-sec">
+        <div class="stv-sec-head">
+          <span class="stv-sec-title">连接状态</span>
+          <div class="stv-btn stv-btn-primary" id="stv_btn_connect" style="padding:4px 12px;">连接</div>
+        </div>
+        <div class="stv-bridge-status" id="stv_bridge_status">未连接 · 请先在酒馆匣开启互联</div>
+        <label class="stv-toggle-row">
+          <span>打开酒馆自动连接</span>
+          <input type="checkbox" id="stv_chk_autoconnect" ${autoOn ? 'checked' : ''} />
+        </label>
       </div>
+
+      <div class="stv-sec">
+        <div class="stv-sec-head">
+          <span class="stv-sec-title">单项推送到酒馆匣</span>
+        </div>
+        <div class="stv-grid3">
+          <div class="stv-btn" id="stv_btn_cur_theme">当前美化</div>
+          <div class="stv-btn" id="stv_btn_cur_char">当前角色</div>
+          <div class="stv-btn" id="stv_btn_cur_preset">当前预设</div>
+        </div>
+        <div class="stv-single-row">
+          <select class="stv-select" id="stv_sel_kind" style="flex:0 0 76px;">
+            <option value="theme">美化</option>
+            <option value="character">角色卡</option>
+            <option value="worldbook">世界书</option>
+            <option value="preset">预设</option>
+          </select>
+          <select class="stv-select" id="stv_sel_item"><option value="">点击加载...</option></select>
+          <div class="stv-btn stv-btn-primary" id="stv_btn_push_one" style="flex:0 0 auto;padding:6px 11px;">推送</div>
+        </div>
+      </div>
+
+      <div class="stv-sec">
+        <div class="stv-grid2">
+          <div class="stv-btn" id="stv_btn_receive">接收待装入</div>
+          <div class="stv-btn" id="stv_btn_sync">同步清单与标签</div>
+        </div>
+        <details class="stv-details">
+          <summary>全量批量推送</summary>
+          <div class="stv-grid2" style="margin-top:8px;">
+            <div class="stv-btn" id="stv_btn_push_themes">全部美化</div>
+            <div class="stv-btn" id="stv_btn_push_chars">全部角色卡</div>
+            <div class="stv-btn" id="stv_btn_push_wbs">全部世界书</div>
+            <div class="stv-btn" id="stv_btn_push_presets">全部预设</div>
+          </div>
+        </details>
+      </div>
+
       <div class="stv-bridge-log" id="stv_bridge_log"></div>
     </div>
   </div>
@@ -836,6 +993,37 @@
         }
     }
 
+    async function populateSinglePicker(root) {
+        const selKind = root.querySelector('#stv_sel_kind');
+        const selItem = root.querySelector('#stv_sel_item');
+        if (!selKind || !selItem) return;
+        const kind = selKind.value;
+        selItem.innerHTML = '<option value="">加载中...</option>';
+        try {
+            let names = [];
+            if (kind === 'character') {
+                const chars = await fetchStCharacters();
+                names = chars.filter(c => c && c.avatar).map(c => c.name || c.avatar);
+            } else {
+                const src = await fetchStSettings();
+                if (kind === 'theme') {
+                    names = asArray(src.themes).map(t => { const o = asObject(t); return o && (o.name || o.theme_name); }).filter(Boolean);
+                } else if (kind === 'worldbook') {
+                    names = asArray(src.world_names).map(w => String(w || '').trim()).filter(Boolean);
+                } else if (kind === 'preset') {
+                    names = extractPresetNames(src);
+                }
+            }
+            if (!names.length) {
+                selItem.innerHTML = '<option value="">（空）</option>';
+                return;
+            }
+            selItem.innerHTML = names.map(n => `<option value="${String(n).replace(/"/g, '&quot;')}">${n}</option>`).join('');
+        } catch (_) {
+            selItem.innerHTML = '<option value="">加载失败</option>';
+        }
+    }
+
     function bindPanelButtons(root) {
         const byId = (id) => root.querySelector('#' + id);
         const btnConn = byId('stv_btn_connect');
@@ -843,15 +1031,37 @@
             setStatus('正在连接酒馆匣...', '');
             try { await connect(); } catch (e) { log(e.message); }
         }));
+        const chkAuto = byId('stv_chk_autoconnect');
+        if (chkAuto) chkAuto.addEventListener('change', () => {
+            localStorage.setItem('stv_bridge_auto_connect', chkAuto.checked ? '1' : '0');
+            if (chkAuto.checked && !state.connected) {
+                runExclusive(async () => { try { await connect(); } catch (_) {} });
+            }
+        });
+        const selKind = byId('stv_sel_kind');
+        const selItem = byId('stv_sel_item');
+        if (selKind) selKind.addEventListener('change', () => populateSinglePicker(root));
+        if (selItem) selItem.addEventListener('focus', () => {
+            if (selItem.options.length <= 1 && (!selItem.value)) populateSinglePicker(root);
+        });
+        const btnPushOne = byId('stv_btn_push_one');
+        if (btnPushOne) btnPushOne.addEventListener('click', () => runExclusive(async () => {
+            const k = selKind ? selKind.value : 'theme';
+            const v = selItem ? selItem.value : '';
+            if (!v) { await populateSinglePicker(root); return; }
+            await pushSingleItem(k, v);
+        }));
+        const btnCurTheme = byId('stv_btn_cur_theme');
+        if (btnCurTheme) btnCurTheme.addEventListener('click', () => runExclusive(() => pushSingleItem('theme', '')));
+        const btnCurChar = byId('stv_btn_cur_char');
+        if (btnCurChar) btnCurChar.addEventListener('click', () => runExclusive(() => pushSingleItem('character', '')));
+        const btnCurPreset = byId('stv_btn_cur_preset');
+        if (btnCurPreset) btnCurPreset.addEventListener('click', () => runExclusive(() => pushSingleItem('preset', '')));
+
         const btnSync = byId('stv_btn_sync');
         if (btnSync) btnSync.addEventListener('click', () => runExclusive(async () => {
             if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await syncInventory();
-            await syncThemeTagsBidirectional(false);
-        }));
-        const btnTags = byId('stv_btn_sync_tags');
-        if (btnTags) btnTags.addEventListener('click', () => runExclusive(async () => {
-            if (!state.connected) { try { await connect(); } catch (e) { log(e.message); return; } }
             await syncThemeTagsBidirectional(false);
         }));
         const btnThemes = byId('stv_btn_push_themes');
@@ -901,6 +1111,20 @@
                 clearInterval(timer);
             }
         }, 800);
+
+        if (localStorage.getItem('stv_bridge_auto_connect') === '1') {
+            setTimeout(() => {
+                if (!state.connected && !state.busy) {
+                    runExclusive(async () => { try { await connect(); } catch (_) {} });
+                }
+            }, 1800);
+        }
+
+        mainDoc.addEventListener('visibilitychange', () => {
+            if (mainDoc.visibilityState === 'visible' && state.connected && !state.busy) {
+                pollOnce();
+            }
+        });
 
         let tagDebounce = null;
         mainDoc.addEventListener('themeManager:tagsChanged', () => {

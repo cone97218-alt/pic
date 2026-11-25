@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.Gravity
@@ -552,11 +553,59 @@ object VaultSheets {
                     textSize = 14f
                 })
                 if (item.subtitle.isNotBlank()) {
-                    textBox.addView(TextView(ctx).apply {
-                        text = item.subtitle
-                        setTextColor(col(ctx, R.color.text_muted))
-                        textSize = 11.5f
-                    })
+                    val sub = item.subtitle
+                    val badgeEnd = if (sub.startsWith("【")) sub.indexOf('】') else -1
+                    if (badgeEnd > 1) {
+                        val badgeText = sub.substring(1, badgeEnd)
+                        val restText = sub.substring(badgeEnd + 1).trim()
+                        val subRow = LinearLayout(ctx).apply {
+                            orientation = LinearLayout.HORIZONTAL
+                            gravity = Gravity.CENTER_VERTICAL
+                            layoutParams = LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                            ).apply { topMargin = dp(ctx, 3) }
+                        }
+                        val (bgCol, fgCol) = when {
+                            badgeText.contains("已囤") && badgeText.contains("已装") ->
+                                Color.parseColor("#24B8894A") to Color.parseColor("#A3783E")
+                            badgeText.contains("已囤") ->
+                                Color.parseColor("#2254966C") to Color.parseColor("#4A8761")
+                            badgeText.contains("已装") ->
+                                Color.parseColor("#22587EAD") to Color.parseColor("#5174A3")
+                            else ->
+                                Color.parseColor("#1A888888") to col(ctx, R.color.text_muted)
+                        }
+                        subRow.addView(TextView(ctx).apply {
+                            text = badgeText
+                            setTextColor(fgCol)
+                            textSize = 10.5f
+                            setTypeface(null, Typeface.BOLD)
+                            background = GradientDrawable().apply {
+                                setColor(bgCol)
+                                cornerRadius = dp(ctx, 5).toFloat()
+                            }
+                            setPadding(dp(ctx, 6), dp(ctx, 1), dp(ctx, 6), dp(ctx, 1))
+                        })
+                        if (restText.isNotEmpty()) {
+                            subRow.addView(TextView(ctx).apply {
+                                text = restText
+                                setTextColor(col(ctx, R.color.text_muted))
+                                textSize = 11.5f
+                                maxLines = 1
+                                ellipsize = android.text.TextUtils.TruncateAt.END
+                                layoutParams = LinearLayout.LayoutParams(
+                                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                                ).apply { marginStart = dp(ctx, 6) }
+                            })
+                        }
+                        textBox.addView(subRow)
+                    } else {
+                        textBox.addView(TextView(ctx).apply {
+                            text = sub
+                            setTextColor(col(ctx, R.color.text_muted))
+                            textSize = 11.5f
+                        })
+                    }
                 }
                 row.addView(cb)
                 row.addView(textBox)
