@@ -2941,7 +2941,7 @@ class MainActivity : AppCompatActivity() {
                     if (f.exists()) f.readBytes() else null
                 }
                 if (bytes != null) {
-                    val topTags = bg.categories.filter { it.isNotBlank() && !it.contains('/') && it != "待整理" }
+                    val topTags = bg.categories.map { it.substringBefore('/').trim() }.filter { it.isNotBlank() && it != "待整理" }.distinct()
                     enqueueToTavernBridge("background", bg.name, bg.fileName, bytes, topTags)
                 } else toast("找不到背景文件")
             }
@@ -3761,7 +3761,7 @@ class MainActivity : AppCompatActivity() {
                         val bg = bgRepo.getById(id) ?: continue
                         val f = bgRepo.getFile(bg)
                         if (f.exists()) {
-                            val topTags = bg.categories.filter { it.isNotBlank() && !it.contains('/') && it != "待整理" }
+                            val topTags = bg.categories.map { it.substringBefore('/').trim() }.filter { it.isNotBlank() && it != "待整理" }.distinct()
                             bridge.enqueueOutbox("background", bg.name, bg.fileName, f.readBytes(), topTags)
                             cnt++
                         }

@@ -461,10 +461,12 @@
 
             for (const [bgFile, rawTags] of entries) {
                 if (!bgFile || !existingBgs.has(bgFile)) continue;
-                // Plan B: only sync 1st-level tags (skip multi-level tags containing '/')
-                const topTags = asArray(rawTags)
-                    .map(t => String(t || '').trim())
-                    .filter(t => t && !t.includes('/'));
+                // Take the 1st-level segment for any tag path (e.g. "A/B/C" -> "A")
+                const topTags = Array.from(new Set(
+                    asArray(rawTags)
+                        .map(t => String(t || '').split('/')[0].trim())
+                        .filter(Boolean)
+                ));
                 if (topTags.length === 0) continue;
                 const alreadyIds = new Set(asArray(curMap[bgFile]).map(String));
                 for (const tagName of topTags) {
@@ -923,7 +925,9 @@
             const r = await mainFetch('/api/backgrounds/upload', { method: 'POST', headers, body: form });
             if (!r.ok) throw new Error('上传背景图失败');
             const savedName = (await r.text().catch(() => '')).trim() || fn;
-            const topTags = asArray(item.tags).map(t => String(t || '').trim()).filter(t => t && !t.includes('/'));
+            const topTags = Array.from(new Set(
+                asArray(item.tags).map(t => String(t || '').split('/')[0].trim()).filter(Boolean)
+            ));
             if (topTags.length > 0) {
                 await applyBackgroundFoldersInSt({ [savedName]: topTags });
             }

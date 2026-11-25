@@ -475,7 +475,10 @@ class TavernBridgeManager private constructor(private val appContext: Context) {
         }
         val vaultBgFoldersObj = JSONObject()
         for (bg in bgRepo.getAll()) {
-            val topLevel = bg.categories.filter { it.isNotBlank() && !it.contains('/') && it != "待整理" }
+            val topLevel = bg.categories
+                .map { it.substringBefore('/').trim() }
+                .filter { it.isNotBlank() && it != "待整理" }
+                .distinct()
             if (topLevel.isNotEmpty() && bg.fileName.isNotBlank()) {
                 vaultBgFoldersObj.put(bg.fileName, JSONArray(topLevel))
             }

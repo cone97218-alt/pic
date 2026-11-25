@@ -94,7 +94,7 @@ object LinkedComponentPushHelper {
                                     for (bg in chosenBgs) {
                                         val bf = bgRepo.getFile(bg)
                                         if (bf.exists()) {
-                                            val topTags = bg.categories.filter { it.isNotBlank() && !it.contains('/') && it != "待整理" }
+                                            val topTags = bg.categories.map { it.substringBefore('/').trim() }.filter { it.isNotBlank() && it != "待整理" }.distinct()
                                             bridge.enqueueOutbox("background", bg.name, bg.fileName, bf.readBytes(), topTags)
                                             count++
                                         }
