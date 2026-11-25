@@ -779,19 +779,15 @@ class MainActivity : AppCompatActivity() {
             )
         }
         binding.drawer.drawerItemInbox.setOnClickListener {
-            binding.drawerLayout.closeDrawer(GravityCompat.START)
             startActivity(Intent(this, InboxActivity::class.java))
         }
         binding.drawer.drawerItemBridge.setOnClickListener {
-            binding.drawerLayout.closeDrawer(GravityCompat.START)
             TavernBridgeActivity.open(this)
         }
         binding.drawer.drawerItemLog.setOnClickListener {
-            binding.drawerLayout.closeDrawer(GravityCompat.START)
             ActivityLogActivity.open(this)
         }
         binding.drawer.drawerItemDedup.setOnClickListener {
-            binding.drawerLayout.closeDrawer(GravityCompat.START)
             DuplicateCleanerActivity.open(this)
         }
         var lastInvTotal = -1
@@ -810,7 +806,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
         binding.drawer.drawerItemSettings.setOnClickListener {
-            binding.drawerLayout.closeDrawer(GravityCompat.START)
             SettingsActivity.open(this)
         }
 

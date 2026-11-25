@@ -82,10 +82,10 @@ class BackgroundGridAdapter(
             text = "已装"
             textSize = 10f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.WHITE)
+            setTextColor(Color.parseColor("#F2F2F2"))
             background = GradientDrawable().apply {
                 cornerRadius = dp(99).toFloat()
-                setColor(Color.parseColor("#CC4A8761"))
+                setColor(Color.parseColor("#A618181B"))
             }
             setPadding(dp(7), dp(2), dp(7), dp(2))
             layoutParams = FrameLayout.LayoutParams(

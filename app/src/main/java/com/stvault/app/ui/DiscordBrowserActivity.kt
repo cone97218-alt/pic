@@ -1447,7 +1447,8 @@ class DiscordBrowserActivity : AppCompatActivity() {
 
                     var collected = emptyList<ObservedPost>()
                     var hardReloaded = false
-                    for (attempt in 0 until 18) {
+                    var dateSortAttempted = false
+                    for (attempt in 0 until 20) {
                         delay(450L)
                         val raw = evaluateJsSuspend(CHANNEL_POSTS_SCAN_JS)
                         val obj = unwrapJsJsonObject(raw) ?: continue
@@ -1457,6 +1458,24 @@ class DiscordBrowserActivity : AppCompatActivity() {
                         val parsed = parseObservedPosts(arr, ch)
                         val channelMatches = curCid == ch.id || curCid.isEmpty()
                         if (mode != "loading" && parsed.isNotEmpty() && (channelMatches || attempt >= 5)) {
+                            // For Forum channels, ensure Discord's sort dropdown is set to「发帖时间 / Date Posted」
+                            // (default is "Recently Active", which hides newly posted threads behind bumped old ones!)
+                            if (mode == "forum" && !dateSortAttempted) {
+                                dateSortAttempted = true
+                                val sortRes = evaluateJsSuspend(OPEN_FORUM_SORT_MENU_JS).orEmpty()
+                                if (sortRes.contains("OPENED")) {
+                                    delay(260L)
+                                    val clickRes = evaluateJsSuspend(CLICK_FORUM_DATE_SORT_OPTION_JS).orEmpty()
+                                    if (clickRes.contains("CLICKED")) {
+                                        // Wait for Discord to re-fetch and re-render posts sorted by publish time
+                                        delay(850L)
+                                        val sortedObj = unwrapJsJsonObject(evaluateJsSuspend(CHANNEL_POSTS_SCAN_JS))
+                                        val sortedParsed = sortedObj?.optJSONArray("posts")?.let { parseObservedPosts(it, ch) }.orEmpty()
+                                        collected = if (sortedParsed.isNotEmpty()) sortedParsed else parsed
+                                        break
+                                    }
+                                }
+                            }
                             collected = parsed
                             // If only 1-2 posts rendered on the very first check, wait one brief tick for full viewport
                             if (parsed.size <= 2 && attempt < 5) {
@@ -2172,6 +2191,66 @@ class DiscordBrowserActivity : AppCompatActivity() {
                 return JSON.stringify({ mode: mode, guildId: guildId, channelId: channelId, posts: posts });
               } catch (e) {
                 return JSON.stringify({ mode: 'loading', channelId: '', posts: [] });
+              }
+            })();
+        """.trimIndent()
+
+        /**
+         * Opens Discord Forum channel's Sort dropdown if it is not already sorted by「发帖时间 / Date Posted」.
+         */
+        private val OPEN_FORUM_SORT_MENU_JS = """
+            (function() {
+              try {
+                var layer = document.querySelector('div[class*="chatLayerWrapper_"]');
+                var btn = null;
+                var cands = document.querySelectorAll('button[class*="sortDropdown_"], [class*="sortDropdown_"], button[aria-label*="排序"], button[aria-label*="Sort"], [role="button"][aria-label*="排序"], [role="button"][aria-label*="Sort"]');
+                for (var i = 0; i < cands.length; i++) {
+                  if (layer && layer.contains(cands[i])) continue;
+                  var r = cands[i].getBoundingClientRect();
+                  if (r.width > 12 && r.height > 12) { btn = cands[i]; break; }
+                }
+                if (!btn) {
+                  var allBtns = document.querySelectorAll('button, [role="button"]');
+                  for (var j = 0; j < allBtns.length; j++) {
+                    if (layer && layer.contains(allBtns[j])) continue;
+                    var t = (allBtns[j].textContent || '').replace(/\s+/g, ' ').trim();
+                    if (/^(排序|Sort|最近活跃|Recently Active|发帖时间|发布时间|Date Posted)/i.test(t) && t.length <= 24) {
+                      var br = allBtns[j].getBoundingClientRect();
+                      if (br.top >= 0 && br.top < 360 && br.width > 20) { btn = allBtns[j]; break; }
+                    }
+                  }
+                }
+                if (!btn) return 'NO_BTN';
+                var label = ((btn.textContent || '') + ' ' + (btn.getAttribute('aria-label') || '')).trim();
+                if (/(发帖时间|发布时间|Date Posted|Newest)/i.test(label) && !/(最近活跃|Recently Active)/i.test(label)) {
+                  return 'ALREADY_DATE';
+                }
+                btn.click();
+                return 'OPENED';
+              } catch (e) {
+                return 'ERR';
+              }
+            })();
+        """.trimIndent()
+
+        /**
+         * Selects the「发帖时间 / Date Posted」radio item inside the open Discord Forum sort menu.
+         */
+        private val CLICK_FORUM_DATE_SORT_OPTION_JS = """
+            (function() {
+              try {
+                var items = document.querySelectorAll('[role="menuitemradio"], [role="menuitem"], div[class*="menu_"] [class*="item_"], div[class*="popout_"] [role="button"]');
+                for (var i = 0; i < items.length; i++) {
+                  var txt = (items[i].textContent || '').replace(/\s+/g, ' ').trim();
+                  if (/(发帖时间|发布时间|Date Posted|Newest)/i.test(txt) && !/(最近活跃|Recently Active)/i.test(txt)) {
+                    items[i].click();
+                    return 'CLICKED';
+                  }
+                }
+                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+                return 'NOT_FOUND';
+              } catch (e) {
+                return 'ERR';
               }
             })();
         """.trimIndent()
